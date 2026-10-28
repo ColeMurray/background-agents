@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACTOR_ENROLLMENT_TIMEOUT_MS, enrollLinearActor } from "./actor-enrollment";
 import { createFakeKV, createLinearFetchMock, makeLinearBotEnv } from "./test-helpers";
 import type { LinearApiClient } from "./utils/linear-client";
@@ -10,10 +10,18 @@ const client: LinearApiClient = {
 };
 
 describe("Linear actor enrollment", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  function failureLogs() {
+    return vi.mocked(console.warn).mock.calls.map(([line]) => JSON.parse(String(line)));
+  }
 
   it("sends the author's server-fetched profile in the first signed request", async () => {
     vi.stubGlobal(
@@ -37,6 +45,7 @@ describe("Linear actor enrollment", () => {
     expect(url).toBe("https://internal/actors/me");
     expect(new Headers(init.headers).get("X-OpenInspect-Actor")).toBe("linear:new-collaborator");
     expect(JSON.parse(String(init.body))).toEqual({ displayName: "Ada", email: "ada@corp.test" });
+    expect(failureLogs()).toEqual([]);
   });
 
   it.each([403, 503])("refuses to continue when enrollment returns %s", async (status) => {
@@ -46,7 +55,94 @@ describe("Linear actor enrollment", () => {
     expect(await enrollLinearActor(env, client, "new-collaborator", "trace-1")).toContain(
       "Cannot verify"
     );
+    expect(failureLogs()).toEqual([
+      expect.objectContaining({
+        msg: "control_plane.enroll_actor",
+        trace_id: "trace-1",
+        actor: "linear:new-collaborator",
+        http_status: status,
+        outcome: "unavailable",
+      }),
+    ]);
   });
+
+  it.each([
+    [
+      "unknown code",
+      () => Response.json({ code: "unexpected_code" }, { status: 503 }),
+      "unexpected_code",
+    ],
+    ["invalid JSON", () => new Response("not json", { status: 503 }), undefined],
+    ["invalid code", () => Response.json({ code: 123 }, { status: 503 }), undefined],
+  ])("logs one diagnostic for an enrollment response with %s", async (_name, response, code) => {
+    vi.stubGlobal("fetch", createLinearFetchMock({ graphql: () => Response.json({ data: {} }) }));
+    const env = makeLinearBotEnv(createFakeKV().kv);
+    env.CONTROL_PLANE = { fetch: vi.fn().mockResolvedValue(response()) };
+
+    expect(await enrollLinearActor(env, client, "new-collaborator", "trace-1")).toContain(
+      "Cannot verify"
+    );
+
+    expect(failureLogs()).toEqual([
+      expect.objectContaining({
+        msg: "control_plane.enroll_actor",
+        trace_id: "trace-1",
+        actor: "linear:new-collaborator",
+        http_status: 503,
+        outcome: "unavailable",
+      }),
+    ]);
+    expect(failureLogs()[0].error_code).toBe(code);
+  });
+
+  it("logs transport exceptions before returning guidance", async () => {
+    vi.stubGlobal("fetch", createLinearFetchMock({ graphql: () => Response.json({ data: {} }) }));
+    const env = makeLinearBotEnv(createFakeKV().kv);
+    env.CONTROL_PLANE = {
+      fetch: vi.fn().mockRejectedValue(new Error("Control plane unreachable")),
+    };
+
+    expect(await enrollLinearActor(env, client, "new-collaborator", "trace-1")).toContain(
+      "Cannot verify"
+    );
+
+    expect(failureLogs()).toEqual([
+      expect.objectContaining({
+        msg: "control_plane.enroll_actor",
+        trace_id: "trace-1",
+        actor: "linear:new-collaborator",
+        outcome: "unavailable",
+        error_message: "Control plane unreachable",
+        error_type: "Error",
+      }),
+    ]);
+  });
+
+  it.each(["actor_email_required", "actor_admission_denied"])(
+    "logs %s before returning admission guidance",
+    async (code) => {
+      vi.stubGlobal("fetch", createLinearFetchMock({ graphql: () => Response.json({ data: {} }) }));
+      const env = makeLinearBotEnv(createFakeKV().kv);
+      env.CONTROL_PLANE = {
+        fetch: vi.fn().mockResolvedValue(Response.json({ code }, { status: 403 })),
+      };
+
+      expect(await enrollLinearActor(env, client, "new-collaborator", "trace-1")).not.toContain(
+        "Cannot verify"
+      );
+
+      expect(failureLogs()).toEqual([
+        expect.objectContaining({
+          msg: "control_plane.enroll_actor",
+          trace_id: "trace-1",
+          actor: "linear:new-collaborator",
+          outcome: "denied",
+          http_status: 403,
+          error_code: code,
+        }),
+      ]);
+    }
+  );
 
   it.each(["request", "response body"])(
     "fails closed when the enrollment %s stalls",
@@ -81,6 +177,16 @@ describe("Linear actor enrollment", () => {
       expect(
         timeoutSpy.mock.calls.filter(([timeoutMs]) => timeoutMs === ACTOR_ENROLLMENT_TIMEOUT_MS)
       ).toHaveLength(1);
+      expect(failureLogs()).toEqual([
+        expect.objectContaining({
+          msg: "control_plane.enroll_actor",
+          trace_id: "trace-1",
+          actor: "linear:new-collaborator",
+          outcome: "unavailable",
+          error_message: "timed out",
+        }),
+      ]);
+      expect(failureLogs()[0].http_status).toBe(phase === "response body" ? 403 : undefined);
     }
   );
 });

@@ -3,8 +3,10 @@ import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { fetchUser, type LinearApiClient } from "./utils/linear-client";
 import { abortable } from "./utils/abortable";
+import { createLogger } from "./logger";
 
 export const ACTOR_ENROLLMENT_TIMEOUT_MS = 10_000;
+const log = createLogger("actor-enrollment");
 
 export function describeActorAdmissionFailure(code: string): string | null {
   if (code === "actor_email_required") {
@@ -23,6 +25,8 @@ export async function enrollLinearActor(
   actorUserId: string,
   traceId: string
 ): Promise<string | null> {
+  const context = { trace_id: traceId, actor: `linear:${actorUserId}` };
+  let httpStatus: number | undefined;
   try {
     const profile = await fetchUser(client, actorUserId);
     const signal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS);
@@ -32,7 +36,7 @@ export async function enrollLinearActor(
         {
           method: "POST",
           url: "https://internal/actors/me",
-          actor: `linear:${actorUserId}`,
+          actor: context.actor,
           body: JSON.stringify({ displayName: profile?.name, email: profile?.email ?? undefined }),
           traceId,
         },
@@ -40,18 +44,31 @@ export async function enrollLinearActor(
       ),
       signal
     );
+    httpStatus = response.status;
     if (response.ok) return null;
     const body = await abortable(
       response.json().catch(() => null),
       signal
     );
     const refusal = z.object({ code: z.string() }).safeParse(body);
-    if (response.status === 403 && refusal.success) {
-      const message = describeActorAdmissionFailure(refusal.data.code);
-      if (message) return message;
-    }
-  } catch {
-    // No further actor-bearing requests are safe until enrollment succeeds.
+    const message =
+      response.status === 403 && refusal.success
+        ? describeActorAdmissionFailure(refusal.data.code)
+        : null;
+    log.warn("control_plane.enroll_actor", {
+      ...context,
+      outcome: message ? "denied" : "unavailable",
+      http_status: httpStatus,
+      error_code: refusal.success ? refusal.data.code : undefined,
+    });
+    if (message) return message;
+  } catch (error) {
+    log.warn("control_plane.enroll_actor", {
+      ...context,
+      outcome: "unavailable",
+      http_status: httpStatus,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
   }
   return "Cannot verify your Open-Inspect account right now. Please retry or ask an administrator to check your workspace access.";
 }
