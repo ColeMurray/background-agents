@@ -82,6 +82,7 @@ import type {
   SandboxPushAdmission,
 } from "./ports";
 import { shutdownPolicyForLaunch, type ShutdownLifecyclePolicy } from "./shutdown-policy";
+import { MIN_KIMI_CODING_PLAN_RUNTIME_GENERATION } from "../runtime-manifest";
 import type { SandboxAccess } from "./sandbox-access";
 import { SandboxLaunchExpiredError, SpawnSupersededError } from "./startup-errors";
 import {
@@ -814,7 +815,12 @@ export class SandboxLifecycleManager
         this.launchContext.resolveRepositories(session);
       const imageScope = resolveImageBuildScope(session, repositories);
       const selectedImage = imageScope
-        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
+        ? await this.launchContext.lookupImageBuildForSpawn(
+            imageScope,
+            repositories,
+            agent.harness,
+            agent.provider === "kimi-coding-plan" ? MIN_KIMI_CODING_PLAN_RUNTIME_GENERATION : 0
+          )
         : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;

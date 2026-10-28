@@ -1,9 +1,10 @@
 {
-  "runtimeVersion": "v79-persistent-model-prices",
-  "generation": 79,
+  "runtimeVersion": "v80-kimi-coding-plan",
+  "generation": 80,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
   "minimumRebuildGeneration": 79,
+  "minimumKimiCodingPlanGeneration": 80,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,
