@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { evaluateImageBuildForSpawn, type ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
+import { MIN_KIMI_CODING_PLAN_RUNTIME_GENERATION } from "../runtime-manifest";
 
 const SESSION_REPOSITORIES = [
   { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -29,6 +30,27 @@ async function readyImage(
 }
 
 describe("evaluateImageBuildForSpawn", () => {
+  it("skips Kimi Coding Plan images from before its provider configuration", async () => {
+    const oldImage = await readyImage({ runtime_version: "v79-persistent-model-prices" });
+    expect(
+      await evaluateImageBuildForSpawn(
+        oldImage,
+        SESSION_REPOSITORIES,
+        "opencode",
+        MIN_KIMI_CODING_PLAN_RUNTIME_GENERATION
+      )
+    ).toMatchObject({ outcome: "miss", reason: "runtime_below_floor" });
+    const currentImage = await readyImage({ runtime_version: "v80-kimi-coding-plan" });
+    expect(
+      await evaluateImageBuildForSpawn(
+        currentImage,
+        SESSION_REPOSITORIES,
+        "opencode",
+        MIN_KIMI_CODING_PLAN_RUNTIME_GENERATION
+      )
+    ).toMatchObject({ outcome: "selected" });
+  });
+
   it.each(["v77-codex-pinned-binary", "v78-tunnel-environment-recovery"])(
     "rejects unpriced Codex image %s and accepts the current runtime",
     async (runtimeVersion) => {

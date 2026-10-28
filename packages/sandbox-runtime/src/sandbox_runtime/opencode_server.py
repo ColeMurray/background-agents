@@ -415,6 +415,24 @@ class OpenCodeServer:
             },
         }
 
+        if os.environ.get("KIMI_CODE_API_KEY"):
+            opencode_config["provider"]["kimi-coding-plan"] = {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Kimi Coding Plan",
+                "options": {
+                    "baseURL": "https://api.kimi.ai/coding/v1",
+                    "apiKey": "{env:KIMI_CODE_API_KEY}",
+                },
+                "models": {
+                    "k3.1-pro": {"name": "Kimi K3.1 Pro"},
+                    "k3.1-pro-highspeed": {"name": "Kimi K3.1 Pro Highspeed"},
+                    "k3": {"name": "Kimi K3"},
+                    "k3-256k": {"name": "Kimi K3 256K"},
+                    "kimi-for-coding": {"name": "Kimi for Coding"},
+                    "kimi-for-coding-highspeed": {"name": "Kimi for Coding Highspeed"},
+                },
+            }
+
         memory_file = memory_path(resolve_opencode_global_config_dir())
         if memory_file.is_file() and memory_file.stat().st_size:
             opencode_config["instructions"] = [str(memory_file)]

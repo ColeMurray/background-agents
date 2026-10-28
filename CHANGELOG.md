@@ -2,6 +2,14 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 28, 2026
+
+**Kimi Coding Plan models.** Kimi K3.1 Pro, K3, Kimi for Coding, and their documented variants can
+run directly on the OpenCode harness using a Kimi Code membership API key saved as
+`KIMI_CODE_API_KEY`. Enable the opt-in Kimi Coding Plan group under Settings › Models. These
+requests use Kimi's coding endpoint and the membership plan's allowance, separate from OpenCode Zen
+and Go billing.
+
 ## October 27, 2026
 
 **GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
