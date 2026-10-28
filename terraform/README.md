@@ -197,7 +197,8 @@ variable-only.
 See [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for the complete
 variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
-Add these secrets to your repository settings:
+Add these settings to your repository, using **Variables** for non-secret configuration (including
+`R2_MEDIA_BUCKET_NAME`) and **Secrets** for credentials:
 
 ```
 # Deployment

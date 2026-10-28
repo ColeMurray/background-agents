@@ -907,7 +907,7 @@ variable "r2_media_location" {
 }
 
 variable "r2_media_bucket_name" {
-  description = "Name of the R2 media bucket Terraform creates and manages. Leave empty to use the default 'open-inspect-media-<deployment_name>'. The name is RequiresReplace and cloudflare_r2_bucket.media has no prevent_destroy, so changing it on a live deployment destroys the current bucket and its objects: migrate the objects first. A bucket that already exists must be imported (terraform import cloudflare_r2_bucket.media <account_id>/<bucket_name>/default) or the apply fails because the name is taken."
+  description = "Name of the R2 media bucket Terraform creates and manages. Leave empty to use the default 'open-inspect-media-<deployment_name>'. Changing a managed bucket's name plans replacement, not an in-place rename. Cloudflare rejects deletion while objects remain; Terraform does not empty the bucket. An existing bucket must be imported into cloudflare_r2_bucket.media before applying. If that address already tracks another bucket, follow the migration steps in terraform.tfvars.example to migrate objects and replace the state entry first."
   type        = string
   default     = ""
 }

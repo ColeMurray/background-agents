@@ -360,11 +360,10 @@ project_root = "../../../"
 
 # Name of the R2 media bucket Terraform creates and manages (optional)
 # Defaults to "open-inspect-media-<deployment_name>" when left empty.
-# This selects the name of that managed bucket — cloudflare_r2_bucket.media is
-# always a create, so a bucket that already exists (for example one an admin had to
-# provision because the Cloudflare API token used by Terraform cannot create R2
-# buckets) must be imported into state first, and changing the name of a bucket
-# Terraform already manages replaces it, as described below.
+# This selects the name of the managed cloudflare_r2_bucket.media resource; it
+# does not select an externally managed bucket. Import a pre-created bucket into
+# state before applying. Changing the name of a bucket Terraform already manages
+# plans replacement, not an in-place rename, as described below.
 #
 # Manual setup requirements (when an admin pre-creates the bucket):
 #   - Must live in the same Cloudflare account as the Workers (cloudflare_account_id).
@@ -377,23 +376,43 @@ project_root = "../../../"
 #   wrangler r2 bucket create <bucket-name> --location ENAM
 # Or create via the Cloudflare dashboard: R2 -> Create bucket (Standard storage class).
 #
-# After manual creation, import the bucket so Terraform manages the binding without
-# trying to recreate it:
+# Set r2_media_bucket_name to the pre-created bucket's name, then import it so
+# Terraform manages the bucket without trying to recreate it. Run from this
+# directory with the deployment's initialized backend, workspace, and variables.
+# If cloudflare_r2_bucket.media already tracks a bucket, use the migration below
+# instead of importing over the occupied address:
 #   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
 #
-# WARNING — renaming an existing Terraform-managed bucket:
-# If you previously deployed without this variable (Terraform owns the default-named
-# bucket) and now set r2_media_bucket_name to a different name WITHOUT first running
-# `terraform import` on the new name, Terraform will destroy the existing bucket and
-# create a new one — permanently deleting all stored objects. Migrate objects first
-# (e.g. with rclone) and import the new bucket before applying.
+# WARNING - changing an existing Terraform-managed bucket's name:
+# Terraform plans to delete the old bucket and create a new one. It does not empty
+# the bucket: Cloudflare rejects deletion while objects remain, so apply fails
+# without deleting them. In-progress multipart uploads and event notification
+# rules also block deletion. Do not rely on a name change to migrate stored media.
+#
+# To switch to a pre-created bucket while retaining the old bucket:
+#   1. Pause automated Terraform applies and media writes. Back up Terraform state
+#      securely, and use the same initialized backend/workspace as the deployment.
+#   2. Create the destination bucket with the requirements above. Copy and verify
+#      all objects (e.g. with rclone); keep writes paused through the cutover.
+#   3. Set r2_media_bucket_name to the destination name in local variables and in
+#      the CI configuration (R2_MEDIA_BUCKET_NAME) if CI manages the deployment.
+#   4. Replace the occupied state entry; do not plan/apply between these commands:
+#        terraform state rm cloudflare_r2_bucket.media
+#        terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<new-bucket-name>/default
+#      If import fails, resolve it before any apply; the address is now untracked.
+#   5. Run terraform plan and confirm the destination bucket is not being created,
+#      replaced, or deleted. Apply the Worker binding change, verify media access,
+#      then resume writes and automated applies.
+# The old bucket and its objects remain, but are no longer managed by Terraform.
+# Retain or clean them up separately only after verifying the cutover.
 #
 # Worker runtime needs (granted automatically through the binding, listed for reference):
 #   - R2 object-level: Read, Write, Delete on this bucket only.
 # The Terraform/Cloudflare API token does NOT need object-level R2 permissions —
 # it only manages the bucket resource and the Worker binding. Required token scopes:
-#   - Workers R2 Storage: Edit (only needed when Terraform creates/manages the bucket;
-#     if the bucket is pre-created and imported, drop to Read or omit)
+#   - Workers R2 Storage: Edit for bucket creation, updates, or deletion. An imported
+#     bucket still requires bucket read access for imports and Terraform refresh;
+#     Read alone is sufficient only while no bucket changes are planned.
 #   - Workers Scripts: Edit (to attach the MEDIA_BUCKET binding to the Worker)
 # r2_media_bucket_name = ""
 
