@@ -50,8 +50,6 @@ export function previewConfig(options: {
     MODAL_API_URL: options.modalOrigin,
     MODAL_API_SECRET: options.modalSecret,
     TEAMS_ENFORCEMENT: options.teamsEnforcement,
-    // Never used against a model service; lets the existing fallback resolve the default model.
-    ANTHROPIC_API_KEY: "preview-inert-anthropic-key",
     LOG_LEVEL: "warn",
   };
 }

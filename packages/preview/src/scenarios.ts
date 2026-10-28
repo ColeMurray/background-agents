@@ -18,8 +18,9 @@ export async function expectJson<T>(response: Response): Promise<T> {
 
 /**
  * Sessions refuse OpenAI and xAI models without a credential, though the sandbox stand-in never
- * calls a provider. Anthropic's inert key is deployment config (see previewConfig); these two can
- * only arrive as secrets, so every model the picker offers can start a turn.
+ * calls a provider. Anthropic models need none in the control plane, whose platform key reaches
+ * sandboxes separately; these two can only arrive as secrets, so every model the picker offers can
+ * start a turn.
  */
 const INERT_PROVIDER_SECRETS = {
   OPENAI_API_KEY: "preview-inert-openai-key",

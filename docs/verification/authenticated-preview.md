@@ -66,9 +66,10 @@ new generation on the next prompt. Unsupported upstream requests fail visibly; t
 GitHub/provider fallback. Model-account lists are intentionally empty.
 
 Sessions refuse OpenAI and xAI models without a credential, so both scenarios store inert
-`OPENAI_API_KEY` and `XAI_API_KEY` global secrets through the real secrets API; Anthropic's inert
-key is deployment config. Every model in the picker can therefore start a turn. To see the
-missing-credential error instead, delete those secrets under Settings → Secrets.
+`OPENAI_API_KEY` and `XAI_API_KEY` global secrets through the real secrets API. Anthropic models
+need no control-plane credential, because the platform key reaches sandboxes separately. Every model
+in the picker can therefore start a turn. To see the missing-credential error instead, delete those
+secrets under Settings → Secrets.
 
 ## Sign in from any browser
 
