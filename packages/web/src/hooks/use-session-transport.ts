@@ -167,7 +167,7 @@ export function useSessionTransport(
   // a connect() that resumes after awaiting its token can tell it has been
   // superseded and must not open a socket.
   const connectEpochRef = useRef(0);
-  // Epoch of the connect() currently between entry and socket creation, or
+  // Epoch of the connect() currently fetching a token or opening a socket, or
   // null when none is in flight. Recording the owner (rather than a boolean)
   // lets a superseded connect release the flag without clobbering a newer
   // attempt's.
@@ -314,6 +314,9 @@ export function useSessionTransport(
         reason: event.reason,
         wasClean: event.wasClean,
       });
+      // Failed upgrades hide HTTP admission errors. Revalidate through the
+      // token endpoint before retrying; only sockets that opened keep the cache.
+      if (connectingEpochRef.current !== null) wsTokenRef.current = null;
       connectingEpochRef.current = null;
       // Every close ends any pending reconnect; a branch below re-arms it
       // through scheduleReconnect, which owns the timer and the phase together.

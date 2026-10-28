@@ -181,6 +181,69 @@ describe("useSessionTransport token recovery", () => {
     );
   });
 
+  it.each([401, 403, 404])(
+    "revalidates cached admission after a failed upgrade and stops on HTTP %i",
+    async (status) => {
+      const { result } = renderTransport();
+      await advance(0);
+      act(() => {
+        FakeWebSocket.instances[0].open();
+        FakeWebSocket.instances[0].serverClose(1006);
+      });
+      await advance(1_000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+
+      fetchMock.mockResolvedValue(new Response(null, { status }));
+      act(() => FakeWebSocket.instances[1].serverClose(1006));
+      await advance(2_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.current).toMatchObject({
+        sessionGone: status === 404,
+        authError: status === 404 ? null : expect.any(String),
+        connecting: false,
+        reconnecting: false,
+      });
+      await advance(300_000);
+      await resumeEvents();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    }
+  );
+
+  it("keeps backoff through transient admission failures and revalidates each failed upgrade", async () => {
+    const { result } = renderTransport();
+    await advance(0);
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1006);
+    });
+    await advance(1_000);
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ token: "revalidated-token" }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    act(() => FakeWebSocket.instances[1].serverClose(1006));
+    await advance(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.authError).toBeNull();
+    expect(result.current.reconnecting).toBe(true);
+    await advance(3_999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    act(() => FakeWebSocket.instances[2].serverClose(1006));
+    await advance(7_999);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await advance(1);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(result.current.sessionGone).toBe(true);
+    expect(result.current.reconnecting).toBe(false);
+  });
+
   it("increases repeated transient mint delays and keeps retrying at the cap", async () => {
     fetchMock.mockImplementation(transientFailures[2].mint);
     const { result } = renderTransport();
