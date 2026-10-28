@@ -421,6 +421,10 @@ class AgentBridge:
     def _finalize_connection(
         self, *, now_monotonic: float | None = None
     ) -> dict[str, float | int] | None:
+        """End the active connection: settle its accounting and reconnect backoff.
+
+        Returns the fields for the disconnect log, or None without a connection.
+        """
         if self._connected_at_monotonic is None:
             return None
 
@@ -441,16 +445,30 @@ class AgentBridge:
 
     def _log_disconnect(
         self,
+        connection_fields: dict[str, float | int],
         *,
         reason: str,
         level: str = "info",
         **fields: Any,
     ) -> None:
-        connection_fields = self._finalize_connection()
-        if connection_fields is None:
-            return
         log_method = getattr(self.log, level)
         log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
+
+    def _disconnect_log_fields(
+        self, ws: ClientConnection, closed_error: websockets.ConnectionClosed | None
+    ) -> dict[str, Any]:
+        if closed_error is not None:
+            return {
+                "reason": "connection_closed",
+                "level": "warn",
+                "ws_close_code": closed_error.code,
+            }
+        close_code = getattr(ws, "close_code", None)
+        return {
+            "reason": "shutdown_requested" if self.shutdown_event.is_set() else "connection_closed",
+            "level": "warn" if close_code not in (None, 1000, 1001) else "info",
+            **({"ws_close_code": close_code} if close_code is not None else {}),
+        }
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -504,6 +522,7 @@ class AgentBridge:
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
+                closed_error: websockets.ConnectionClosed | None = None
 
                 try:
                     self.log.info(
@@ -533,11 +552,7 @@ class AgentBridge:
                             self.log.error("bridge.command_error", exc=e)
 
                 except websockets.ConnectionClosed as e:
-                    self._log_disconnect(
-                        reason="connection_closed",
-                        level="warn",
-                        ws_close_code=e.code,
-                    )
+                    closed_error = e
                     raise
 
                 finally:
@@ -547,18 +562,11 @@ class AgentBridge:
                         task.cancel()
                     self.ws = None
                     self.event_forwarder.unbind()
-                    if self._connected_at_monotonic is not None:
-                        close_code = getattr(ws, "close_code", None)
-                        reason = (
-                            "shutdown_requested"
-                            if self.shutdown_event.is_set()
-                            else "connection_closed"
+                    connection_fields = self._finalize_connection()
+                    if connection_fields is not None:
+                        self._log_disconnect(
+                            connection_fields, **self._disconnect_log_fields(ws, closed_error)
                         )
-                        level = "warn" if close_code not in (None, 1000, 1001) else "info"
-                        extra_fields = (
-                            {"ws_close_code": close_code} if close_code is not None else {}
-                        )
-                        self._log_disconnect(reason=reason, level=level, **extra_fields)
 
         except InvalidStatus as e:
             status = getattr(getattr(e, "response", None), "status_code", None)

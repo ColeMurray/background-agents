@@ -146,14 +146,17 @@ class LongLivedAbnormallyClosedWs:
 class TestBridgeReconnectBackoff:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("uptime_seconds", "expected_delays"),
+        ("uptime_seconds", "expected_delays", "stub_disconnect_log"),
         [
-            (STABLE_CONNECTION_SECONDS * 2, [2.0] * 8),
-            (1.0, [2.0, 4.0, 8.0, 15.0, 15.0, 15.0, 15.0, 15.0]),
+            (STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, False),
+            (1.0, [2.0, 4.0, 8.0, 15.0, 15.0, 15.0, 15.0, 15.0], False),
+            # Disconnect logging is diagnostics only; the reset must not depend on it.
+            (STABLE_CONNECTION_SECONDS * 2, [2.0] * 8, True),
         ],
+        ids=["long-lived", "short-lived", "long-lived-without-disconnect-log"],
     )
     async def test_abnormal_closes_back_off_only_while_connections_are_short(
-        self, monkeypatch, uptime_seconds, expected_delays
+        self, monkeypatch, uptime_seconds, expected_delays, stub_disconnect_log
     ):
         backoff = RecordingBackoff()
         bridge = AgentBridge(
@@ -167,6 +170,8 @@ class TestBridgeReconnectBackoff:
         bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge.boot_attach.on_connect = AsyncMock()
+        if stub_disconnect_log:
+            bridge._log_disconnect = MagicMock()
 
         class ConnectionContext:
             async def __aenter__(self):
