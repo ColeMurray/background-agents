@@ -1541,6 +1541,41 @@ describe("SandboxShutdownCoordinator", () => {
     expect(f.shutdown.onRefusedReconnect()).toBe("exit");
   });
 
+  it("keeps a refused runtime up while its watchdog checkpoint is captured", async () => {
+    let resolveCapture!: (value: { success: true; imageId: string }) => void;
+    const f = fixture(
+      provider({
+        takeSnapshot: vi.fn(
+          () =>
+            new Promise<{ success: true; imageId: string }>((resolve) => (resolveCapture = resolve))
+        ),
+      })
+    );
+    await readyWithoutDeadline(f);
+    f.sandboxRow.status = "stale";
+
+    const capture = f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+    await vi.waitFor(() => expect(resolveCapture).toBeTypeOf("function"));
+    expect(f.store.value).toMatchObject({ phase: "running", checkpointInFlight: true });
+    expect(f.shutdown.onRefusedReconnect()).toBe("retry");
+
+    resolveCapture({ success: true, imageId: "image-1" });
+    await expect(capture).resolves.toMatchObject({ outcome: "saved" });
+    expect(f.shutdown.onRefusedReconnect()).toBe("exit");
+  });
+
+  it("does not keep a runtime up for a checkpoint another instance lost", async () => {
+    const f = fixture(provider({ takeSnapshot: vi.fn(() => new Promise<never>(() => {})) }));
+    await readyWithoutDeadline(f);
+    f.sandboxRow.status = "stale";
+    void f.shutdown.captureCheckpoint(GENERATION, "heartbeat_timeout", "stop_source");
+    await vi.waitFor(() => expect(f.store.value?.checkpointInFlight).toBe(true));
+
+    // Only the instance taking the snapshot can record it.
+    const restarted = new SandboxShutdownCoordinator(f.deps as never);
+    expect(restarted.onRefusedReconnect()).toBe("exit");
+  });
+
   it("retries a failed save when the runtime reconnects after the capture window", async () => {
     const takeSnapshot = vi
       .fn<NonNullable<SandboxProvider["takeSnapshot"]>>()

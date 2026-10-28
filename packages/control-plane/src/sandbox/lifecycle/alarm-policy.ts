@@ -4,6 +4,7 @@ import {
   evaluateConnectingTimeout,
   evaluateHeartbeatHealth,
   evaluateInactivityTimeout,
+  heartbeatGraceEndsAt,
   heartbeatStaleAt,
   isDeadSandboxStatus,
   type BootBudgetConfig,
@@ -31,6 +32,7 @@ export interface AlarmPolicyConfig {
 export type AlarmFinding =
   | { outcome: "terminal" }
   | { outcome: "connecting_timeout"; elapsedMs: number }
+  | { outcome: "heartbeat_unconfirmed"; ageMs: number; graceEndsAtMs: number }
   | { outcome: "heartbeat_stale"; ageMs: number; isBooting: boolean }
   | { outcome: "boot_budget_exceeded"; elapsedMs: number }
   | { outcome: "inactivity_timeout"; idleMs: number; timeoutMs: number }
@@ -59,12 +61,14 @@ export function evaluateAlarmPolicy(
 
   const heartbeat = evaluateHeartbeatHealth(sandbox.last_heartbeat, config.heartbeat, now);
   if (heartbeat.isStale) {
+    const isBooting = sandbox.status === "spawning" || sandbox.status === "connecting";
+    // A booted sandbox's bridge may be reconnecting; it is not yet stale.
+    const graceEndsAtMs = heartbeatGraceEndsAt(now - heartbeat.ageMs, config.heartbeat);
+    if (!isBooting && now < graceEndsAtMs) {
+      return { outcome: "heartbeat_unconfirmed", ageMs: heartbeat.ageMs, graceEndsAtMs };
+    }
     // A stale boot counts toward the breaker and must never become a restore point.
-    return {
-      outcome: "heartbeat_stale",
-      ageMs: heartbeat.ageMs,
-      isBooting: sandbox.status === "spawning" || sandbox.status === "connecting",
-    };
+    return { outcome: "heartbeat_stale", ageMs: heartbeat.ageMs, isBooting };
   }
 
   const budget = evaluateBootBudget(sandbox.status, sandbox.created_at, config.bootBudget, now);

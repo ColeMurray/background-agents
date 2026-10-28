@@ -42,6 +42,12 @@ import { providerResumesAfterStop } from "../provider";
 import type { SandboxAccessKind, SandboxRow, SessionRow } from "../../session/types";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
+/** A bridge heartbeat old enough to be past both the stale threshold and its reconnect grace. */
+export const EXPIRED_HEARTBEAT_AGE_MS =
+  DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs +
+  DEFAULT_LIFECYCLE_CONFIG.heartbeat.reconnectGraceMs +
+  10_000;
+
 export function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
     id: "session-123",

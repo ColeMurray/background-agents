@@ -217,6 +217,8 @@ export interface SessionComponents {
    */
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
+  /** The live provider object, shared by the lifecycle manager and shutdown coordinator. */
+  sandboxProvider: SandboxProvider;
   access: SandboxAccess;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
@@ -1057,6 +1059,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       scmProvider = next;
     },
     userEnvResolver,
+    sandboxProvider,
     access,
     lifecycleManager,
     messageQueue,

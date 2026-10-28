@@ -682,7 +682,9 @@ export class SandboxShutdownCoordinator {
 
   /**
    * A runtime refused at reconnect normally exits, which ends its sandbox.
-   * While a capture needs that sandbox the runtime is told to retry instead.
+   * While a capture needs that sandbox the runtime is told to retry instead,
+   * including a watchdog checkpoint this instance is still taking: the
+   * provider aborts a snapshot of a sandbox that is shutting down.
    * A save that failed while the runtime was unresponsive is attempted again
    * now that it is back, at most once per capture window.
    */
@@ -690,6 +692,12 @@ export class SandboxShutdownCoordinator {
     const state = this.deps.store.read();
     if (!state || !this.current(state)) return "exit";
     if (state.phase === "draining" || state.phase === "prepared" || state.phase === "capturing")
+      return "retry";
+    if (
+      state.checkpointInFlight &&
+      this.checkpointGeneration !== null &&
+      this.matches(state, this.checkpointGeneration)
+    )
       return "retry";
     if ((state.phase !== "failed" && state.phase !== "unknown") || !this.canRetryShutdown(state))
       return "exit";

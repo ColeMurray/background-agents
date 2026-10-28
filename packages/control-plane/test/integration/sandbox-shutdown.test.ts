@@ -1791,3 +1791,162 @@ describe("unconfirmed checkpoint across a Durable Object reset", () => {
     ]);
   });
 });
+
+describe("heartbeat watchdog and a reconnecting bridge", () => {
+  const { timeoutMs, reconnectGraceMs } = DEFAULT_LIFECYCLE_CONFIG.heartbeat;
+
+  /** A booted, saved-policy sandbox whose bridge last heartbeated `heartbeatAgeMs` ago. */
+  async function seedSilentSandbox(name: string, heartbeatAgeMs: number) {
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
+    await runInSessionDO(stub, (_instance: SessionDO, durableState) => {
+      durableState.storage.sql.exec(
+        "UPDATE sandbox SET modal_object_id = ?, last_heartbeat = ?, last_activity = ?",
+        "sb-live",
+        Date.now() - heartbeatAgeMs,
+        Date.now()
+      );
+    });
+    await seedShutdown(stub, {
+      providerObjectId: "sb-live",
+      generationReady: true,
+      runtimeReady: true,
+      protocolVersion: 1,
+      lifecyclePolicy: "confirmed",
+    });
+    const [owner] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    await seedMessage(stub, {
+      id: "msg-in-flight",
+      authorId: owner.id,
+      content: "Keep going",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1_000,
+      startedAt: Date.now() - 500,
+    });
+    return stub;
+  }
+
+  /** Spies on the live DO's provider, which its lifecycle manager and coordinator share. */
+  async function spyOnProvider(
+    stub: DurableObjectStub,
+    takeSnapshot: NonNullable<SandboxProvider["takeSnapshot"]>
+  ) {
+    return runInSessionDO(stub, async (instance: SessionDO, durableState) => {
+      const provider = componentsOf(instance).sandboxProvider;
+      const spies = {
+        takeSnapshot: vi.spyOn(provider, "takeSnapshot").mockImplementation(takeSnapshot),
+        stopSandbox: vi
+          .spyOn(provider, "stopSandbox")
+          .mockImplementation(async () => ({ success: true })),
+      };
+      await durableState.storage.setAlarm(Date.now() + 60_000);
+      return spies;
+    });
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps a sandbox whose bridge reconnects inside the grace and completes its prompt", async () => {
+    const name = `heartbeat-grace-reconnect-${Date.now()}`;
+    const stub = await seedSilentSandbox(name, timeoutMs + 1_000);
+    const provider = await spyOnProvider(stub, async () => ({
+      success: true,
+      imageId: "turn-checkpoint",
+    }));
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+
+    // The heartbeat is stale, but nothing is marked, saved or stopped yet.
+    expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "ready" }]);
+    expect(provider.takeSnapshot).not.toHaveBeenCalled();
+    expect(provider.stopSandbox).not.toHaveBeenCalled();
+    expect(await queryDO(stub, "SELECT status FROM messages WHERE id = 'msg-in-flight'")).toEqual([
+      { status: "processing" },
+    ]);
+    const graceAlarm = await runInSessionDO(stub, (_instance: SessionDO, durableState) =>
+      durableState.storage.getAlarm()
+    );
+    expect(graceAlarm).toBeGreaterThan(Date.now() + reconnectGraceMs - 5_000);
+
+    const { ws, response } = await openSandboxWs(name, {
+      authToken: AUTH_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(response.status).toBe(101);
+    ws!.accept();
+    try {
+      ws!.send(
+        JSON.stringify({
+          type: "execution_complete",
+          messageId: "msg-in-flight",
+          success: true,
+          sandboxId: SANDBOX_ID,
+          timestamp: Date.now() / 1000,
+        })
+      );
+      await vi.waitFor(async () =>
+        expect(
+          await queryDO(stub, "SELECT status FROM messages WHERE id = 'msg-in-flight'")
+        ).toEqual([{ status: "completed" }])
+      );
+
+      // The reconnect ended the episode: the next watchdog pass finds it healthy.
+      await runInSessionDO(stub, (_instance: SessionDO, durableState) =>
+        durableState.storage.setAlarm(Date.now() + 60_000)
+      );
+      await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+      expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "ready" }]);
+      // Only the finished turn's routine checkpoint ran; the watchdog saved and stopped nothing.
+      expect(provider.takeSnapshot.mock.calls.map(([config]) => config.reason)).not.toContain(
+        "heartbeat_timeout"
+      );
+      expect(provider.stopSandbox).not.toHaveBeenCalled();
+    } finally {
+      await closeWebSocket(ws!);
+    }
+  });
+
+  it("tells a bridge reconnecting during the heartbeat checkpoint to retry so the snapshot completes", async () => {
+    const name = `heartbeat-checkpoint-reconnect-${Date.now()}`;
+    const stub = await seedSilentSandbox(name, timeoutMs + reconnectGraceMs + 1_000);
+    let finishSnapshot!: (imageId: string) => void;
+    const provider = await spyOnProvider(
+      stub,
+      () =>
+        new Promise((resolve) => {
+          finishSnapshot = (imageId) => resolve({ success: true, imageId });
+        })
+    );
+
+    const alarm = runDurableObjectAlarm(stub);
+    await vi.waitFor(() => expect(provider.takeSnapshot).toHaveBeenCalledOnce());
+    expect(await queryDO(stub, "SELECT status FROM sandbox")).toEqual([{ status: "stale" }]);
+
+    // Exiting now would shut the container down and abort the snapshot.
+    const during = await openSandboxWs(name, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    expect(during.ws).toBeNull();
+    expect(during.response.status).toBe(503);
+    expect(await during.response.text()).toBe("Sandbox is being saved");
+    expect(provider.stopSandbox).not.toHaveBeenCalled();
+
+    // The pending snapshot belongs to the object's I/O context, so it settles there.
+    await runInSessionDO(stub, () => finishSnapshot("heartbeat-image"));
+    await expect(alarm).resolves.toBe(true);
+
+    expect(await queryDO(stub, "SELECT status, snapshot_image_id FROM sandbox")).toEqual([
+      { status: "stale", snapshot_image_id: "heartbeat-image" },
+    ]);
+    expect(provider.stopSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerObjectId: "sb-live", reason: "heartbeat_timeout" })
+    );
+
+    // Once the save is done with the sandbox, a reconnect is refused as before.
+    const after = await openSandboxWs(name, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID });
+    expect(after.ws).toBeNull();
+    expect(after.response.status).toBe(410);
+  });
+});

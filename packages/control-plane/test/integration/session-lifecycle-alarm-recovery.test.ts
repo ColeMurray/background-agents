@@ -106,7 +106,10 @@ describe("SessionDO lifecycle alarm recovery", () => {
       state.storage.sql.exec(
         `UPDATE sandbox SET status = 'ready', modal_object_id = 'sb-unresponsive',
            last_heartbeat = ?, last_activity = ?`,
-        Date.now() - DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs - 1_000,
+        Date.now() -
+          DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs -
+          DEFAULT_LIFECYCLE_CONFIG.heartbeat.reconnectGraceMs -
+          1_000,
         Date.now()
       );
     });
