@@ -3,7 +3,7 @@ import {
   BoatApiError,
   BoatCancelledError,
   BoatConflictError,
-  type BoatNamedSnapshot,
+  type BoatSavedSnapshot,
 } from "../sandbox/boat-rest-client";
 import { SandboxProviderError } from "../sandbox/provider";
 import { BOAT_IMAGE_SAVE_DEADLINE_MS, BoatImageBuildAdapter } from "./boat-adapter";
@@ -21,7 +21,7 @@ const SOURCE_ID = "bx_abcdefgh";
 const IMAGE_NAME = `oi-img-acme-repo-1757000000000-ab12-0123456789abcdef`;
 const correlation = { request_id: "request-1", trace_id: "trace-1" };
 
-function snapshot(overrides: Partial<BoatNamedSnapshot> = {}): BoatNamedSnapshot {
+function snapshot(overrides: Partial<BoatSavedSnapshot> = {}): BoatSavedSnapshot {
   return {
     name: IMAGE_NAME,
     status: "ready",
@@ -41,7 +41,7 @@ function baseResources() {
     saveImageSnapshot: vi.fn(async (_sandboxId: string, name: string) =>
       snapshot({ name, status: "saving" })
     ),
-    getImageSnapshot: vi.fn(async (): Promise<BoatNamedSnapshot | null> => snapshot()),
+    getImageSnapshot: vi.fn(async (): Promise<BoatSavedSnapshot | null> => snapshot()),
     deleteProviderImage: vi.fn(async () => undefined),
     deleteBuildSandbox: vi.fn(async () => undefined),
   };
@@ -232,7 +232,7 @@ describe("BoatImageBuildAdapter first delivery", () => {
     });
 
     await expect(createAdapter(resources).finalizeSuccessfulBuild(finalizeInput())).rejects.toThrow(
-      /named-snapshot allowance/
+      /saved-snapshot allowance.*add money to the Boat wallet/
     );
     expect(resources.getImageSnapshot).not.toHaveBeenCalled();
   });
@@ -240,7 +240,7 @@ describe("BoatImageBuildAdapter first delivery", () => {
   it("reconciles under the reserved name when the save request's outcome is unknown", async () => {
     const resources = createResources({
       saveImageSnapshot: vi.fn(async () => {
-        throw new BoatCancelledError("POST /named-snapshots");
+        throw new BoatCancelledError("POST /saved-snapshots");
       }),
     });
 

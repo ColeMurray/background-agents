@@ -132,6 +132,7 @@ export function AutomationForm({
   const formEvaluation = evaluateAutomationForm({
     mode,
     originalTrigger: initialDraft.trigger,
+    originalScheduleOnceAt: initialValues?.scheduleOnceAt,
     modelAvailability: modelSelection.availability,
     resolvedModel,
     draft: {
@@ -157,6 +158,10 @@ export function AutomationForm({
   const slackChannelError =
     !formEvaluation.valid && formEvaluation.reason === "slack-channel-required"
       ? "Slack triggers require at least one Slack Channel condition."
+      : "";
+  const slackBotAllowListError =
+    !formEvaluation.valid && formEvaluation.reason === "slack-bot-allow-list-required"
+      ? "Add a Slack User condition that includes the bots allowed to trigger this automation."
       : "";
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -254,6 +259,7 @@ export function AutomationForm({
         onChange={setTrigger}
         eventTypeError={eventTypeError}
         slackChannelError={slackChannelError}
+        slackBotAllowListError={slackBotAllowListError}
         conditionErrors={conditionErrors}
       />
 

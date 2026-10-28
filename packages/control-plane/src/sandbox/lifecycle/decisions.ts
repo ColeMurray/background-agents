@@ -9,7 +9,7 @@
  * then executes the appropriate side effects (API calls, broadcasts, etc.)
  */
 
-import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SandboxStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
@@ -444,10 +444,10 @@ export interface InactivityState {
 }
 
 /**
- * Inactivity timeout configuration.
+ * Inactivity timeout configuration for one session.
  */
 export interface InactivityConfig {
-  /** Time in ms before sandbox stops due to inactivity (default: 10 minutes) */
+  /** Time in ms before sandbox stops due to inactivity */
   timeoutMs: number;
   /** Additional time granted when clients are connected (default: 5 minutes) */
   extensionMs: number;
@@ -456,19 +456,60 @@ export interface InactivityConfig {
 }
 
 /**
+ * Deployment-wide inactivity configuration; `inactivityConfigFor` selects a
+ * session's window from it.
+ */
+export interface InactivityPolicyConfig extends InactivityConfig {
+  /** Time in ms before an unattended session's sandbox stops; never exceeds timeoutMs */
+  unattendedTimeoutMs: number;
+}
+
+/**
  * Default inactivity configuration.
  */
-export const DEFAULT_INACTIVITY_CONFIG: InactivityConfig = {
+export const DEFAULT_INACTIVITY_CONFIG: InactivityPolicyConfig = {
   timeoutMs: 10 * 60 * 1000, // 10 minutes
+  unattendedTimeoutMs: 2 * 60 * 1000, // 2 minutes
   extensionMs: 5 * 60 * 1000, // 5 minutes
   minCheckIntervalMs: 30000, // 30 seconds
 };
+
+// Processing heartbeats renew activity every 30s; leave room between renewals.
+export const MIN_UNATTENDED_INACTIVITY_TIMEOUT_MS = 60_000;
+
+/**
+ * Whether anyone is waiting on a session's sandbox between prompts. This is
+ * idle policy only: analytics counts GitHub bot sessions as human-initiated,
+ * but nobody keeps the sandbox warm for a follow-up after a bot review.
+ */
+const SPAWN_SOURCE_ATTENDANCE: Record<SpawnSource, "attended" | "unattended"> = {
+  user: "attended",
+  "slack-bot": "attended",
+  "linear-bot": "attended",
+  "github-bot": "unattended",
+  agent: "unattended",
+  automation: "unattended",
+};
+
+/**
+ * Select the inactivity window for a session from its spawn source. A session
+ * without a persisted row yet uses the regular window.
+ */
+export function inactivityConfigFor(
+  policy: InactivityPolicyConfig,
+  source: SpawnSource | undefined
+): InactivityConfig {
+  const { unattendedTimeoutMs, ...attended } = policy;
+  return source !== undefined && SPAWN_SOURCE_ATTENDANCE[source] === "unattended"
+    ? { ...attended, timeoutMs: unattendedTimeoutMs }
+    : attended;
+}
 
 /**
  * Possible inactivity actions.
  */
 export type InactivityAction =
-  | { action: "timeout" }
+  | { action: "timeout"; idleMs: number }
   | { action: "extend"; extensionMs: number }
   | { action: "schedule"; nextCheckMs: number };
 
@@ -532,7 +573,7 @@ export function evaluateInactivityTimeout(
     }
 
     // No clients connected - end the idle sandbox.
-    return { action: "timeout" };
+    return { action: "timeout", idleMs: inactiveTime };
   }
 
   // Not yet timed out - schedule next check at remaining time (minimum interval)
@@ -548,13 +589,24 @@ export function evaluateInactivityTimeout(
 export interface HeartbeatConfig {
   /** Time in ms after which missing heartbeat indicates stale sandbox (default: 90s = 3x 30s interval) */
   timeoutMs: number;
+  /**
+   * How long past `timeoutMs` a booted sandbox's bridge may still reconnect
+   * before the watchdog terminates it. A bridge whose socket dropped retries
+   * with backoff, so its reconnect can land just after the timeout; ending
+   * the sandbox then loses a healthy workspace and its in-flight prompt.
+   */
+  reconnectGraceMs: number;
 }
 
 /**
  * Default heartbeat configuration.
  */
 export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
-  timeoutMs: 90000, // 90 seconds (3x 30s heartbeat interval)
+  // 3x the 30s heartbeat interval. Must exceed the bridge's maximum reconnect
+  // delay plus that interval; mirrored as CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS
+  // in packages/sandbox-runtime/src/sandbox_runtime/reconnect_backoff.py.
+  timeoutMs: 90000,
+  reconnectGraceMs: 60_000,
 };
 
 /**
@@ -612,6 +664,11 @@ export function evaluateHeartbeatHealth(
 /** The earliest time at which `evaluateHeartbeatHealth` judges `lastHeartbeat` stale. */
 export function heartbeatStaleAt(lastHeartbeat: number, config: HeartbeatConfig): number {
   return lastHeartbeat + config.timeoutMs + 1;
+}
+
+/** The earliest time at which a booted sandbox stale at `lastHeartbeat` is out of reconnect grace. */
+export function heartbeatGraceEndsAt(lastHeartbeat: number, config: HeartbeatConfig): number {
+  return heartbeatStaleAt(lastHeartbeat, config) + config.reconnectGraceMs;
 }
 
 // ==================== Connecting Timeout ====================
@@ -744,31 +801,6 @@ export function evaluateBootBudget(
     isExceeded: elapsedMs >= config.timeoutMs,
     elapsedMs,
   };
-}
-
-/**
- * Resolve the boot budget from its deployment knob. The value must be a whole
- * positive integer of milliseconds above the connect watchdog: both are
- * measured from the reservation, and a budget at or below the watchdog would
- * fail a generation that has not yet had its chance to connect. Anything else
- * (including `parseInt`-tolerant forms like `1000junk` or `1.5`) resolves to
- * the default and is reported through `rejectedValue`, so a typo weakens
- * nothing silently. An unset knob is not a rejection.
- *
- * Pure function: no side effects.
- */
-export function resolveBootBudgetTimeoutMs(
-  raw: string | undefined,
-  bounds: { connectingTimeoutMs: number; defaultTimeoutMs: number }
-): { timeoutMs: number; rejectedValue: string | null } {
-  if (raw === undefined || raw === "") {
-    return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: null };
-  }
-  const parsed = /^[1-9]\d*$/.test(raw) ? Number(raw) : Number.NaN;
-  if (Number.isSafeInteger(parsed) && parsed > bounds.connectingTimeoutMs) {
-    return { timeoutMs: parsed, rejectedValue: null };
-  }
-  return { timeoutMs: bounds.defaultTimeoutMs, rejectedValue: raw };
 }
 
 // ==================== Warm Decision ====================

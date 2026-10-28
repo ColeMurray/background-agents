@@ -233,7 +233,7 @@ export async function handleCreateSession(
   const harness = getValidHarnessOrDefault(body.harness);
   let selection;
   try {
-    selection = await resolveHarnessSelection(ctx.db, env, {
+    selection = await resolveHarnessSelection(ctx.db, {
       harness,
       model: body.model,
       reasoningEffort: body.reasoningEffort,

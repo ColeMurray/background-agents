@@ -197,7 +197,8 @@ variable-only.
 See [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for the complete
 variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
-Add these secrets to your repository settings:
+Add these settings to your repository, using **Variables** for non-secret configuration (including
+`R2_MEDIA_BUCKET_NAME`) and **Secrets** for credentials:
 
 ```
 # Deployment
@@ -210,7 +211,7 @@ CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 R2_MEDIA_LOCATION # Optional; defaults to ENAM
-R2_MEDIA_BUCKET_NAME # Optional; set when the media bucket is pre-created out-of-band
+R2_MEDIA_BUCKET_NAME # Optional; name of the Terraform-created media bucket (import an existing one first)
 WEB_PLATFORM # Optional; defaults to vercel
 
 # Vercel web app (only if WEB_PLATFORM=vercel)
@@ -233,6 +234,7 @@ MODAL_API_SECRET
 # Sandbox provider
 SANDBOX_PROVIDER
 SANDBOX_INACTIVITY_TIMEOUT_MS # Optional; defaults to 600000
+SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS # Optional; defaults to 120000, minimum 60000
 SANDBOX_BOOT_TIMEOUT_MS       # Optional; defaults to 1800000, must exceed 240000
 
 # Daytona (only if SANDBOX_PROVIDER=daytona)
@@ -252,7 +254,7 @@ VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 
 # Boat (only if SANDBOX_PROVIDER=boat)
 BOAT_API_KEY
-BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed named snapshot
+BOAT_BASE_SNAPSHOT # Prefix for the Terraform-managed saved snapshot
 BOAT_API_URL       # Optional; defaults to https://boat.dev/api/v1
 BOAT_ORG           # Optional organization wallet
 BOAT_SANDBOX_TYPE  # Optional; defaults to default
@@ -313,6 +315,69 @@ ENABLE_SERVICE_BINDINGS # Optional; defaults to true
 APP_NAME # Optional; defaults to Open-Inspect
 APP_ICON_URL
 ```
+
+### Sandbox Inactivity
+
+Set `sandbox_inactivity_timeout_ms` and `sandbox_unattended_inactivity_timeout_ms` in
+`terraform.tfvars`, or use the corresponding uppercase Actions settings above for CI deployments.
+Terraform passes them to the control-plane Worker as `SANDBOX_INACTIVITY_TIMEOUT_MS` and
+`SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS`. See
+[the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for which sessions use each
+timeout and what extends them.
+
+### Co-locating the request path
+
+For a Vercel web deployment, an API request travels from the browser to a Vercel edge, then to the
+web project's functions, the control-plane Worker, and D1. The edge and function regions are
+separate placements. Without Smart Placement, the Worker normally runs near its caller. Session
+requests also reach a session Durable Object, which reads and writes D1. Browser WebSockets and
+sandbox agent connections reach that object through the Worker; sandboxes run in their provider's
+locations, independently of the web functions and session objects.
+
+Two production Terraform inputs let you reduce distance along this path without changing the
+defaults:
+
+| Terraform input            | Actions repository variable | Default | Scope                                       |
+| -------------------------- | --------------------------- | ------- | ------------------------------------------- |
+| `web_serverless_region`    | `WEB_SERVERLESS_REGION`     | `iad1`  | Vercel web project functions only, not docs |
+| `session_do_location_hint` | `SESSION_DO_LOCATION_HINT`  | `""`    | New session Durable Objects                 |
+
+Set these in `terraform.tfvars`, or use the Actions repository variables for CI deployments. Choose
+a supported Vercel region near your users and D1's primary, balancing distance to each. The web
+region must match `^[a-z]{3}[0-9]$`; it has no effect when `web_platform = "cloudflare"`. Choose the
+session hint for D1's region: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `apac-ne`, `apac-se`,
+`oc`, `afr`, or `me`. Prefer `apac` for general Asia-Pacific placement; use `apac-ne` or `apac-se`
+for the northeast or southeast subregion. See
+[Cloudflare's location hints](https://developers.cloudflare.com/durable-objects/reference/data-location/#provide-a-location-hint).
+An empty hint preserves automatic placement. Terraform rejects invalid values; if an invalid hint
+reaches the Worker outside Terraform, it logs a warning and ignores it rather than failing the
+request. Consider the Worker's Smart Placement separately after measuring these changes; neither
+input enables it.
+
+Apply and measure one setting at a time. A web region change takes effect only after a web redeploy
+following Terraform apply: Deploy Web pulls the updated project settings before building. A session
+hint is best-effort and only affects objects first created after the change. It applies to all
+session callers, including bots, automations, and sandboxes. Existing objects stay where they are,
+so requests to older sessions may still cross regions. Objects near D1 may also be farther from some
+sandboxes or third-party APIs; watch agent-event latency as well as web request latency.
+
+Check actual placement rather than assuming the settings were honored:
+
+- **Web functions:** inspect the function's location in **Function** details in
+  [Vercel Runtime Logs](https://vercel.com/docs/logs/runtime#log-details), not the request's
+  **Region** field (the edge location). In
+  [log drains](https://vercel.com/docs/drains/reference/logs#logs-schema), use `proxy.lambdaRegion`
+  for the function execution region; `executionRegion` describes request execution and
+  `proxy.region` describes proxy processing.
+- **Control-plane Worker:** inspect `$workers.event.request.cf.colo` on `cf-worker-event` in Workers
+  telemetry, comparing the callers whose requests you want to improve.
+- **Session Durable Objects:** query GraphQL `durableObjectsPeriodicGroups`, grouped by `coloCode`;
+  filter by `objectId` to check a newly created session rather than an older one.
+
+To roll back, unset the relevant Actions repository variable or remove the Terraform override,
+re-apply, and redeploy the web app if its region changed. This restores the default web region
+and/or removes the hint for future objects. Objects created with a hint remain where they are. These
+settings do not move D1, enable read replication, or select a sandbox-provider region.
 
 ## Module Reference
 

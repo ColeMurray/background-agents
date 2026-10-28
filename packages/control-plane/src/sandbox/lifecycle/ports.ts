@@ -70,7 +70,8 @@ export interface SandboxAttachment {
 }
 
 /**
- * The lifecycle result consumed by the existing alarm coordinator.
+ * What a lifecycle recovery did, for the session to apply to its queue:
+ * returned by the alarm and by a fatal runtime report's termination.
  *
  * - `sandbox_failed`: the generation failed but may still come up or is held
  *   for recovery, so pending prompts wait for the next spawn.
@@ -88,7 +89,8 @@ export type SandboxAlarmResult =
   | "sandbox_terminated"
   | { kind: "heartbeat_lost"; reason: string }
   | { kind: "boot_budget_exceeded"; reason: string }
-  | { kind: "connect_timeout_unrecoverable"; reason: string };
+  | { kind: "connect_timeout_unrecoverable"; reason: string }
+  | { kind: "fatal_report_unrecoverable"; reason: string };
 
 export interface SandboxAlarm {
   handleAlarm(): Promise<SandboxAlarmResult>;

@@ -19,11 +19,10 @@ import pytest
 
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
-from sandbox_runtime.harness.codex.client import CodexClient
 from sandbox_runtime.model_prices import ModelPriceCatalog
 
 BINARY = os.environ.get("OI_TEST_CODEX_BINARY")
-CATALOG = Path(__file__).parent / "fixtures/reasoning-models.json"
+CATALOG = Path(__file__).parents[1] / "fixtures/reasoning-models.json"
 pytestmark = pytest.mark.skipif(
     not BINARY, reason="Set OI_TEST_CODEX_BINARY for pinned native integration"
 )
@@ -131,156 +130,6 @@ def remote_mcp(request):
         server.shutdown()
         server.server_close()
         thread.join()
-
-
-@pytest.fixture
-def responses():
-    received, scripted_items = [], []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_GET(self):
-            payload = json.dumps(
-                {
-                    "accounts": [
-                        {
-                            "id": "workspace-fixture",
-                            "workspace_backend_origin": "https://fixture.invalid",
-                            "account_routing_override": "NO_CONSTRAINT",
-                        }
-                    ]
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if not self.path.endswith("/responses"):
-                self.send_error(404)
-                return
-            received.append({"body": body, "auth": self.headers.get("Authorization")})
-            if scripted_items and "http_status" in scripted_items[0]:
-                body = b'{"error":{"message":"unauthorized"}}'
-                self.send_response(scripted_items.pop(0)["http_status"])
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            index = len(received)
-            events = [
-                {"type": "response.created", "response": {"id": f"r{index}"}},
-                {
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "message",
-                        "role": "assistant",
-                        "id": f"m{index}",
-                        "content": [{"type": "output_text", "text": f"answer {index}"}],
-                    },
-                },
-                {
-                    "type": "response.completed",
-                    "response": {
-                        "id": f"r{index}",
-                        "usage": {
-                            "input_tokens": 100,
-                            "output_tokens": 20,
-                            "total_tokens": 120,
-                            "input_tokens_details": {"cached_tokens": 0},
-                            "output_tokens_details": {"reasoning_tokens": 5},
-                        },
-                    },
-                },
-            ]
-            if scripted_items:
-                events[1]["item"] = scripted_items.pop(0)
-            for event in events:
-                self.wfile.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
-            self.wfile.flush()
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/v1", received, scripted_items
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-
-
-@pytest.fixture
-def native_factory(tmp_path, responses):
-    endpoint, _, _ = responses
-
-    class NativeFixtureClient(CodexClient):
-        # Synthetic-only fixture diagnostics, never enabled in production.
-        diagnostics = b""
-        native_error = None
-        auth_logins = 0
-
-        async def request(self, method, params, **kwargs):
-            if method == "account/login/start":
-                self.auth_logins += 1
-            return await super().request(method, params, **kwargs)
-
-        async def next_notification(self):
-            frame = await super().next_notification()
-            if frame.get("method") == "turn/completed":
-                self.native_error = frame.get("params", {}).get("turn", {}).get("error")
-            return frame
-
-        async def _drain_stderr(self):
-            while chunk := await self._process.stderr.read(8192):
-                self.diagnostics = (self.diagnostics + chunk)[-16384:]
-
-        async def close(self, **kwargs):
-            stopped = await super().close(**kwargs)
-            assert stopped, (self._process.returncode, self.diagnostics.decode(errors="replace"))
-            return stopped
-
-    def factory(**kwargs):
-        # Explicit test-only endpoint authority; production has no endpoint
-        # injection option and always runs under the Linux ownership domain.
-        args = kwargs["command"][3:]
-        # Original tuple is python, owner, native, -c..., app-server...
-        cut = args.index("app-server")
-        provider = (
-            'model_providers.fixture={name="OpenAI",base_url='
-            + json.dumps(endpoint)
-            + ',wire_api="responses",requires_openai_auth=true,request_max_retries=0,stream_max_retries=0}'
-        )
-        native_command = (
-            BINARY,
-            *args[:cut],
-            "-c",
-            'model_provider="fixture"',
-            "-c",
-            provider,
-            "-c",
-            "features.enable_request_compression=false",
-            "-c",
-            "chatgpt_base_url="
-            + json.dumps(endpoint.replace("127.0.0.1", "localhost").removesuffix("/v1")),
-            *args[cut:],
-        )
-        linux = sys.platform.startswith("linux")
-        kwargs["command"] = (*kwargs["command"][:2], *native_command) if linux else native_command
-        kwargs["containment_owner"] = linux
-        kwargs["env"] = {**kwargs["env"], "HOME": str(tmp_path)}
-        return NativeFixtureClient(**kwargs)
-
-    return factory
 
 
 @pytest.mark.parametrize("subscription", [False, True])
@@ -560,7 +409,7 @@ async def test_native_local_mcp_environment_and_disabled_server_isolation(
         "type": "local",
         "command": [
             sys.executable,
-            str(Path(__file__).parent / "fixtures" / "codex_mcp_server.py"),
+            str(Path(__file__).parents[1] / "fixtures" / "codex_mcp_server.py"),
         ],
     }
     if env_field:

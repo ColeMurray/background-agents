@@ -52,6 +52,23 @@ updates:
     directories:
       - /packages/modal-infra
       - /packages/sandbox-images
+    # Scanning /packages/sandbox-images also finds locks/*.txt, and Dependabot
+    # edits those exports as plain requirements files without their uv.lock.
+    # exclude-paths covers version updates only: a security update can still
+    # edit them, which `sandbox:images lock --check` fails in CI. Fix such PRs
+    # by upgrading the source uv.lock and running `sandbox:images lock`.
+    exclude-paths:
+      - "locks/**"
+    ignore:
+      # Newer Modal releases remove the endpoint introspection modal-infra
+      # tests use (Function.get_raw_f, .spec, .get_build_def). Bump it manually.
+      # update-types applies to version updates only, so Modal security
+      # updates still open PRs.
+      - dependency-name: modal
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
     schedule:
       interval: cron
       cronjob: "0 9 1,15 * *"

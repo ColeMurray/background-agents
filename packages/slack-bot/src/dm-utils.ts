@@ -1,4 +1,6 @@
 import { applyMentionPolicy } from "@open-inspect/shared/slack";
+import type { SlackMessageAuthor } from "@open-inspect/shared/triggers";
+import type { BotIdentity } from "./bot-identity";
 
 /**
  * Strip Slack user mention tokens (e.g. <@U12345>) from text and collapse
@@ -52,27 +54,36 @@ function mentionsUser(text: string, userId: string): boolean {
 }
 
 /**
- * Returns true if a Slack channel message should be considered an automation
- * trigger candidate (an ambient message that may match a watched automation).
+ * Returns the author of a Slack channel message when it should be considered an
+ * automation trigger candidate (an ambient message that may match a watched
+ * automation), or null when it should be dropped.
  *
  * This is the structural pre-filter the bot applies before normalizing and
  * forwarding to the control plane. It drops:
- * - non-`message` events and any subtype other than `file_share` (edits, joins,
- *   bot posts, …). A message that carries an attachment arrives as `file_share`
- *   but is otherwise an ordinary message, and dropping it made the request that
- *   opens a thread invisible whenever it came with a file. Only its text
- *   triggers — the attachment is not forwarded to the session (matching
- *   automation thread replies).
+ * - non-`message` events and any subtype other than `file_share` and
+ *   `bot_message` (edits, joins, …). A message that carries an attachment
+ *   arrives as `file_share` but is otherwise an ordinary message, and dropping
+ *   it made the request that opens a thread invisible whenever it came with a
+ *   file. Only its text triggers — the attachment is not forwarded to the
+ *   session (matching automation thread replies).
  * - DM (`im`) and group-DM (`mpim`) channels — handled by the DM path
- * - messages from the bot itself
+ * - messages from the bot itself, by its user id or its bot id
+ * - every bot message while the bot's own bot id is unknown (fail closed: such
+ *   a message could be the bot's own)
  * - messages that @mention the bot — those are explicit requests dispatched by
  *   the `app_mention` path; processing them here too would double-handle.
  *
- * `botUserId` must be the bot's own Slack user id (from `auth.test`); the caller
- * resolves it and fails closed when it cannot, so mention suppression is always
- * applied against a known id.
+ * Messages from other bots and integrations pass identified by their `bot_id`
+ * alone, even an app bot that also carries a `user`: whether one may trigger is
+ * a per-automation setting the control plane applies, and a control plane that
+ * predates bot messages rejects an author without a user rather than taking the
+ * bot for a person.
+ *
+ * `identity` must be the bot's own ids (from `auth.test`); the caller resolves
+ * it and fails closed when it cannot, so mention suppression and
+ * self-exclusion are always applied against a known user id.
  */
-export function isChannelTriggerCandidate(
+export function channelTriggerAuthor(
   event: {
     type: string;
     subtype?: string;
@@ -83,14 +94,18 @@ export function isChannelTriggerCandidate(
     user?: string;
     bot_id?: string;
   },
-  botUserId: string
-): boolean {
-  if (event.type !== "message") return false;
-  if (event.subtype && event.subtype !== "file_share") return false;
-  if (event.bot_id) return false;
-  if (event.channel_type !== "channel" && event.channel_type !== "group") return false;
-  if (!event.text || !event.channel || !event.ts || !event.user) return false;
-  if (event.user === botUserId) return false;
-  if (mentionsUser(event.text, botUserId)) return false;
-  return true;
+  identity: BotIdentity
+): SlackMessageAuthor | null {
+  if (event.type !== "message") return null;
+  if (event.subtype === "bot_message" && !event.bot_id) return null;
+  if (event.subtype && event.subtype !== "file_share" && event.subtype !== "bot_message") {
+    return null;
+  }
+  if (event.channel_type !== "channel" && event.channel_type !== "group") return null;
+  if (!event.text || !event.channel || !event.ts) return null;
+  if (event.user === identity.userId) return null;
+  if (mentionsUser(event.text, identity.userId)) return null;
+  if (!event.bot_id) return event.user ? { user: event.user } : null;
+  if (!identity.botId || event.bot_id === identity.botId) return null;
+  return { bot_id: event.bot_id };
 }

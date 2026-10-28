@@ -182,9 +182,11 @@ describe("memory rendering", () => {
         expect(text).toContain(harnessMemoryToolName(harness, "memory_write"));
         expect(text).toContain(harnessMemoryToolName(harness, "memory_search"));
         expect(text).toContain(harnessMemoryToolName(harness, "memory_read"));
-        expect(text).toMatch(/before finishing/i);
-        expect(text).toMatch(/build, test or setup/);
-        expect(text).toMatch(/corrected assumption/);
+        expect(text).toContain("Most sessions should save nothing");
+        expect(text).toMatch(/user corrected your approach or a fact you had wrong/);
+        expect(text).toMatch(/"this time" or "for now"/);
+        // Saving is triggered by what happened in the session, not by finishing a task.
+        expect(text).not.toMatch(/before finishing/i);
         expect(text).toMatch(/proposed.*review/);
         expect(text).toContain("Never store credentials");
         expect(text).toContain("personal-memory opt-out");

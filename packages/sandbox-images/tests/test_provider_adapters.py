@@ -248,12 +248,12 @@ class FakeBoatApi:
         self.calls: list[tuple] = []
         self.created: list[tuple[str, dict]] = []
 
-    def get_named_snapshot(self, name):
-        self.calls.append(("get_named_snapshot", name))
+    def get_saved_snapshot(self, name):
+        self.calls.append(("get_saved_snapshot", name))
         return {"name": name, "status": self.retained_status} if self.retained else None
 
-    def wait_named_snapshot(self, name, timeout=0):
-        self.calls.append(("wait_named_snapshot", name))
+    def wait_saved_snapshot(self, name, timeout=0):
+        self.calls.append(("wait_saved_snapshot", name))
         return {"name": name, "status": "ready"}
 
     def create_sandbox(self, purpose, body):
@@ -281,8 +281,8 @@ class FakeBoatApi:
     def stop_and_wait(self, sandbox_id, timeout=0):
         self.calls.append(("stop_and_wait", sandbox_id))
 
-    def save_named_snapshot(self, sandbox_id, name, timeout=0):
-        self.calls.append(("save_named_snapshot", sandbox_id, name))
+    def save_saved_snapshot(self, sandbox_id, name, timeout=0):
+        self.calls.append(("save_saved_snapshot", sandbox_id, name))
         return {"name": name, "status": "ready"}
 
     def delete_sandbox(self, sandbox_id):
@@ -302,15 +302,15 @@ def load_boat_builder(monkeypatch, api: FakeBoatApi):
 
 @pytest.mark.parametrize("failed", [False, True])
 @pytest.mark.parametrize("retained", [False, True])
-def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed, retained):
+def test_boat_retry_reuses_ready_saved_snapshot(monkeypatch, build_mocks, failed, retained):
     api = FakeBoatApi(retained=retained, verify_fails=failed)
     main = load_boat_builder(monkeypatch, api)["main"]
     if failed:
         with pytest.raises(RuntimeError, match="verification failed"):
-            main()
+            main([])
         build_mocks.assert_not_called()
     else:
-        main()
+        main([])
         build_mocks.assert_called_once_with(EXPECTED_NAME)
 
     names = [call[0] for call in api.calls]
@@ -318,7 +318,7 @@ def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed
     verifies = [body for _, body in api.created if body.get("from") == EXPECTED_NAME]
     assert len(builds) == (0 if retained else 1)
     assert len(verifies) == 1
-    assert names.count("save_named_snapshot") == (0 if retained else 1)
+    assert names.count("save_saved_snapshot") == (0 if retained else 1)
     # Every sandbox the build started is deleted, on success and on failure.
     assert names.count("delete_sandbox") == len(api.created)
     # A fresh deploy prepares the boot-time links before the image verification.
@@ -333,22 +333,22 @@ def test_boat_retry_reuses_ready_named_snapshot(monkeypatch, build_mocks, failed
     assert verification[2].endswith("/app/verify/smoke_test.py verify")
 
 
-def test_boat_refuses_to_rebuild_over_a_failed_named_snapshot(monkeypatch, build_mocks):
+def test_boat_refuses_to_rebuild_over_a_failed_saved_snapshot(monkeypatch, build_mocks):
     api = FakeBoatApi(retained=True, retained_status="failed")
     main = load_boat_builder(monkeypatch, api)["main"]
 
     with pytest.raises(RuntimeError, match="exists with status 'failed'"):
-        main()
+        main([])
 
     # Nothing was started or published: no build sandbox, no save, no result.
     assert api.created == []
-    assert [call[0] for call in api.calls] == ["get_named_snapshot"]
+    assert [call[0] for call in api.calls] == ["get_saved_snapshot"]
     build_mocks.assert_not_called()
 
 
 def test_boat_build_installs_the_bundle_under_the_home_directory(monkeypatch, build_mocks):
     api = FakeBoatApi()
-    load_boat_builder(monkeypatch, api)["main"]()
+    load_boat_builder(monkeypatch, api)["main"]([])
 
     build_id, build_body = api.created[0]
     assert build_body["type"] == "default" and "from" not in build_body
@@ -372,12 +372,12 @@ def test_boat_build_installs_the_bundle_under_the_home_directory(monkeypatch, bu
     order = [call[0] for call in api.calls if len(call) > 1 and call[1] == build_id]
     assert (
         order.index("stop_and_wait")
-        < order.index("save_named_snapshot")
+        < order.index("save_saved_snapshot")
         < order.index("delete_sandbox")
     )
 
 
-def test_boat_candidate_name_must_be_a_valid_named_snapshot(monkeypatch):
+def test_boat_candidate_name_must_be_a_valid_saved_snapshot(monkeypatch):
     namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
     monkeypatch.delenv("OPENINSPECT_IMAGE_CANDIDATE", raising=False)
     with pytest.raises(RuntimeError, match="lowercase"):
@@ -408,6 +408,301 @@ def boat_api(monkeypatch, answers):
     transport = RecordingTransport(answers)
     api.request = transport
     return namespace, api, transport
+
+
+def test_boat_builder_saves_and_polls_saved_snapshots(monkeypatch):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    saving = {"name": EXPECTED_NAME, "status": "saving"}
+    ready = {**saving, "status": "ready"}
+    transport.answers = [
+        namespace["BoatApiError"](404, "not_found", "gone"),
+        {"ok": True, "type": "snapshot.saved.saving", "snapshot": saving},
+        {"ok": True, "type": "snapshot.saved.info", "snapshot": saving},
+        {"ok": True, "type": "snapshot.saved.info", "snapshot": ready},
+    ]
+
+    assert api.get_saved_snapshot(EXPECTED_NAME) is None
+    assert api.save_saved_snapshot("bx_00000001", EXPECTED_NAME) == ready
+    assert transport.calls == [
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+        (
+            "POST",
+            "/saved-snapshots",
+            {"sandboxId": "bx_00000001", "name": EXPECTED_NAME},
+            {},
+        ),
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+        ("GET", f"/saved-snapshots/{EXPECTED_NAME}", None, {}),
+    ]
+
+
+@pytest.mark.parametrize("status,code", [(402, "credit_required"), (409, "save_in_progress")])
+def test_boat_builder_preserves_saved_snapshot_errors(monkeypatch, status, code):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    error = namespace["BoatApiError"](status, code, "refused")
+    transport.answers = [error]
+
+    with pytest.raises(namespace["BoatApiError"]) as raised:
+        api.save_saved_snapshot("bx_00000001", EXPECTED_NAME)
+
+    assert raised.value is error
+    assert transport.calls == [
+        (
+            "POST",
+            "/saved-snapshots",
+            {"sandboxId": "bx_00000001", "name": EXPECTED_NAME},
+            {},
+        )
+    ]
+
+
+@pytest.fixture
+def boat_prune(monkeypatch):
+    namespace, api, transport = boat_api(monkeypatch, [])
+    monkeypatch.setitem(namespace["main"].__globals__, "BoatApi", lambda *args: api)
+    monkeypatch.setitem(
+        namespace["main"].__globals__,
+        "pack_bundle",
+        Mock(side_effect=AssertionError("prune must not build an image")),
+    )
+    monkeypatch.setenv("BOAT_API_KEY", "boat_test")
+    monkeypatch.setenv("BOAT_BASE_SNAPSHOT", "prefix")
+    monkeypatch.setenv("BOAT_DEPLOYED_SNAPSHOT", "prefix-aaaaaaaaaaaaaaaa")
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "prefix-bbbbbbbbbbbbbbbb")
+    return namespace, transport
+
+
+def boat_snapshot(digit, day, status="ready"):
+    return {
+        "name": f"prefix-{digit * 16}",
+        "status": status,
+        "createdAt": f"2026-01-{day:02d}T00:00:00Z",
+    }
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_boat_prune_only_deletes_exact_terraform_bases(boat_prune, capsys, dry_run):
+    namespace, transport = boat_prune
+    deployed = boat_snapshot("a", 2)
+    previous = boat_snapshot("b", 1)
+    old = boat_snapshot("c", 1)
+    failed = boat_snapshot("d", 4, "failed")
+    saving = boat_snapshot("e", 5, "saving")
+    untouched = [
+        "oi-img-scope-0123456789abcdef",
+        "prefix-0123456789ab-1234567890",
+        "other-0123456789abcdef",
+        "prefix-staging-0123456789abcdef",
+        "prefix-0123456789abcde",
+        "prefix-0123456789abcdef0",
+        "prefix-0123456789abcdeF",
+        "prefix-0123456789abcdef\n",
+    ]
+    # Artifact order and creation times do not determine deployment history.
+    snapshots = [old, failed, deployed, previous, saving] + [
+        {**old, "name": name} for name in untouched
+    ]
+    before = {
+        "snapshots": snapshots,
+        "allowance": {"used": 12, "included": 10, "extraMonthlyDollars": 3.36},
+    }
+    after = {
+        "snapshots": [deployed, previous, saving],
+        "allowance": {"used": 10, "included": 10, "extraMonthlyDollars": 0},
+    }
+    transport.answers = [before, *([] if dry_run else [{}, {}]), before if dry_run else after]
+
+    namespace["main"](["prune", "--dry-run"] if dry_run else ["prune"])
+
+    expected_deletes = (
+        []
+        if dry_run
+        else [
+            ("DELETE", f"/saved-snapshots/{snapshot['name']}", None, {})
+            for snapshot in (old, failed)
+        ]
+    )
+    assert transport.calls == [
+        ("GET", "/saved-snapshots", None, {}),
+        *expected_deletes,
+        ("GET", "/saved-snapshots", None, {}),
+    ]
+    output = capsys.readouterr().out
+    assert f"Keep {deployed['name']} (deployed)" in output
+    assert f"Keep {previous['name']} (rollback)" in output
+    assert f"Keep {saving['name']} (status saving)" in output
+    for snapshot in (old, failed):
+        assert f"{'Would delete' if dry_run else 'Deleted'} {snapshot['name']}" in output
+    assert "allowance before: used/included=12/10, extraMonthlyDollars=3.36" in output
+    assert "allowance after" in output
+    assert ("used/included=12/10" if dry_run else "used/included=10/10") in output.split("after")[1]
+    assert "boat_test" not in output
+    assert all(name not in output for name in untouched)
+
+
+def test_boat_prune_retains_the_explicit_replaced_base_not_newer_artifacts(boat_prune, capsys):
+    namespace, transport = boat_prune
+    deployed = boat_snapshot("a", 1)
+    replaced = boat_snapshot("b", 2)
+    other = boat_snapshot("c", 3)
+    inventory = {"snapshots": [other, deployed, replaced]}
+    transport.answers = [inventory, {}, inventory]
+
+    namespace["main"](["prune"])
+
+    assert [call[1] for call in transport.calls if call[0] == "DELETE"] == [
+        f"/saved-snapshots/{other['name']}"
+    ]
+    output = capsys.readouterr().out
+    assert f"Keep {deployed['name']} (deployed)" in output
+    assert f"Keep {replaced['name']} (rollback)" in output
+
+
+@pytest.mark.parametrize("status", [None, "saving", "failed"])
+def test_boat_prune_requires_a_ready_deployed_snapshot(boat_prune, status):
+    namespace, transport = boat_prune
+    snapshots = [boat_snapshot("b", 2), boat_snapshot("c", 1)]
+    if status is not None:
+        snapshots.append(boat_snapshot("a", 3, status))
+    transport.answers = [{"snapshots": snapshots}]
+
+    with pytest.raises(RuntimeError, match="ready Terraform base"):
+        namespace["main"](["prune"])
+
+    assert transport.calls == [("GET", "/saved-snapshots", None, {})]
+
+
+def test_boat_prune_requires_the_deployed_name_to_match_the_prefix(monkeypatch, boat_prune):
+    namespace, transport = boat_prune
+    deployed = {**boat_snapshot("a", 3), "name": "other-aaaaaaaaaaaaaaaa"}
+    monkeypatch.setenv("BOAT_DEPLOYED_SNAPSHOT", deployed["name"])
+    transport.answers = [{"snapshots": [deployed, boat_snapshot("b", 2), boat_snapshot("c", 1)]}]
+
+    with pytest.raises(RuntimeError, match="ready Terraform base"):
+        namespace["main"](["prune"])
+
+    assert transport.calls == [("GET", "/saved-snapshots", None, {})]
+
+
+def test_boat_prune_requires_an_explicit_deployed_name(monkeypatch, boat_prune):
+    namespace, transport = boat_prune
+    monkeypatch.delenv("BOAT_DEPLOYED_SNAPSHOT")
+
+    with pytest.raises(RuntimeError, match="BOAT_DEPLOYED_SNAPSHOT is required"):
+        namespace["main"](["prune"])
+
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("status", [None, "saving", "failed"])
+def test_boat_prune_requires_a_ready_replaced_snapshot(boat_prune, status):
+    namespace, transport = boat_prune
+    snapshots = [boat_snapshot("a", 3), boat_snapshot("c", 1)]
+    if status is not None:
+        snapshots.append(boat_snapshot("b", 2, status))
+    transport.answers = [{"snapshots": snapshots}]
+
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT must name a ready"):
+        namespace["main"](["prune"])
+
+    assert transport.calls == [("GET", "/saved-snapshots", None, {})]
+
+
+def test_boat_prune_requires_an_explicit_replaced_reference(monkeypatch, boat_prune):
+    namespace, transport = boat_prune
+    monkeypatch.delenv("BOAT_REPLACED_SNAPSHOT")
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT is required"):
+        namespace["main"](["prune"])
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_boat_prune_rejects_identical_deployed_and_replaced_names(monkeypatch, boat_prune, dry_run):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "prefix-aaaaaaaaaaaaaaaa")
+
+    with pytest.raises(RuntimeError, match="BOAT_REPLACED_SNAPSHOT must differ"):
+        namespace["main"](["prune", "--dry-run"] if dry_run else ["prune"])
+
+    assert transport.calls == []
+
+
+def test_boat_prune_deletes_failed_bases_without_a_rollback_candidate(monkeypatch, boat_prune):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_REPLACED_SNAPSHOT", "")
+    inventory = {"snapshots": [boat_snapshot("a", 1), boat_snapshot("b", 2, "failed")]}
+    transport.answers = [inventory, {}, inventory]
+
+    namespace["main"](["prune"])
+
+    assert transport.calls[1] == ("DELETE", "/saved-snapshots/prefix-bbbbbbbbbbbbbbbb", None, {})
+
+
+@pytest.mark.parametrize("command", [[], ["prune"], ["prune", "--dry-run"]])
+@pytest.mark.parametrize("prefix", ["oi-img", "oi-img-group-sub-group-a-very-long"])
+def test_boat_builder_rejects_the_prebuilt_image_namespace(
+    monkeypatch, boat_prune, command, prefix
+):
+    namespace, transport = boat_prune
+    monkeypatch.setenv("BOAT_BASE_SNAPSHOT", prefix)
+    with pytest.raises(RuntimeError, match="reserved for prebuilt images"):
+        namespace["main"](command)
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("candidate", ["oi-img", "oi-img-scope-0123456789abcdef"])
+def test_boat_builder_rejects_a_prebuilt_image_candidate_override(monkeypatch, candidate):
+    namespace = runpy.run_path(str(ROOT / "packages/boat-infra/build-template.py"))
+    monkeypatch.setenv("OPENINSPECT_IMAGE_CANDIDATE", candidate)
+    with pytest.raises(RuntimeError, match="reserved for prebuilt images"):
+        namespace["candidate_name"]("prefix", "a" * 64)
+
+
+@pytest.mark.parametrize("status", [404, 409, 403, 500])
+def test_boat_prune_tolerates_only_delete_404s_and_stops_on_other_errors(
+    boat_prune, capsys, status
+):
+    namespace, transport = boat_prune
+    old = boat_snapshot("c", 1)
+    older = boat_snapshot("d", 1)
+    inventory = {"snapshots": [boat_snapshot("a", 4), boat_snapshot("b", 3), old, older]}
+    # Never echo a provider message, which might contain the bearer credential.
+    transport.answers = [
+        inventory,
+        namespace["BoatApiError"](status, "save_in_progress", "boat_test"),
+        {},
+        inventory,
+    ]
+
+    if status == 404:
+        namespace["main"](["prune"])
+        assert transport.calls[-2:] == [
+            ("DELETE", f"/saved-snapshots/{older['name']}", None, {}),
+            ("GET", "/saved-snapshots", None, {}),
+        ]
+        output = capsys.readouterr().out
+        assert f"Already absent {old['name']}" in output
+        assert f"Deleted {old['name']}" not in output
+        assert f"Deleted {older['name']}" in output
+    else:
+        with pytest.raises(RuntimeError, match=f"prune failed: API {status}") as raised:
+            namespace["main"](["prune"])
+        assert "boat_test" not in str(raised.value)
+        assert len(transport.calls) == 2
+    assert transport.calls[:2] == [
+        ("GET", "/saved-snapshots", None, {}),
+        ("DELETE", f"/saved-snapshots/{old['name']}", None, {}),
+    ]
+
+
+def test_boat_prune_list_failure_deletes_nothing(boat_prune):
+    namespace, transport = boat_prune
+    transport.answers = [namespace["BoatApiError"](401, "unauthorized", "boat_test")]
+
+    with pytest.raises(RuntimeError, match="prune failed: API 401"):
+        namespace["main"](["prune"])
+
+    assert transport.calls == [("GET", "/saved-snapshots", None, {})]
 
 
 def test_boat_builder_repeats_a_lost_create_under_the_same_key(monkeypatch):

@@ -7,14 +7,20 @@ import type { SlackAutomationEvent } from "../types";
 /** Max length of message text retained for matching + context (characters). */
 export const SLACK_TEXT_MAX_LENGTH = 8 * 1024;
 
+/**
+ * Who posted a Slack message: a person by `user`, or a bot or integration by
+ * `bot_id` alone, even when Slack also reports the app bot's bot user.
+ */
+export type SlackMessageAuthor =
+  { user: string; bot_id?: undefined } | { user?: undefined; bot_id: string };
+
 /** Minimal shape of the Slack `message` event fields the normalizer consumes. */
-export interface SlackMessageInput {
+export type SlackMessageInput = SlackMessageAuthor & {
   channel: string;
   ts: string;
   thread_ts?: string;
-  user: string;
   text: string;
-}
+};
 
 /** Bot-fetched channel metadata the shared normalizer cannot resolve itself. */
 export interface SlackChannelMeta {
@@ -40,14 +46,15 @@ function botMentionPattern(botUserId: string): RegExp {
  */
 export function buildSlackContextBlock(params: {
   channelLabel: string;
-  actorUserId: string;
+  actorUserId?: string;
+  botId?: string;
   permalink?: string;
   text: string;
   threadContext?: string;
 }): string {
-  const lines = [
-    `A message was posted in Slack channel ${params.channelLabel} by user ${params.actorUserId}.`,
-  ];
+  // A bot is named by its bot id, which every bot message carries.
+  const author = params.botId ? `bot ${params.botId}` : `user ${params.actorUserId}`;
+  const lines = [`A message was posted in Slack channel ${params.channelLabel} by ${author}.`];
   if (params.permalink) lines.push(`Permalink: ${params.permalink}`);
   if (params.threadContext) lines.push("", params.threadContext);
   lines.push("", "<user_content>", params.text, "</user_content>");
@@ -90,10 +97,12 @@ export function normalizeSlackEvent(
     threadTs: input.thread_ts,
     ts: input.ts,
     actorUserId: input.user,
+    botId: input.bot_id,
     text,
     contextBlock: buildSlackContextBlock({
       channelLabel,
       actorUserId: input.user,
+      botId: input.bot_id,
       permalink: channelMeta?.permalink,
       text,
     }),

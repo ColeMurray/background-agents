@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/integrations/SLACK.md
   - docs/CLAUDE_AGENT.md
@@ -202,13 +202,13 @@ Generated PNG, JPEG, WebP, or MP4 session artifacts are attached to the completi
 
 Open the OpenInspect app in Slack and go to the **Home** tab.
 
-| Setting          | What it controls                                                                               |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Agent harness    | **Workspace default**, **OpenCode**, or **Claude Agent** for new sessions you start from Slack |
-| Model            | The model used when you start a new session from Slack                                         |
-| Reasoning effort | Reasoning depth, shown for models that support it                                              |
-| Branch           | A global branch override for new Slack sessions                                                |
-| Branch by repo   | A branch override for one repository                                                           |
+| Setting          | What it controls                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| Agent harness    | **Workspace default**, **OpenCode**, **Claude Agent**, or **Codex** for new sessions you start from Slack |
+| Model            | The model used when you start a new session from Slack                                                    |
+| Reasoning effort | Reasoning depth, shown for models that support it                                                         |
+| Branch           | A global branch override for new Slack sessions                                                           |
+| Branch by repo   | A branch override for one repository                                                                      |
 
 The model list comes from the models enabled under Settings › Models and shows only models your agent harness can run. If Slack cannot load that list, Home shows a temporary-unavailability notice and preserves your configured model and reasoning without treating the model as disabled. If compatible enabled models are available but your current model is disabled or incompatible, the picker shows "Choose a model" with nothing selected and a refusal note. If no enabled model can run on the selected harness, Home shows a message instead of a picker, asking you to choose another harness or have an admin enable a compatible model. The "Currently using" summary names your model and agent harness, or marks the model as needing replacement. Branch priority is: repository-specific override, then global override, then the repository default branch. Preferences are per Slack user and affect new sessions only. A `!model` or `!reasoning` flag overrides them for the session it starts, or for a single follow-up, without changing them.
 
@@ -220,10 +220,10 @@ Administrators manage these workspace-wide Slack settings.
 
 ### Default model and agent harness
 
-| Setting       | What it controls                                                                                                                       |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Default model | The model for new sessions when the requester has not chosen one in App Home. The list shows only models the selected harness can run. |
-| Agent harness | **OpenCode** (default) or **Claude Agent** for new Slack-started sessions when the requester has not chosen one in App Home            |
+| Setting       | What it controls                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Default model | The model for new sessions when the requester has not chosen one in App Home. The list shows only models the selected harness can run.  |
+| Agent harness | **OpenCode** (default), **Claude Agent**, or **Codex** for new Slack-started sessions when the requester has not chosen one in App Home |
 
 A new session runs on the requester's App Home **Agent harness**, or on the workspace **Agent harness** when the requester has not chosen one. Model selection for a new session uses this priority, highest first:
 
@@ -240,7 +240,7 @@ If the session's harness cannot run that model, the bot starts no session. Claud
 Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with !model and a model Claude Agent can run, or change your model or agent harness in the Slack app's Home tab.
 ```
 
-The settings form lists only models the selected harness can run and rejects saving a harness with a model it cannot run. With **Claude Agent** selected, a **Default model** is required: the form disables **Save** and shows "Choose a default model Claude Agent can run." until you pick one, and the control plane rejects saving Claude Agent without one. **Use system default** is not offered for Claude Agent, because the settings page cannot see the deployment default model, which may be one Claude Agent cannot run.
+The settings form lists only models the selected harness can run and rejects saving a harness with a model it cannot run. With **Claude Agent** or **Codex** selected, a **Default model** is required: the form disables **Save** and shows the message for the selected harness, such as "Choose a default model Codex can run.", until you pick one, and the control plane rejects saving either harness without one. **Use system default** is not offered for either, because the settings page cannot see the deployment default model, which may be one the harness cannot run.
 
 A harness change applies to new sessions. Each thread keeps the harness its session started on. If the bot cannot read the Slack settings, App Home may show OpenCode as the workspace-harness display fallback without changing the user's saved App Home harness. This does not permit a new launch: new session requests are refused until Slack settings are available.
 
@@ -327,6 +327,7 @@ An automation can start a session when someone posts a matching message in a wat
 - Slack requests are verified before OpenInspect acts on them.
 - The source-control installation is the outer repository boundary, not a per-Slack-user GitHub permission list. Team bindings, memberships, and repository grants further constrain team work.
 - Invite the bot only into trusted channels. Identity linking does not itself grant team membership.
+- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails, so new ones can't start using the bot yet; people the bot already knows keep working.
 - Bot messages are ignored, so the bot does not respond to itself.
 - Notification text is sanitized and shortened to fit Slack block limits; extremely large raw inputs are rejected.
 
@@ -342,6 +343,16 @@ An automation can start a session when someone posts a matching message in a wat
   <Accordion title="DMs do not start sessions">
     The Slack app needs the direct message event subscription configured by an operator. Once it is,
     send a plain DM; no mention is required.
+
+</Accordion>
+  <Accordion title="The bot couldn't read the email on your Slack profile">
+    OpenInspect links each new Slack user to an account by their Slack profile email, and won't
+    start work for a new user it can't link; people the bot already knows keep working. Try again
+    first, since Slack can briefly fail to return the profile. External users in Slack Connect
+    channels often have hidden emails, so new ones can't use the bot yet. For people in your own
+    workspace, an operator should confirm the app has the `users:read.email` scope and was
+    reinstalled after it was added. If the bot instead says it couldn't verify your account,
+    OpenInspect was briefly unreachable; send the message again.
 
 </Accordion>
   <Accordion title="OpenInspect asks which target to use">

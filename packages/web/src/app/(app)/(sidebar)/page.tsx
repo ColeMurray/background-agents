@@ -75,6 +75,13 @@ import type { TeamResponse } from "@/hooks/use-teams";
 
 const LAST_SESSION_ACCESS_STORAGE_KEY = "open-inspect-last-session-access";
 
+// What the composer shows before the session target is confirmed.
+const UNRESOLVED_SKILL_PREVIEW: {
+  preview: SkillResolutionPreviewResponse | null;
+  loading: boolean;
+  suggestions: PromptSkillSuggestionSource;
+} = { preview: null, loading: false, suggestions: { status: "ready", skills: [] } };
+
 function skillPreviewTarget(
   fields: SessionTargetRequestFields | null
 ): Omit<SkillResolutionPreviewInput, "selection"> | null {
@@ -166,11 +173,17 @@ export default function Home() {
   const { selectedModel, reasoningEffort, harness, providerSelections } = preferences;
   const targetRequestFields = buildRequestFields();
   const currentSkillPreviewTarget = session ? skillPreviewTarget(targetRequestFields) : null;
+  // Fetch the preview for the anticipated target so it loads with the picker's catalogs, but
+  // show it only once the target is confirmed.
+  const anticipatedSkillPreview = useSkillResolutionPreview(
+    session ? skillPreviewTarget(picker.anticipatedRequestFields) : null,
+    skillSelection
+  );
   const {
     preview: skillPreview,
     loading: skillPreviewLoading,
     suggestions: skillSuggestions,
-  } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
+  } = currentSkillPreviewTarget ? anticipatedSkillPreview : UNRESOLVED_SKILL_PREVIEW;
 
   const launchContextReady = canCreateSession && teamCreationReady && preferences.providerReady;
   const warmRequest: WarmDraftSessionRequest | null =

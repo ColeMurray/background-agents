@@ -1,6 +1,11 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { createAlarmHandler } from "../../session/alarm/handler";
-import { createAlarmFixture, createMockSandbox, createMockProvider } from "./test-helpers";
+import {
+  EXPIRED_HEARTBEAT_AGE_MS,
+  createAlarmFixture,
+  createMockSandbox,
+  createMockProvider,
+} from "./test-helpers";
 
 const HEARTBEAT_LOST = { kind: "heartbeat_lost", reason: "The sandbox stopped responding." };
 
@@ -12,7 +17,7 @@ describe("heartbeat watchdog effects", () => {
     // recovery and no stop follows. The prompt that runtime was serving must
     // not wait on that hold: nothing else fails it, and the hold keeps every
     // later alarm away from the execution timeout. The queue stays parked.
-    const sandbox = createMockSandbox({ last_heartbeat: Date.now() - 100_000 });
+    const sandbox = createMockSandbox({ last_heartbeat: Date.now() - EXPIRED_HEARTBEAT_AGE_MS });
     const stopSandbox = vi.fn(async () => ({ success: true }));
     const h = createAlarmFixture(
       sandbox,
@@ -64,7 +69,7 @@ describe("heartbeat watchdog effects", () => {
   });
 
   it("leaves a replacement admitted during a lost heartbeat save alone", async () => {
-    const sandbox = createMockSandbox({ last_heartbeat: Date.now() - 100_000 });
+    const sandbox = createMockSandbox({ last_heartbeat: Date.now() - EXPIRED_HEARTBEAT_AGE_MS });
     const stopSandbox = vi.fn(async () => ({ success: true }));
     const h = createAlarmFixture(
       sandbox,
@@ -97,7 +102,9 @@ describe("heartbeat watchdog effects", () => {
       async ({ ownership, result }) => {
         // "owned" fails the prompt inside the shutdown's own claim; "held" means
         // a save already owns the source and nothing will.
-        const sandbox = createMockSandbox({ last_heartbeat: Date.now() - 100_000 });
+        const sandbox = createMockSandbox({
+          last_heartbeat: Date.now() - EXPIRED_HEARTBEAT_AGE_MS,
+        });
         const h = createAlarmFixture(
           sandbox,
           createMockProvider({

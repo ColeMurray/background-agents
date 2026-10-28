@@ -1,4 +1,4 @@
-# The Boat backend builds a named snapshot and binds the control plane to it,
+# The Boat backend builds a saved snapshot and binds the control plane to it,
 # and only to it: a deployment on another backend neither builds nor binds
 # anything Boat.
 
@@ -7,7 +7,7 @@ mock_provider "external" {
   mock_data "external" {
     defaults = {
       result = {
-        hash = "test-source-hash"
+        hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       }
     }
   }
@@ -45,17 +45,27 @@ variables {
   allowed_users        = "octocat"
 }
 
-run "boat_builds_a_named_snapshot_and_binds_the_worker_to_it" {
+run "boat_builds_a_saved_snapshot_and_binds_the_worker_to_it" {
   command = plan
 
   assert {
     condition     = local.use_boat_backend && length(module.boat_infra) == 1 && length(data.external.boat_source_hash) == 1
-    error_message = "The Boat backend must hash its build inputs and build the named snapshot."
+    error_message = "The Boat backend must hash its build inputs and build the saved snapshot."
   }
 
   assert {
-    condition     = module.boat_infra[0].snapshot_name == "open-inspect-test-source-hash"
-    error_message = "The named snapshot must be the prefix plus the first 16 characters of the source hash."
+    condition     = module.boat_infra[0].snapshot_name == "open-inspect-0123456789abcdef"
+    error_message = "The saved snapshot must be the prefix plus the first 16 characters of the source hash."
+  }
+
+  assert {
+    condition = (
+      length(null_resource.boat_base_snapshot_prune) == 1 &&
+      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-0123456789abcdef" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.api_url == "https://boat.dev/api/v1" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.org == ""
+    )
+    error_message = "The Boat backend must prune superseded bases once per deployed snapshot name, API URL and organization."
   }
 
   assert {
@@ -79,7 +89,25 @@ run "boat_builds_a_named_snapshot_and_binds_the_worker_to_it" {
   }
 }
 
-run "boat_binds_the_organization_when_set" {
+run "boat_api_url_changes_retarget_pruning_with_the_same_snapshot" {
+  command = plan
+
+  variables {
+    boat_api_url = "https://boat.example.test/api/v1"
+  }
+
+  assert {
+    condition = (
+      module.boat_infra[0].snapshot_name == "open-inspect-0123456789abcdef" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-0123456789abcdef" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.api_url == "https://boat.example.test/api/v1" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.org == ""
+    )
+    error_message = "Changing the API URL must retarget the prune trigger even when the source hash and snapshot name are unchanged."
+  }
+}
+
+run "boat_organization_changes_bind_the_worker_and_retarget_pruning" {
   command = plan
 
   variables {
@@ -90,6 +118,16 @@ run "boat_binds_the_organization_when_set" {
     condition     = contains(module.control_plane_worker.plain_text_binding_names, "BOAT_ORG")
     error_message = "A configured organization must reach the control plane."
   }
+
+  assert {
+    condition = (
+      module.boat_infra[0].snapshot_name == "open-inspect-0123456789abcdef" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.snapshot_name == "open-inspect-0123456789abcdef" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.api_url == "https://boat.dev/api/v1" &&
+      null_resource.boat_base_snapshot_prune[0].triggers.org == "team_example"
+    )
+    error_message = "Changing the organization must retarget the prune trigger even when the source hash and snapshot name are unchanged."
+  }
 }
 
 run "rejects_an_invalid_snapshot_prefix" {
@@ -97,6 +135,26 @@ run "rejects_an_invalid_snapshot_prefix" {
 
   variables {
     boat_base_snapshot = "Open_Inspect"
+  }
+
+  expect_failures = [var.boat_base_snapshot]
+}
+
+run "rejects_the_control_plane_prebuilt_snapshot_prefix" {
+  command = plan
+
+  variables {
+    boat_base_snapshot = "oi-img-group-sub-group-a-very-long"
+  }
+
+  expect_failures = [var.boat_base_snapshot]
+}
+
+run "rejects_the_control_plane_prebuilt_snapshot_namespace_root" {
+  command = plan
+
+  variables {
+    boat_base_snapshot = "oi-img"
   }
 
   expect_failures = [var.boat_base_snapshot]
@@ -127,7 +185,7 @@ run "ignores_the_machine_type_on_other_backends" {
   }
 
   assert {
-    condition     = length(module.boat_infra) == 0
+    condition     = length(module.boat_infra) == 0 && length(null_resource.boat_base_snapshot_prune) == 0
     error_message = "A Boat-only setting must not block a deployment on another backend."
   }
 }
@@ -142,12 +200,12 @@ run "other_backends_build_and_bind_nothing_boat" {
     modal_workspace    = "test-workspace"
     modal_api_secret   = "test-modal-api-secret"
     boat_api_key       = ""
-    boat_base_snapshot = ""
+    boat_base_snapshot = "oi-img-group-sub-group-a-very-long"
   }
 
   assert {
-    condition     = length(module.boat_infra) == 0
-    error_message = "A deployment on another backend must not build a Boat snapshot."
+    condition     = length(module.boat_infra) == 0 && length(null_resource.boat_base_snapshot_prune) == 0
+    error_message = "A deployment on another backend must not build or prune Boat snapshots."
   }
 
   assert {

@@ -2,7 +2,7 @@ import {
   BoatApiError,
   BoatCancelledError,
   delayUnlessCancelled,
-  type BoatNamedSnapshot,
+  type BoatSavedSnapshot,
 } from "../sandbox/boat-rest-client";
 import { SandboxProviderError } from "../sandbox/provider";
 import type { BoatBuildSourceStop, BoatImageBuildResources } from "./boat-build-resources";
@@ -46,7 +46,7 @@ const DEFAULT_BOAT_IMAGE_BUILD_ADAPTER_TIMINGS: BoatImageBuildAdapterTimings = {
 /**
  * Boat adapter for provider-session image builds.
  *
- * A Boat image is a named snapshot: a full, standalone copy of the build
+ * A Boat image is a saved snapshot: a full, standalone copy of the build
  * sandbox's disk under a name this deployment derives from the build. The
  * save is asynchronous (`saving` until Boat reports `ready` or `failed`), so
  * finalization is resumable: each delivery archives the source if it is still
@@ -105,7 +105,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
   }
 
   async cleanupCompletedBuild(input: CompletedImageBuildInput): Promise<void> {
-    // The named snapshot is a standalone copy; the source is not needed again.
+    // The saved snapshot is a standalone copy; the source is not needed again.
     await this.resources.deleteBuildSandbox(input.providerSessionId, input.signal);
   }
 
@@ -188,7 +188,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
   /**
    * Submit the save under the reserved name. A save already running under it
    * is this build's own earlier request, so it counts as submitted; an
-   * account that cannot keep another named snapshot fails the build with the
+   * account that cannot keep another saved snapshot fails the build with the
    * reason an operator can act on.
    */
   private async save(input: FinalizeImageBuildInput, name: string): Promise<void> {
@@ -199,8 +199,9 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
       if (code === "save_in_progress") return;
       if (code === "credit_required") {
         throw new Error(
-          "Boat refused to save the image: the account is at its named-snapshot allowance " +
-            "and has no credit. Remove unused named snapshots or add credit, then rebuild."
+          "Boat refused to save the image: the account is at its saved-snapshot allowance " +
+            "and has no money in the Boat wallet. Remove unused saved snapshots or add money " +
+            "to the Boat wallet, then rebuild."
         );
       }
       // A request that may have reached Boat is reconciled under the reserved
@@ -231,7 +232,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
     const attemptDeadline = Date.now() + this.timings.saveObservationMs;
     let submitted = state.submitted;
     for (;;) {
-      let snapshot: BoatNamedSnapshot | null | undefined;
+      let snapshot: BoatSavedSnapshot | null | undefined;
       try {
         snapshot = await this.resources.getImageSnapshot(operation.ref, input.signal);
       } catch (error) {
@@ -283,7 +284,7 @@ export class BoatImageBuildAdapter implements ImageBuildAdapter {
  * record that names no source, or a row that has dropped its sandbox,
  * leaves nothing to compare, and the name itself is the deployment's.
  */
-function isSavedFrom(snapshot: BoatNamedSnapshot, providerSessionId: string | null): boolean {
+function isSavedFrom(snapshot: BoatSavedSnapshot, providerSessionId: string | null): boolean {
   if (!snapshot.sourceSandboxId || !providerSessionId) return true;
   return snapshot.sourceSandboxId === providerSessionId;
 }

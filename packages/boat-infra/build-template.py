@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Build and verify the Boat base snapshot from the provider-neutral image bundle.
+"""Build, verify and prune Boat base snapshots from the provider-neutral image bundle.
 
 A build sandbox is created from Boat's stock Ubuntu image with none of the
 account's secrets, the shared installation bundle is uploaded and installed in
 it, the launcher is baked next to the runtime, and the sandbox's disk is saved
-as a named snapshot. A second sandbox then deploys from that name and runs the
+as a saved snapshot. A second sandbox then deploys from that name and runs the
 image verification, exactly as a session sandbox will. Only the Boat REST API
 is used, through the standard library.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import io
 import json
@@ -115,7 +116,7 @@ def is_retryable_create_failure(error: Exception) -> bool:
 
 
 class BoatApi:
-    """The handful of Boat calls an image build needs."""
+    """The Boat calls used to build and maintain base snapshots."""
 
     def __init__(self, api_url: str, api_key: str, org: str | None = None) -> None:
         self.api_url = validate_api_url(api_url)
@@ -303,34 +304,34 @@ class BoatApi:
             if error.status != 404:
                 raise
 
-    def get_named_snapshot(self, name: str) -> dict[str, Any] | None:
+    def get_saved_snapshot(self, name: str) -> dict[str, Any] | None:
         try:
-            return self.request("GET", f"/named-snapshots/{urllib.parse.quote(name)}")["snapshot"]
+            return self.request("GET", f"/saved-snapshots/{urllib.parse.quote(name)}")["snapshot"]
         except BoatApiError as error:
             if error.status == 404:
                 return None
             raise
 
-    def save_named_snapshot(
+    def save_saved_snapshot(
         self, sandbox_id: str, name: str, timeout: int = SNAPSHOT_TIMEOUT_SECONDS
     ) -> dict[str, Any]:
-        self.request("POST", "/named-snapshots", {"sandboxId": sandbox_id, "name": name})
-        return self.wait_named_snapshot(name, timeout)
+        self.request("POST", "/saved-snapshots", {"sandboxId": sandbox_id, "name": name})
+        return self.wait_saved_snapshot(name, timeout)
 
-    def wait_named_snapshot(
+    def wait_saved_snapshot(
         self, name: str, timeout: int = SNAPSHOT_TIMEOUT_SECONDS
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         while True:
-            snapshot = self.get_named_snapshot(name)
+            snapshot = self.get_saved_snapshot(name)
             if snapshot is None:
-                raise RuntimeError(f"Named snapshot {name} disappeared while saving")
+                raise RuntimeError(f"Saved snapshot {name} disappeared while saving")
             if snapshot.get("status") == "ready":
                 return snapshot
             if snapshot.get("status") == "failed":
-                raise RuntimeError(f"Named snapshot {name} failed: {snapshot.get('error')}")
+                raise RuntimeError(f"Saved snapshot {name} failed: {snapshot.get('error')}")
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"Named snapshot {name} not ready after {timeout}s")
+                raise RuntimeError(f"Saved snapshot {name} not ready after {timeout}s")
             time.sleep(POLL_SECONDS)
 
 
@@ -384,16 +385,26 @@ def cleanup_command() -> str:
     )
 
 
+def validate_base_prefix(prefix: str) -> None:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,45}", prefix):
+        raise RuntimeError("BOAT_BASE_SNAPSHOT must be 1-46 lowercase letters, digits or dashes")
+    if prefix == "oi-img" or prefix.startswith("oi-img-"):
+        raise RuntimeError("The oi-img namespace is reserved for prebuilt images")
+
+
 def candidate_name(prefix: str, build_hash: str) -> str:
+    validate_base_prefix(prefix)
     name = (
         os.environ.get("OPENINSPECT_IMAGE_CANDIDATE")
         or f"{prefix}-{build_hash[:12]}-{time.time_ns()}"
     )
     if not SNAPSHOT_NAME_PATTERN.fullmatch(name):
         raise RuntimeError(
-            f"Boat named snapshot name {name!r} must be 1-63 lowercase letters, digits or dashes; "
+            f"Boat saved snapshot name {name!r} must be 1-63 lowercase letters, digits or dashes; "
             "shorten BOAT_BASE_SNAPSHOT"
         )
+    if name == "oi-img" or name.startswith("oi-img-"):
+        raise RuntimeError("The oi-img namespace is reserved for prebuilt images")
     return name
 
 
@@ -414,8 +425,8 @@ def build_snapshot(api: BoatApi, name: str, bundle_directory: Path, build_type: 
         api.run(sandbox_id, cleanup_command(), PREPARE_TIMEOUT_SECONDS)
         # Archive first so the saved disk is quiescent, then freeze it under the name.
         api.stop_and_wait(sandbox_id)
-        api.save_named_snapshot(sandbox_id, name)
-        print(f"Boat named snapshot {name} saved", flush=True)
+        api.save_saved_snapshot(sandbox_id, name)
+        print(f"Boat saved snapshot {name} saved", flush=True)
     finally:
         api.delete_sandbox(sandbox_id)
 
@@ -437,35 +448,127 @@ def verify_snapshot(api: BoatApi, name: str) -> None:
         api.delete_sandbox(sandbox_id)
 
 
-def main() -> None:
+def print_snapshot_allowance(phase: str, inventory: dict[str, Any]) -> None:
+    allowance = inventory.get("allowance") or {}
+    print(
+        f"Boat snapshot allowance {phase}: "
+        f"used/included={allowance.get('used', 'unknown')}/{allowance.get('included', 'unknown')}, "
+        f"extraMonthlyDollars={allowance.get('extraMonthlyDollars', 'unknown')}",
+        flush=True,
+    )
+
+
+def prune_snapshots(
+    api: BoatApi, prefix: str, deployed: str, replaced: str, *, dry_run: bool
+) -> None:
+    """Retain the deployed base and the explicit predecessor supplied by the deployer."""
+    validate_base_prefix(prefix)
+    if replaced and replaced == deployed:
+        raise RuntimeError(
+            "BOAT_REPLACED_SNAPSHOT must differ from BOAT_DEPLOYED_SNAPSHOT. Nothing was deleted."
+        )
+    inventory = api.request("GET", "/saved-snapshots")
+    pattern = re.compile(rf"{re.escape(prefix)}-[0-9a-f]{{16}}")
+    candidates = [
+        snapshot for snapshot in inventory["snapshots"] if pattern.fullmatch(snapshot["name"])
+    ]
+    if not any(
+        snapshot["name"] == deployed and snapshot["status"] == "ready" for snapshot in candidates
+    ):
+        raise RuntimeError(
+            "BOAT_DEPLOYED_SNAPSHOT must name a ready Terraform base under BOAT_BASE_SNAPSHOT; "
+            "check the prefix, wallet and organization. Nothing was deleted."
+        )
+
+    kept = {deployed}
+    if replaced:
+        if not any(
+            snapshot["name"] == replaced and snapshot["status"] == "ready"
+            for snapshot in candidates
+        ):
+            raise RuntimeError(
+                "BOAT_REPLACED_SNAPSHOT must name a ready Terraform base under BOAT_BASE_SNAPSHOT. "
+                "Nothing was deleted."
+            )
+        kept.add(replaced)
+
+    print_snapshot_allowance("before", inventory)
+    for snapshot in candidates:
+        name = snapshot["name"]
+        if name in kept:
+            reason = "deployed" if name == deployed else "rollback"
+            print(f"Keep {name} ({reason})", flush=True)
+        elif snapshot["status"] not in {"ready", "failed"}:
+            print(f"Keep {name} (status {snapshot['status']})", flush=True)
+        elif dry_run:
+            print(f"Would delete {name}", flush=True)
+        else:
+            try:
+                api.request("DELETE", f"/saved-snapshots/{urllib.parse.quote(name, safe='')}")
+            except BoatApiError as error:
+                if error.status != 404:
+                    raise
+                print(f"Already absent {name}", flush=True)
+            else:
+                print(f"Deleted {name}", flush=True)
+    print_snapshot_allowance(
+        "after (dry-run, unchanged)" if dry_run else "after",
+        api.request("GET", "/saved-snapshots"),
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command")
+    prune = commands.add_parser("prune", help="Delete superseded Terraform base snapshots")
+    prune.add_argument("--dry-run", action="store_true", help="Preview without deleting snapshots")
+    args = parser.parse_args(argv)
     api_key = os.environ.get("BOAT_API_KEY")
     prefix = os.environ.get("BOAT_BASE_SNAPSHOT")
     if not api_key or not prefix:
         raise RuntimeError("BOAT_BASE_SNAPSHOT and BOAT_API_KEY are required")
+    validate_base_prefix(prefix)
     api = BoatApi(
         os.environ.get("BOAT_API_URL") or DEFAULT_API_URL,
         api_key,
         os.environ.get("BOAT_ORG") or None,
     )
+    if args.command == "prune":
+        deployed = os.environ.get("BOAT_DEPLOYED_SNAPSHOT")
+        if not deployed:
+            raise RuntimeError("BOAT_DEPLOYED_SNAPSHOT is required for prune")
+        replaced = os.environ.get("BOAT_REPLACED_SNAPSHOT")
+        if replaced is None:
+            raise RuntimeError(
+                "BOAT_REPLACED_SNAPSHOT is required for prune; "
+                "use an empty value only when there is no previous base in this prefix and wallet"
+            )
+        try:
+            prune_snapshots(api, prefix, deployed, replaced, dry_run=args.dry_run)
+        except BoatApiError as error:
+            # Provider messages may echo credentials; report only the HTTP status.
+            raise RuntimeError(f"Boat snapshot prune failed: API {error.status}") from None
+        return
+
     build_type = os.environ.get("BOAT_BUILD_SANDBOX_TYPE") or DEFAULT_BUILD_SANDBOX_TYPE
     bundle = pack_bundle(ROOT, "boat", ROOT / ".cache/sandbox-images")
     name = candidate_name(prefix, bundle.plan["buildHash"])
 
-    existing = api.get_named_snapshot(name)
+    existing = api.get_saved_snapshot(name)
     if existing is not None and existing.get("status") == "saving":
-        existing = api.wait_named_snapshot(name)
+        existing = api.wait_saved_snapshot(name)
     if existing is None:
         build_snapshot(api, name, bundle.directory, build_type)
     elif existing.get("status") == "ready":
         # A retry re-verifies the retained artifact instead of rebuilding it.
-        print(f"Boat named snapshot {name} already exists; verifying it", flush=True)
+        print(f"Boat saved snapshot {name} already exists; verifying it", flush=True)
     else:
         # A failed save keeps its name, and the name is fixed by the inputs: a
         # build under it would run the whole install and then fail at the save.
         # Stop before anything is billed; the artifact is the operator's to
         # remove.
         raise RuntimeError(
-            f"Boat named snapshot {name} exists with status {existing.get('status')!r}; "
+            f"Boat saved snapshot {name} exists with status {existing.get('status')!r}; "
             "delete it before rebuilding"
         )
     verify_snapshot(api, name)

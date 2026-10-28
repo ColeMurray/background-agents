@@ -704,18 +704,22 @@ variable "boat_api_url" {
 }
 
 variable "boat_base_snapshot" {
-  description = "Prefix of the Boat named snapshot built by the boat-infra module and deployed for fresh sandboxes"
+  description = "Prefix of the Boat base snapshots built by Terraform. Older bases under this prefix are pruned after Worker deployment, keeping the deployed base and the actually replaced base confirmed by Cloudflare deployment history. Use a unique prefix per deployment sharing a Boat account or organization wallet."
   type        = string
   default     = ""
 
   validation {
-    condition     = var.sandbox_provider != "boat" || can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_base_snapshot))
-    error_message = "boat_base_snapshot must be 1-46 lowercase letters, digits or dashes when sandbox_provider = 'boat'."
+    condition = var.sandbox_provider != "boat" || (
+      can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.boat_base_snapshot)) &&
+      var.boat_base_snapshot != "oi-img" &&
+      !startswith(var.boat_base_snapshot, "oi-img-")
+    )
+    error_message = "boat_base_snapshot must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit, when sandbox_provider = 'boat'. It must not be 'oi-img' or start with 'oi-img-', which is reserved for control-plane prebuilt snapshots."
   }
 }
 
 variable "boat_org" {
-  description = "Optional Boat organization sandboxes and the named snapshot are billed to; empty uses the account's active wallet"
+  description = "Optional Boat organization sandboxes and the saved snapshot are billed to; empty uses the account's active wallet"
   type        = string
   default     = ""
 }
@@ -757,10 +761,36 @@ variable "sandbox_provider" {
   }
 }
 
+variable "session_do_location_hint" {
+  description = "Best-effort Cloudflare location hint for new session Durable Objects; empty preserves automatic placement. Existing objects do not move."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"], var.session_do_location_hint)
+    error_message = "session_do_location_hint must be empty or one of wnam, enam, sam, weur, eeur, apac, apac-ne, apac-se, oc, afr, me."
+  }
+}
+
 variable "sandbox_inactivity_timeout_ms" {
-  description = "Milliseconds of sandbox inactivity before OpenInspect snapshots and stops the sandbox when no clients are connected."
+  description = "Regular sandbox inactivity timeout in milliseconds before OpenInspect preserves and stops the sandbox when no session-page WebSocket clients are connected."
   type        = number
   default     = 600000
+}
+
+variable "sandbox_unattended_inactivity_timeout_ms" {
+  description = "Sandbox inactivity timeout in milliseconds for automation, github-bot, and agent sessions without session-page WebSocket clients. The effective timeout is the minimum of this and sandbox_inactivity_timeout_ms."
+  type        = number
+  default     = 120000
+
+  validation {
+    condition = (
+      var.sandbox_unattended_inactivity_timeout_ms >= 60000 &&
+      var.sandbox_unattended_inactivity_timeout_ms <= 9007199254740991 &&
+      floor(var.sandbox_unattended_inactivity_timeout_ms) == var.sandbox_unattended_inactivity_timeout_ms
+    )
+    error_message = "sandbox_unattended_inactivity_timeout_ms must be a whole number between 60000 and 9007199254740991 ms, matching the control plane's safe-integer range."
+  }
 }
 
 variable "teams_enforcement" {
@@ -793,6 +823,17 @@ variable "web_platform" {
   validation {
     condition     = contains(["vercel", "cloudflare"], var.web_platform)
     error_message = "web_platform must be 'vercel' or 'cloudflare'."
+  }
+}
+
+variable "web_serverless_region" {
+  description = "Vercel function region for the web project only; requires a web redeploy after apply. Unused when web_platform is cloudflare."
+  type        = string
+  default     = "iad1"
+
+  validation {
+    condition     = can(regex("^[a-z]{3}[0-9]$", var.web_serverless_region))
+    error_message = "web_serverless_region must be a Vercel region ID: three lowercase letters followed by one digit."
   }
 }
 
@@ -866,7 +907,7 @@ variable "r2_media_location" {
 }
 
 variable "r2_media_bucket_name" {
-  description = "Override the R2 media bucket name. Leave empty to use the default 'open-inspect-media-<deployment_name>'. Set this when the bucket must be pre-created out-of-band (e.g. when the Terraform credentials cannot create R2 buckets)."
+  description = "Name of the R2 media bucket Terraform creates and manages. Leave empty to use the default 'open-inspect-media-<deployment_name>'. Changing a managed bucket's name plans replacement, not an in-place rename. Cloudflare rejects deletion while objects remain; Terraform does not empty the bucket. An existing bucket must be imported into cloudflare_r2_bucket.media before applying. If that address already tracks another bucket, follow the migration steps in terraform.tfvars.example to migrate objects and replace the state entry first."
   type        = string
   default     = ""
 }
@@ -878,31 +919,31 @@ variable "r2_media_bucket_name" {
 # allowlist. Leave them all empty only with unsafe_allow_all_users = true.
 
 variable "allowed_users" {
-  description = "Comma-separated list of GitHub usernames allowed to sign in. Leave empty only when another allowlist (allowed_email_domains, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of GitHub usernames allowed to sign in (not canonical user IDs). Additive with SQL-managed sign-in rules; the UI cannot narrow this baseline and Terraform does not remove managed grants. Keep a compatible deployment baseline for every enabled provider; managed rules do not satisfy Terraform safety checks. GitHub-only rules do not support Google sign-in."
   type        = string
   default     = ""
 }
 
 variable "allowed_email_domains" {
-  description = "Comma-separated list of email domains allowed to sign in (e.g., 'example.com,corp.io'). Matches any provider's verified email. Leave empty only when another allowlist (allowed_users, allowed_emails, allowed_github_orgs) is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of exact verified email domains (e.g., 'example.com,corp.io') for GitHub or Google sign-in; subdomains are not included. Additive with SQL-managed rules and read-only in the UI. Google requires a deployment email/domain baseline unless unsafe allow-all is effective; managed rules do not satisfy the deployment safety checks."
   type        = string
   default     = ""
 }
 
 variable "allowed_emails" {
-  description = "Comma-separated list of exact email addresses allowed to sign in, matched case-insensitively against any provider's verified email. Use this for individual users on shared domains (e.g. one person@gmail.com) where allowed_email_domains would be too broad. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of exact verified emails for GitHub or Google sign-in, matched case-insensitively. Prefer an active recovery administrator's email here with unsafe mode disabled; exact emails avoid admitting an entire shared domain. Additive with SQL-managed rules and read-only in the UI. Managed rules cannot replace the required compatible deployment baseline."
   type        = string
   default     = ""
 }
 
 variable "allowed_github_orgs" {
-  description = "Comma-separated list of GitHub organization logins whose active members are allowed to sign in. The signing-in user's OAuth token is checked against GitHub's membership API at sign-in (read:org is requested only when this is set) and requires GitHub App Organization permissions: Members read-only. Leave empty only when another allowlist is set or unsafe_allow_all_users is true."
+  description = "Comma-separated deployment baseline of GitHub organization logins whose active members may sign in, additive with SQL-managed rules and read-only in the UI. Checks use the signing-in user's token and GitHub App Organization Members read-only permission; rules request no new OAuth scopes or read:org. Verify App permissions and approve permission changes separately. GitHub-only rules do not support Google sign-in; managed rules do not replace the required deployment baseline."
   type        = string
   default     = ""
 }
 
 variable "unsafe_allow_all_users" {
-  description = "Bypass Terraform's access-control safety check and allow any authenticated user to sign in when all allowlists are empty. Set to true only for intentionally open deployments."
+  description = "Explicit unsafe opt-in to Terraform's access-control checks. Allows any otherwise valid provider identity only when all effective deployment AND SQL-managed allowlists are empty; nonempty rules keep it dormant. The sign-in allowlist editor is read-only whenever this flag is true. Prefer false with a compatible recovery baseline; managed rules do not satisfy Terraform's baseline checks."
   type        = bool
   default     = false
 }

@@ -11,18 +11,22 @@ variable "api_url" {
 }
 
 variable "org" {
-  description = "Optional Boat organization the build sandboxes and the named snapshot are billed to"
+  description = "Optional Boat organization the build sandboxes and the saved snapshot are billed to"
   type        = string
   default     = ""
 }
 
 variable "snapshot_name_prefix" {
-  description = "Prefix for the immutable Boat named snapshot (lowercase letters, digits, dashes)"
+  description = "Prefix for the immutable Boat saved snapshot (lowercase letters, digits, dashes)"
   type        = string
 
   validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.snapshot_name_prefix))
-    error_message = "snapshot_name_prefix must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit."
+    condition = (
+      can(regex("^[a-z0-9][a-z0-9-]{0,45}$", var.snapshot_name_prefix)) &&
+      var.snapshot_name_prefix != "oi-img" &&
+      !startswith(var.snapshot_name_prefix, "oi-img-")
+    )
+    error_message = "snapshot_name_prefix must be 1-46 lowercase letters, digits or dashes, starting with a letter or digit. It must not be 'oi-img' or start with 'oi-img-', which is reserved for control-plane prebuilt snapshots."
   }
 }
 

@@ -4,7 +4,7 @@ description: Automatic pull request reviews, @mention actions, PR Feedback Autof
 audience: team-owner
 owner: integrations
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/integrations/GITHUB.md
   - packages/shared/src/types/integrations.ts
@@ -131,7 +131,7 @@ Once a session starts, its output is written by the agent from inside the sessio
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Default model            | Model for GitHub-started sessions when a repository does not override it ("Use system default" leaves the deployment default)         |
 | Default reasoning effort | Reasoning depth for the selected model ("Use model default")                                                                          |
-| Agent harness            | **OpenCode** (default) or **Claude Agent** for new GitHub-started sessions                                                            |
+| Agent harness            | **OpenCode** (default), **Claude Agent**, or **Codex** for new GitHub-started sessions                                                |
 | Auto-review new PRs      | "Automatically review non-draft PRs when opened"                                                                                      |
 | Repository Scope         | **All repositories** (the bot responds in every accessible repository) or **Selected repositories** (only the allowlisted ones)       |
 | Allowed Trigger Users    | **All users with write access** (anyone with write permission on the repository) or **Only specific users** (listed GitHub usernames) |
@@ -155,7 +155,7 @@ Event automations match the numeric repository ID and retain their saved owning 
 
 Add an override for a repository to replace the global defaults for that repository. Each field can be left on **Use global default** or switched to **Override for this repo**: agent harness, default model and effort, Auto-review new PRs, PR Feedback Autofix, Allowed Trigger Users, Code Review Instructions, and Comment Action Instructions. Omitted harness and model fields inherit individually from the global settings. If neither level sets a harness, it is OpenCode; if neither sets a model, sessions use the deployment default model. A [`!model` or `!reasoning` flag](#mention-actions) at the start of a mention overrides the corresponding model or effort setting for that one session, not the harness.
 
-Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default model at that same settings level (global or repository), not an inherited model. The settings form and control plane reject a missing model or an incompatible pair at that level; **Use system default** is not offered when explicitly choosing Claude Agent. Save validation does not check the merged global/repository pair: a model-only repository override can inherit an incompatible global harness, in which case the bot refuses the launch.
+Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default model at that same settings level (global or repository), not an inherited model. The settings form and control plane reject a missing model or an incompatible pair at that level; **Use system default** is not offered when explicitly choosing Claude Agent or Codex. Save validation does not check the merged global/repository pair: a model-only repository override can inherit an incompatible global harness, in which case the bot refuses the launch.
 
 ## PR Feedback Autofix
 

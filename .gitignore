@@ -17,6 +17,7 @@ venv/
 dist/
 build/
 .next/
+packages/web/public/mermaid-renderer.html
 out/
 
 # IDE

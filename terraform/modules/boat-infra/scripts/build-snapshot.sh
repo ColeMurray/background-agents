@@ -15,7 +15,7 @@ if [[ -z "${BOAT_BASE_SNAPSHOT:-}" ]]; then
   exit 1
 fi
 
-echo "Building Boat named snapshot: ${OPENINSPECT_IMAGE_CANDIDATE:-$BOAT_BASE_SNAPSHOT}"
+echo "Building Boat saved snapshot: ${OPENINSPECT_IMAGE_CANDIDATE:-$BOAT_BASE_SNAPSHOT}"
 echo "Deploy path: ${DEPLOY_PATH}"
 
 cd "${DEPLOY_PATH}" || {
@@ -33,4 +33,4 @@ fi
 uv sync --frozen
 uv run --frozen python build-template.py
 
-echo "Boat named snapshot ${OPENINSPECT_IMAGE_CANDIDATE:-$BOAT_BASE_SNAPSHOT} built successfully"
+echo "Boat saved snapshot ${OPENINSPECT_IMAGE_CANDIDATE:-$BOAT_BASE_SNAPSHOT} built successfully"

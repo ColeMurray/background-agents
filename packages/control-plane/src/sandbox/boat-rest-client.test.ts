@@ -91,7 +91,7 @@ describe("BoatRestClient", () => {
     expect(init.headers["Content-Type"]).toBeUndefined();
   });
 
-  it("createSandbox posts a no-env deploy from the named snapshot under an idempotency key", async () => {
+  it("createSandbox posts a no-env deploy from the saved snapshot under an idempotency key", async () => {
     const client = new BoatRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(jsonResponse(sandboxBody({ state: "provisioning" }), 202));
     const { sandbox, hostedPorts } = await client.createSandbox({
@@ -455,13 +455,13 @@ describe("BoatRestClient", () => {
     });
   });
 
-  it("saves, reads and deletes named snapshots", async () => {
+  it("saves, reads and deletes saved snapshots", async () => {
     const client = new BoatRestClient(defaultConfig);
     fetchSpy.mockResolvedValueOnce(
       jsonResponse(
         {
           ok: true,
-          type: "snapshot.named.saving",
+          type: "snapshot.saved.saving",
           status: "saving",
           snapshot: {
             name: "oi-img-x",
@@ -473,21 +473,21 @@ describe("BoatRestClient", () => {
         202
       )
     );
-    const saving = await client.saveNamedSnapshot("bx_abcdefgh", "oi-img-x");
+    const saving = await client.saveSavedSnapshot("bx_abcdefgh", "oi-img-x");
     expect(saving).toMatchObject({
       name: "oi-img-x",
       status: "saving",
       sourceSandboxId: "bx_abcdefgh",
     });
     let { url, init } = lastRequest();
-    expect(url).toBe("https://boat.dev/api/v1/named-snapshots");
+    expect(url).toBe("https://boat.dev/api/v1/saved-snapshots");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ sandboxId: "bx_abcdefgh", name: "oi-img-x" });
 
     fetchSpy.mockResolvedValueOnce(
       jsonResponse({
         ok: true,
-        type: "snapshot.named.info",
+        type: "snapshot.saved.info",
         snapshot: {
           name: "oi-img-x",
           status: "ready",
@@ -499,30 +499,51 @@ describe("BoatRestClient", () => {
         },
       })
     );
-    const ready = await client.getNamedSnapshot("oi-img-x");
+    const ready = await client.getSavedSnapshot("oi-img-x");
     expect(ready).toMatchObject({ status: "ready", type: "small", sizeBytes: 3907112960 });
     ({ url, init } = lastRequest());
-    expect(url).toBe("https://boat.dev/api/v1/named-snapshots/oi-img-x");
+    expect(url).toBe("https://boat.dev/api/v1/saved-snapshots/oi-img-x");
     expect(init.method).toBe("GET");
 
     fetchSpy.mockResolvedValueOnce(
       jsonResponse({ ok: false, status: 404, code: "not_found", message: "not_found" }, 404)
     );
-    await expect(client.getNamedSnapshot("oi-img-gone")).rejects.toBeInstanceOf(BoatNotFoundError);
+    await expect(client.getSavedSnapshot("oi-img-gone")).rejects.toBeInstanceOf(BoatNotFoundError);
 
     fetchSpy.mockResolvedValueOnce(
       jsonResponse({
         ok: true,
-        type: "snapshot.named.deleted",
+        type: "snapshot.saved.deleted",
         name: "oi-img-x",
         status: "deleted",
       })
     );
-    await client.deleteNamedSnapshot("oi-img-x");
+    await client.deleteSavedSnapshot("oi-img-x");
     ({ url, init } = lastRequest());
-    expect(url).toBe("https://boat.dev/api/v1/named-snapshots/oi-img-x");
+    expect(url).toBe("https://boat.dev/api/v1/saved-snapshots/oi-img-x");
     expect(init.method).toBe("DELETE");
   });
+
+  it.each([
+    [402, "credit_required", BoatApiError],
+    [409, "save_in_progress", BoatConflictError],
+  ] as const)(
+    "preserves HTTP %i and %s on a refused snapshot save",
+    async (status, code, errorType) => {
+      const client = new BoatRestClient(defaultConfig);
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ ok: false, status, code, message: code, requestId: "req_save" }, status)
+      );
+
+      const error = await client
+        .saveSavedSnapshot("bx_abcdefgh", "oi-img-x")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(errorType);
+      expect(error).toMatchObject({ status, code, requestId: "req_save" });
+      expect(lastRequest().url).toBe("https://boat.dev/api/v1/saved-snapshots");
+    }
+  );
 
   it("surfaces a request deadline as RequestDeadlineError", async () => {
     vi.useFakeTimers();

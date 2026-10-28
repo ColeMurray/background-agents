@@ -1,5 +1,5 @@
 # Boat Infrastructure Module
-# Builds the named snapshot Boat sandboxes deploy from.
+# Builds the saved snapshot Boat sandboxes deploy from.
 # Mirrors terraform/modules/daytona-infra/ (snapshot build) for the Boat backend.
 
 locals {

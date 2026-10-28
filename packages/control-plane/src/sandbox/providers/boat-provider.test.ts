@@ -844,7 +844,7 @@ describe("BoatSandboxProvider", () => {
     it("retires an image Boat no longer has instead of failing the session", async () => {
       const client = mockClient({
         createSandbox: vi.fn(async () => {
-          throw new BoatNotFoundError("no named snapshot", "snapshot_not_found");
+          throw new BoatNotFoundError("no saved snapshot", "snapshot_not_found");
         }),
       });
       const error = await createProvider(client, providerConfig)
@@ -858,7 +858,7 @@ describe("BoatSandboxProvider", () => {
     it("keeps a 404 on a base-snapshot create an ordinary permanent failure", async () => {
       const client = mockClient({
         createSandbox: vi.fn(async () => {
-          throw new BoatNotFoundError("no named snapshot", "snapshot_not_found");
+          throw new BoatNotFoundError("no saved snapshot", "snapshot_not_found");
         }),
       });
       const error = await createProvider(client, providerConfig)

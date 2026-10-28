@@ -44,6 +44,7 @@ it("persists explicit team and workspace ownership through the stores", async ()
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: null,
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     model: "anthropic/claude-haiku-4-5",

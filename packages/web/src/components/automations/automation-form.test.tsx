@@ -140,6 +140,15 @@ beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
+  // Radix Switch measures itself via ResizeObserver, which jsdom lacks.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
 });
 
 async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
@@ -148,6 +157,67 @@ async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("automation cron submission", () => {
+  it("submits a one-shot in local time without cron and rejects past times", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          maxRetries: 2,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("combobox", { name: "Schedule" }));
+    await user.click(await screen.findByRole("option", { name: "Run once" }));
+    expect(screen.getByRole("combobox", { name: "Retries" })).toBeInTheDocument();
+    const input = screen.getByLabelText("Run at");
+    fireEvent.change(input, { target: { value: "2020-01-01T09:00:42.123" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "2099-01-01T09:00" } });
+    expect(screen.getByRole("button", { name: "Create Automation" })).toBeEnabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleOnceAt: new Date("2099-01-01T09:00").getTime(),
+        maxRetries: 2,
+        triggerType: "schedule",
+        repositories: singleRepository,
+      })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
+  it("allows editing instructions after a one-shot has fired without changing its time", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "After deploy",
+          instructions: "Investigate deploy",
+          repositories: singleRepository,
+          scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime(),
+        }}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Schedule" })).toBeDisabled();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduleOnceAt: new Date("2020-01-01T09:00:42.123").getTime() })
+    );
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("scheduleCron");
+  });
+
   it("scopes creation targets and clears selections when the team changes", async () => {
     const user = userEvent.setup();
     environmentsValue = [
@@ -558,6 +628,60 @@ describe("automation cron submission", () => {
 
     expect(screen.queryByPlaceholderText(/Exact workflow name/)).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("submits the launch retry limit chosen for a scheduled automation", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          scheduleCron: "0 9 * * *",
+          scheduleTz: "UTC",
+          maxRetries: 2,
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    const retries = screen.getByRole("combobox", { name: "Retries" });
+    expect(retries).toHaveTextContent("Up to 2");
+    await user.click(retries);
+    await user.click(await screen.findByRole("option", { name: "Up to 3" }));
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 3 }));
+  });
+
+  it("neither shows nor submits launch retries for an event-triggered automation", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: { conditions: [] },
+          maxRetries: 0,
+        }}
+      />
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Retries" })).not.toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("maxRetries");
   });
 
   it("submits triggerConfig with empty conditions for non-schedule automations", () => {
@@ -1280,6 +1404,91 @@ describe("slack_event automation", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ triggerConfig: channelOnly });
+  });
+  it("leaves bot messages off by default and omits the option on submit", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Trigger on bot messages" })).not.toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).not.toHaveProperty("slack");
+  });
+
+  const botAllowList = {
+    conditions: [
+      ...validConditions.conditions,
+      { type: "slack_actor" as const, operator: "include" as const, value: ["BALERTS"] },
+    ],
+  };
+
+  it("blocks bot messages until a Slack User include condition exists", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
+    expect(screen.getByText(/Bot messages are untrusted input/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Add a Slack User condition that includes the bots allowed/)
+    ).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits includeBotMessages after bot messages are switched on", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: botAllowList }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
+    expect(screen.queryByText(/Add a Slack User condition that includes/)).not.toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).toEqual({
+      ...botAllowList,
+      slack: { includeBotMessages: true },
+    });
+  });
+
+  it("keeps a stored opt-in when editing", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: { ...botAllowList, slack: { includeBotMessages: true } },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Trigger on bot messages" })).toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig.slack).toEqual({ includeBotMessages: true });
   });
 });
 

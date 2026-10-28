@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { ImageBuildFinalizationRow } from "../db/image-build-finalization";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
-import type { FinalizeImageBuildInput } from "./types";
+import type { DeleteImageInput, FinalizeImageBuildInput } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { createModalClient } from "../sandbox/client";
+import { ModalSandboxProvider } from "../sandbox/providers/modal-provider";
+import { ModalImageBuildAdapter } from "./modal-adapter";
 import {
   IMAGE_BUILD_FINALIZATION_RETRY_DELAY_MS,
   IMAGE_BUILD_PENDING_OPERATION_RETRY_DELAY_MS,
@@ -94,7 +97,7 @@ function harness(initial = row()) {
   });
   const adapter = {
     startBuild: vi.fn(),
-    deleteImage: vi.fn(async () => undefined),
+    deleteImage: vi.fn(async (_input: DeleteImageInput): Promise<void> => undefined),
     finalizeSuccessfulBuild: vi.fn(async (_input: FinalizeImageBuildInput) => ({
       providerImageId: "image-1",
       providerSessionId: "session-1",
@@ -291,6 +294,37 @@ describe("ImageBuildFinalizer", () => {
     );
     expect(finalization.markFailed).not.toHaveBeenCalled();
   });
+
+  it.each(["modal", "modal-vm"] as const)(
+    "quarantines an unrecorded %s artifact when deletion is deferred",
+    async (provider) => {
+      const { finalizer, finalization, adapter, store } = harness(row({ provider }));
+      const modalAdapter = new ModalImageBuildAdapter(
+        new ModalSandboxProvider(createModalClient("secret", "workspace"), provider, "github")
+      );
+      adapter.deleteImage.mockImplementation((input) => modalAdapter.deleteImage(input));
+      finalization.recordArtifact.mockResolvedValue(false);
+
+      await expect(finalizer.process(job, correlation)).resolves.toEqual({ type: "completed" });
+
+      expect(finalization.quarantineArtifact).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "build-1",
+          provider,
+          providerImageId: "image-1",
+          providerSessionId: "session-1",
+          error: expect.stringContaining("Modal image deletion is deferred"),
+        })
+      );
+      expect(await finalization.getBuild()).toMatchObject({
+        status: "failed",
+        provider_image_id: "image-1",
+        provider_session_id: "session-1",
+      });
+      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
+      expect(finalization.clearLease).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("ImageBuildFinalizer asynchronous provider operations", () => {

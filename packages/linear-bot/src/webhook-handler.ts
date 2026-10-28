@@ -4,6 +4,7 @@
  */
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import { checkHarnessCompatibility, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
@@ -18,6 +19,7 @@ import {
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { enrollLinearActor } from "./actor-enrollment";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionAgentSettings } from "./model-resolution";
@@ -106,12 +108,32 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
       const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
       if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
-        const stopRes = await signedControlPlaneFetch(env, {
+        const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
-        });
+        };
+        // Known actors can stop without relying on Linear's API or token issuance.
+        let stopRes = await signedControlPlaneFetch(env, stopRequest);
+        if (
+          stopRes.status === 403 &&
+          z
+            .object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) })
+            .safeParse(await stopRes.json().catch(() => null)).success
+        ) {
+          const client = await getLinearClientOrThrow(
+            env,
+            webhook.organizationId,
+            webhook.appUserId
+          );
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
+          if (refusal) {
+            await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+            return;
+          }
+          stopRes = await signedControlPlaneFetch(env, stopRequest);
+        }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,
@@ -161,7 +183,7 @@ function getNewSessionInput(webhook: AgentSessionWebhook): {
   clarificationReply: { body: string } | undefined;
   actorUserId: string | undefined;
 } {
-  const instructionComment = webhook.agentSession.comment;
+  const instructionComment = webhook.agentSession.comment ?? undefined;
   const sessionActor = instructionComment?.userId ?? webhook.agentSession.creatorId ?? undefined;
   const replyBody =
     webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
@@ -298,6 +320,11 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
+  const refusal = await enrollLinearActor(env, client, followUp.actorUserId, traceId);
+  if (refusal) {
+    await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+    return;
+  }
   const scope = { linearTeamId: issue.team.id };
   let currentIntegration: TargetIntegration | null;
   try {
@@ -532,19 +559,18 @@ async function handleNewSession(
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
-  let actorDisplayName: string | undefined;
-  let actorEmail: string | undefined;
   if (sessionActorUserId) {
     const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
-
-    const linearUser = await fetchUser(client, sessionActorUserId);
-    actorDisplayName = linearUser?.name;
-    actorEmail = linearUser?.email ?? undefined;
   }
+  // Automation-created delegations act as the installed app user; first-time
+  // enrollment needs that actor's profile too.
+  const linearUser = await fetchUser(client, launchActorUserId);
+  const actorDisplayName = linearUser?.name;
+  const actorEmail = linearUser?.email ?? undefined;
 
   const labelModel = extractModelFromLabels(labels);
   const { harness, model, reasoningEffort } = resolveSessionAgentSettings({

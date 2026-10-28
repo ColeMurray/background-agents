@@ -86,16 +86,17 @@ export async function dispatchControlPlaneFetch(
   url: string,
   fetchOptions: RequestInit,
   correlationFields: Record<string, string>,
-  streamResponse = false
+  streamResponse = false,
+  timeoutMs = CONTROL_PLANE_FETCH_TIMEOUT_MS
 ): Promise<Response> {
   const timeoutController = streamResponse ? new AbortController() : null;
   const timeoutSignal = timeoutController
     ? timeoutController.signal
-    : AbortSignal.timeout(CONTROL_PLANE_FETCH_TIMEOUT_MS);
+    : AbortSignal.timeout(timeoutMs);
   const timeoutId = timeoutController
     ? setTimeout(
         () => timeoutController.abort(new DOMException("Timed out", "TimeoutError")),
-        CONTROL_PLANE_FETCH_TIMEOUT_MS
+        timeoutMs
       )
     : null;
   const signal = fetchOptions.signal

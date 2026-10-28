@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { meTeamsKey } from "@/lib/me-teams-cache";
-import { ActiveTeamProvider, useActiveTeam } from "./use-active-team";
+import { ActiveTeamProvider, provisionalInboxFilters, useActiveTeam } from "./use-active-team";
 import { useSidebarSessions } from "./use-sidebar-sessions";
 import { TeamSwitcher } from "@/components/team-switcher";
 
@@ -20,11 +20,12 @@ vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 
 let roleKey: string | null = "member";
 let canListAllTeams: boolean | undefined = false;
+let suspendedAt: number | null = null;
 
 function authorizationResponse() {
   return Response.json({
     userId: USER_ID,
-    suspendedAt: null,
+    suspendedAt,
     role: {
       id: roleKey === null ? "role_custom" : `role_builtin_${roleKey}`,
       key: roleKey,
@@ -34,9 +35,9 @@ function authorizationResponse() {
   });
 }
 
-function membershipsResponse() {
+function membershipsResponse(teams = [team("team_alpha"), team("team_beta"), team("team_old", 1)]) {
   return Response.json({
-    teams: [team("team_alpha"), team("team_beta"), team("team_old", 1)],
+    teams,
     requireTeamOnCreate: true,
     ...(canListAllTeams === undefined ? {} : { capabilities: { canListAllTeams } }),
   });
@@ -109,13 +110,150 @@ beforeEach(() => {
   currentUserId = USER_ID;
   roleKey = "member";
   canListAllTeams = false;
+  suspendedAt = null;
   vi.mocked(browserApiFetch).mockImplementation(async (path) =>
     path === "/api/me/authorization" ? authorizationResponse() : membershipsResponse()
   );
 });
 afterEach(cleanup);
 
+describe("provisionalInboxFilters", () => {
+  it.each([
+    { selection: "all-my-teams", canListAllTeams: false, expected: {} },
+    { selection: "workspace", canListAllTeams: false, expected: { scope: "workspace" } },
+    { selection: "all-teams", canListAllTeams: true, expected: { scope: "all" } },
+    { selection: "all-teams", canListAllTeams: false, expected: {} },
+    { selection: "team_alpha", canListAllTeams: false, expected: { teamIds: ["team_alpha"] } },
+    { selection: "team_", canListAllTeams: false, expected: {} },
+    { selection: "team_alpha/beta", canListAllTeams: false, expected: {} },
+    { selection: `team_${"a".repeat(257)}`, canListAllTeams: false, expected: {} },
+    { selection: "unknown", canListAllTeams: false, expected: {} },
+  ])("maps $selection with All teams access $canListAllTeams", (testCase) => {
+    expect(provisionalInboxFilters(testCase.selection, testCase.canListAllTeams)).toEqual(
+      testCase.expected
+    );
+  });
+});
+
 describe("active team context", () => {
+  it.each([
+    { selection: "team_alpha", query: "?teamIds%5B%5D=team_alpha" },
+    { selection: "team_unknown", query: "?teamIds%5B%5D=team_unknown", finalQuery: "" },
+    { selection: "team_old", query: "?teamIds%5B%5D=team_old", finalQuery: "" },
+    { selection: "all-my-teams", query: "" },
+    { selection: "workspace", query: "?scope=workspace" },
+    { selection: "workspace", archivedOnly: true, query: "?scope=workspace", finalQuery: "" },
+    { selection: "all-teams", role: "owner", query: "?scope=all" },
+    { selection: "all-teams", role: "administrator", query: "?scope=all" },
+    {
+      selection: "all-teams",
+      role: "owner",
+      archivedOnly: true,
+      query: "?scope=all",
+      finalQuery: "",
+    },
+    { selection: "all-teams", role: "member", query: "", reconciled: "all-my-teams" },
+    {
+      selection: "all-teams",
+      role: "owner",
+      suspended: true,
+      query: "",
+      reconciled: "all-my-teams",
+    },
+    { selection: "team_alpha", mine: true, query: "?mine=true&teamIds%5B%5D=team_alpha" },
+    { selection: "team_invalid/id", query: "", reconciled: "all-my-teams" },
+  ])(
+    "fetches stored $selection before memberships resolve ($role, mine=$mine, suspended=$suspended, archived-only=$archivedOnly)",
+    async ({ selection, role, suspended, mine, archivedOnly, query, finalQuery, reconciled }) => {
+      roleKey = role ?? "member";
+      suspendedAt = suspended ? 1 : null;
+      canListAllTeams = !suspended && (role === "owner" || role === "administrator");
+      localStorage.setItem("open-inspect-active-team", selection);
+      if (mine) localStorage.setItem("open-inspect-sidebar-session-creator-filter", "mine");
+      let resolveMemberships!: (response: Response) => void;
+      const pendingMemberships = new Promise<Response>((resolve) => {
+        resolveMemberships = resolve;
+      });
+      vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+        path === "/api/me/teams" ? pendingMemberships : authorizationResponse()
+      );
+      const provisionalKey = `/api/sessions/inbox${query}`;
+      const fetcher = vi.fn(async (key: string) => {
+        const snapshot = inboxSnapshot();
+        snapshot.categories.finished.items[0].rootSession.title =
+          key === provisionalKey ? "Provisional work" : "Validated work";
+        return snapshot;
+      });
+      const { result } = renderHook(
+        () => ({ context: useActiveTeam(), sidebar: useSidebarSessions() }),
+        {
+          wrapper: ({ children }) => (
+            <SWRConfig value={{ provider: () => new Map(), fetcher, dedupingInterval: 0 }}>
+              <ActiveTeamProvider>{children}</ActiveTeamProvider>
+            </SWRConfig>
+          ),
+        }
+      );
+
+      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+      expect(result.current.context.loading).toBe(true);
+      expect(result.current.sidebar.finished[0]?.title).toBe("Provisional work");
+      expect(fetcher.mock.calls).toEqual([[provisionalKey]]);
+      expect(localStorage.getItem("open-inspect-active-team")).toBe(selection);
+
+      await act(async () =>
+        resolveMemberships(membershipsResponse(archivedOnly ? [team("team_old", 1)] : undefined))
+      );
+      await waitFor(() => expect(result.current.context.loading).toBe(false));
+      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+      expect(result.current.context.provisionalFilters).toBeNull();
+      if (finalQuery !== undefined) {
+        expect(fetcher.mock.calls).toEqual([
+          [provisionalKey],
+          [`/api/sessions/inbox${finalQuery}`],
+        ]);
+        expect(result.current.sidebar.finished[0]?.title).toBe("Validated work");
+      } else {
+        expect(fetcher.mock.calls).toEqual([[provisionalKey]]);
+        expect(result.current.sidebar.finished[0]?.title).toBe("Provisional work");
+      }
+      expect(localStorage.getItem("open-inspect-active-team")).toBe(
+        reconciled ?? (finalQuery !== undefined ? "all-my-teams" : selection)
+      );
+    }
+  );
+
+  it("waits for authorization before fetching a provisional inbox", async () => {
+    localStorage.setItem("open-inspect-active-team", "all-teams");
+    roleKey = "owner";
+    let resolveAuthorization!: (response: Response) => void;
+    const pendingAuthorization = new Promise<Response>((resolve) => {
+      resolveAuthorization = resolve;
+    });
+    vi.mocked(browserApiFetch).mockImplementation(async (path) =>
+      path === "/api/me/authorization" ? pendingAuthorization : new Promise<Response>(() => {})
+    );
+    const fetcher = vi.fn(async () => inboxSnapshot());
+    const { result } = renderHook(
+      () => ({ context: useActiveTeam(), sidebar: useSidebarSessions() }),
+      {
+        wrapper: ({ children }) => (
+          <SWRConfig value={{ provider: () => new Map(), fetcher, dedupingInterval: 0 }}>
+            <ActiveTeamProvider>{children}</ActiveTeamProvider>
+          </SWRConfig>
+        ),
+      }
+    );
+    expect(result.current.context.provisionalFilters).toBeNull();
+    expect(result.current.sidebar.loading).toBe(true);
+    expect(fetcher).not.toHaveBeenCalled();
+
+    await act(async () => resolveAuthorization(authorizationResponse()));
+    await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+    expect(result.current.context.loading).toBe(true);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/api/sessions/inbox?scope=all");
+  });
+
   it("defaults a single-team user to unfiltered lists and shows the selector", async () => {
     vi.mocked(browserApiFetch).mockImplementation(async (path) =>
       path === "/api/me/authorization"
@@ -245,6 +383,7 @@ describe("active team context", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.activeTeamId).toBeNull();
     expect(result.current.scope).toBeUndefined();
+    expect(localStorage.getItem("open-inspect-active-team")).toBe("all-my-teams");
   });
 
   it.each(["owner", "administrator", "member", "viewer", null])(
@@ -477,17 +616,22 @@ describe("active team context", () => {
   });
 
   it.each([503, 401, 403, "network", "invalid-json", "invalid-schema"] as const)(
-    "blocks sidebar requests on first-load membership failure %s",
+    "hides sidebar rows on first-load membership failure %s",
     async (failure) => {
       localStorage.setItem("open-inspect-active-team", "team_alpha");
+      let finishMemberships!: () => void;
+      const pendingMemberships = new Promise<void>((resolve) => {
+        finishMemberships = resolve;
+      });
       vi.mocked(browserApiFetch).mockImplementation(async (path) => {
         if (path === "/api/me/authorization") return authorizationResponse();
+        await pendingMemberships;
         if (failure === "network") throw new TypeError("Network unavailable");
         if (failure === "invalid-json") return new Response("Invalid JSON");
         if (failure === "invalid-schema") return Response.json({ teams: null });
         return Response.json({ error: "Unavailable" }, { status: failure });
       });
-      const fetcher = vi.fn(async () => inboxSnapshot());
+      const fetcher = vi.fn(async (_key: string) => inboxSnapshot());
       const { result } = renderHook(
         () => ({ context: useActiveTeam(), sidebar: useSidebarSessions() }),
         {
@@ -505,6 +649,11 @@ describe("active team context", () => {
           ),
         }
       );
+      await waitFor(() => expect(result.current.sidebar.loading).toBe(false));
+      expect(result.current.context.loading).toBe(true);
+      expect(result.current.sidebar.finished.map((row) => row.id)).toEqual(["team-session"]);
+
+      await act(async () => finishMemberships());
       await waitFor(() => expect(result.current.context.loading).toBe(false));
       expect(result.current.context.error).toBeInstanceOf(Error);
       expect(result.current.context.teams).toEqual([]);
@@ -512,7 +661,9 @@ describe("active team context", () => {
       expect(result.current.context.scope).toBeUndefined();
       expect(result.current.sidebar.finished).toEqual([]);
       expect(result.current.sidebar.sessionsError).toBeInstanceOf(Error);
-      expect(fetcher).not.toHaveBeenCalled();
+      expect(
+        fetcher.mock.calls.every(([key]) => key === "/api/sessions/inbox?teamIds%5B%5D=team_alpha")
+      ).toBe(true);
       expect(localStorage.getItem("open-inspect-active-team")).toBe("team_alpha");
     }
   );

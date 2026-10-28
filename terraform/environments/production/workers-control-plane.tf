@@ -89,21 +89,25 @@ module "control_plane_worker" {
 
   plain_text_bindings = merge(
     {
-      WEB_APP_URL                   = { value = local.web_app_url }
-      ALLOWED_USERS                 = { value = var.allowed_users }
-      ALLOWED_EMAIL_DOMAINS         = { value = var.allowed_email_domains }
-      ALLOWED_EMAILS                = { value = var.allowed_emails }
-      ALLOWED_GITHUB_ORGS           = { value = var.allowed_github_orgs }
-      UNSAFE_ALLOW_ALL_USERS        = { value = tostring(var.unsafe_allow_all_users) }
-      WORKER_URL                    = { value = local.control_plane_url }
-      DEPLOYMENT_NAME               = { value = var.deployment_name }
-      APP_NAME                      = { value = var.app_name }
-      GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
-      SANDBOX_PROVIDER              = { value = var.sandbox_provider }
-      SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
-      SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
-      TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
+      WEB_APP_URL                              = { value = local.web_app_url }
+      ALLOWED_USERS                            = { value = var.allowed_users }
+      ALLOWED_EMAIL_DOMAINS                    = { value = var.allowed_email_domains }
+      ALLOWED_EMAILS                           = { value = var.allowed_emails }
+      ALLOWED_GITHUB_ORGS                      = { value = var.allowed_github_orgs }
+      UNSAFE_ALLOW_ALL_USERS                   = { value = tostring(var.unsafe_allow_all_users) }
+      WORKER_URL                               = { value = local.control_plane_url }
+      DEPLOYMENT_NAME                          = { value = var.deployment_name }
+      APP_NAME                                 = { value = var.app_name }
+      GITHUB_BOT_USERNAME                      = { value = var.github_bot_username }
+      SANDBOX_PROVIDER                         = { value = var.sandbox_provider }
+      SANDBOX_INACTIVITY_TIMEOUT_MS            = { value = tostring(var.sandbox_inactivity_timeout_ms) }
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_unattended_inactivity_timeout_ms) }
+      SANDBOX_BOOT_TIMEOUT_MS                  = { value = tostring(var.sandbox_boot_timeout_ms) }
+      TEAMS_ENFORCEMENT                        = { value = var.teams_enforcement }
     },
+    var.session_do_location_hint != "" ? {
+      SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }
+    } : {},
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
     } : {},
