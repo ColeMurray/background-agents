@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   admissionRulesSchema,
   MAX_MANAGED_ADMISSION_RULES,
@@ -21,6 +21,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 import { ADMISSION_RULE_GROUPS, AdmissionRuleGroups } from "./admission-rule-groups";
 import { SettingsCardSection } from "./settings-card-section";
 import { SignInAllowlistReview } from "./sign-in-allowlist-review";
+import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 export function SignInAllowlistSection() {
   const policy = useAdmissionPolicy();
@@ -36,15 +37,7 @@ export function SignInAllowlistSection() {
   const { snapshot, draft, changes } = policy;
   const dirty = changes.length > 0 || value.length > 0;
 
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  useSettingsUnsavedChanges(dirty);
 
   function addRule() {
     if (!draft || !policy.canEdit) return;

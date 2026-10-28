@@ -15,8 +15,10 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useMeTeams } from "@/hooks/use-teams";
 import { getSettingsPanel, resolveSettingsCategory } from "@/components/settings/settings-registry";
+import { useConfirmSettingsNavigation } from "@/components/settings/settings-navigation-guard";
 
 function SettingsPageContent() {
+  const confirmNavigation = useConfirmSettingsNavigation();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const repoImagesEnabled = supportsRepoImages();
@@ -33,6 +35,7 @@ function SettingsPageContent() {
   const [activeCategory, setActiveCategoryRaw] = useState<SettingsCategory>(initialCategory);
 
   function selectCategory(category: SettingsCategory, trigger: HTMLButtonElement) {
+    if (category !== activeCategory && !confirmNavigation()) return;
     setActiveCategoryRaw(category);
     const url = `/settings?tab=${category}`;
     if (isMobile) {
@@ -67,9 +70,11 @@ function SettingsPageContent() {
 
   function showMobileList() {
     if (window.history.state?.openInspectSettingsDetail) {
+      if (!("navigation" in window) && !confirmNavigation()) return;
       window.history.back();
       return;
     }
+    if (!confirmNavigation()) return;
     window.history.replaceState(window.history.state, "", "/settings");
     setActiveCategoryRaw(DEFAULT_SETTINGS_CATEGORY);
     showMobileView("list");
@@ -98,10 +103,9 @@ function SettingsPageContent() {
         }
       });
     };
-
     window.addEventListener("popstate", syncFromHistory);
     return () => window.removeEventListener("popstate", syncFromHistory);
-  }, [hasPermission, canEditTeam, isMobile, repoImagesEnabled]);
+  }, [canEditTeam, hasPermission, isMobile, repoImagesEnabled]);
 
   // Sync state when searchParams change via client-side navigation
   useEffect(() => {

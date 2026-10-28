@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import Link from "next/link";
 import { BackIcon, XIcon } from "@/components/ui/icons";
 import { Button } from "@/components/ui/button";
+import { useConfirmSettingsNavigation } from "./settings-navigation-guard";
 
 type SettingsMobileHeaderProps = {
   title: string;
@@ -20,6 +21,7 @@ export function SettingsMobileHeader({
   backLabel = "Back to integrations",
   onBack,
 }: SettingsMobileHeaderProps) {
+  const confirmNavigation = useConfirmSettingsNavigation();
   const actionClassName = "h-11 w-11 rounded-md";
 
   return (
@@ -56,7 +58,13 @@ export function SettingsMobileHeader({
         {title}
       </h1>
       <Button asChild variant="ghost" size="icon" className={actionClassName}>
-        <Link href="/" aria-label="Close settings">
+        <Link
+          href="/"
+          aria-label="Close settings"
+          onNavigate={(event) => {
+            if (!confirmNavigation()) event.preventDefault();
+          }}
+        >
           <span aria-hidden="true">
             <XIcon className="h-4 w-4" />
           </span>

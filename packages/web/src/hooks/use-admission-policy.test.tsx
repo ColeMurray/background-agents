@@ -319,4 +319,28 @@ describe("useAdmissionPolicy", () => {
     expect(result.current.needsReload).toBe(false);
     expect(result.current.canEdit).toBe(true);
   });
+
+  it("clears a rejected save error when discarding the draft", async () => {
+    const { result } = await loaded();
+    act(() => result.current.setDraft(edited));
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(json({ error: "Invalid rules" }, 400));
+    await act(() => result.current.save());
+    expect(result.current.error).toBe("Invalid rules");
+    act(() => result.current.discard());
+    expect(result.current.draft).toEqual(initial.managed);
+    expect(result.current.changes).toEqual([]);
+    expect(result.current.error).toBeNull();
+    expect(result.current.notice).toBeNull();
+  });
+
+  it("keeps the reload requirement after discarding an uncertain save", async () => {
+    const { result } = await loaded();
+    act(() => result.current.setDraft(edited));
+    vi.mocked(browserApiFetch).mockRejectedValueOnce(new Error("Connection lost"));
+    await act(() => result.current.save());
+    act(() => result.current.discard());
+    expect(result.current.error).toBeNull();
+    expect(result.current.needsReload).toBe(true);
+    expect(result.current.canEdit).toBe(false);
+  });
 });

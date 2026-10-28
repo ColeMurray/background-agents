@@ -296,7 +296,7 @@ export function useAdmissionPolicy() {
     },
     discard() {
       if (snapshot && !busy.current)
-        setState((current) => ({ ...current, draft: snapshot.managed, notice: null }));
+        setState((current) => ({ ...current, draft: snapshot.managed, notice: null, error: null }));
     },
   };
 }

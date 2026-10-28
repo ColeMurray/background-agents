@@ -11,6 +11,10 @@ import {
 } from "@open-inspect/shared/admission-settings";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { SignInAllowlistSection } from "./sign-in-allowlist-section";
+import {
+  SettingsNavigationGuardProvider,
+  useConfirmSettingsNavigation,
+} from "./settings-navigation-guard";
 
 expect.extend(matchers);
 const { mutate } = vi.hoisted(() => ({ mutate: vi.fn() }));
@@ -56,6 +60,22 @@ async function renderPolicy(snapshot = initial) {
   render(<SignInAllowlistSection />);
   await screen.findByText("Sign-in:");
 }
+function NavigationProbe({ onLeave }: { onLeave: () => void }) {
+  const confirmNavigation = useConfirmSettingsNavigation();
+  return <button onClick={() => confirmNavigation() && onLeave()}>Leave settings</button>;
+}
+async function renderGuardedPolicy() {
+  const onLeave = vi.fn();
+  vi.mocked(browserApiFetch).mockResolvedValueOnce(json(initial));
+  render(
+    <SettingsNavigationGuardProvider>
+      <NavigationProbe onLeave={onLeave} />
+      <SignInAllowlistSection />
+    </SettingsNavigationGuardProvider>
+  );
+  await screen.findByText("Sign-in:");
+  return onLeave;
+}
 function addEmail(value: string) {
   fireEvent.change(screen.getByRole("textbox", { name: "Email address" }), { target: { value } });
   fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
@@ -71,6 +91,47 @@ afterEach(() => {
 });
 
 describe("SignInAllowlistSection", () => {
+  it("protects typed values before Add and stops warning when they are cleared", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onLeave = await renderGuardedPolicy();
+    const input = screen.getByRole("textbox", { name: "Email address" });
+    fireEvent.change(input, { target: { value: "unfinished" } });
+    fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(onLeave).not.toHaveBeenCalled();
+    expect(input).toHaveValue("unfinished");
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+
+    fireEvent.change(input, { target: { value: "" } });
+    confirm.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onLeave).toHaveBeenCalledOnce();
+  });
+
+  it.each([412, 503])(
+    "keeps the draft and reload requirement after a %s save when navigation is cancelled",
+    async (status) => {
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      const onLeave = await renderGuardedPolicy();
+      addEmail("new@example.com");
+      fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, status));
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await screen.findByRole("button", { name: "Reload rules" });
+      fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
+      expect(onLeave).not.toHaveBeenCalled();
+      expect(screen.getByText("new@example.com")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+      expect(browserApiFetch).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(browserApiFetch).mock.calls[1][1]?.headers).toMatchObject({
+        "If-Match": initial.etag,
+      });
+    }
+  );
+
   it("keeps default copy short while stating matching and source rules", async () => {
     await renderPolicy();
     expect(screen.getByText(/Any matching rule allows access/)).toBeInTheDocument();

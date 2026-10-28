@@ -115,7 +115,7 @@ docker compose up -d --build
 curl -s http://localhost:8787/healthz
 ```
 
-Node startup applies the shared SQL migrations. Migration `0092` seeds the admission singleton with
+Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
 empty managed rules, revision zero, and **`writes_frozen=1`**. The independently deployed frontend
 may arrive before the backend: missing routes show unavailable, and migrated frozen state shows
 read-only maintenance. This initial freeze makes staging safe; no new CI gate or automatic unfreeze
@@ -123,10 +123,11 @@ is provided. Leave it frozen until the new backend is complete and all old envir
 runtimes have drained.
 
 Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
-lowercase hexadecimal user ID. Both operator scripts need a Node.js 24+ checkout and exactly one of
-`--sqlite <existing-path>` or `--database <D1-name>`. SQLite opens an existing file only; do not
-point at a backup or a new empty file. The runtime app image does not ship these source scripts or
-`node_modules`, so do not assume `docker compose exec app node scripts/...` works.
+lowercase hexadecimal user ID. Both operator scripts need Node.js 24+, a checkout with dependencies
+installed (`npm ci --ignore-scripts`), and exactly one of `--sqlite <existing-path>` or
+`--database <D1-name>`. SQLite opens an existing file only; do not point at a backup or a new empty
+file. The runtime app image does not ship these source scripts or `node_modules`, so do not assume
+`docker compose exec app node scripts/...` works.
 
 For local Compose, this helper runs the checkout's scripts in a Node container on the **actual app
 volume**. Run it from the repository root with the app running, and confirm the selected container
@@ -135,6 +136,11 @@ same `node` user as the app so SQLite sidecar files retain the correct ownership
 be readable by that user.
 
 ```bash
+# Install checkout dependencies first. The maintenance CLI uses the shared Zod schema.
+# This also works on a Docker-only host; no host Node.js installation is required.
+docker run --rm --user "$(id -u):$(id -g)" -e npm_config_cache=/tmp/npm-cache \
+  -v "$PWD:/workspace" -w /workspace node:24 npm ci --ignore-scripts
+
 APP_CONTAINER_ID="$(docker compose ps -q app)"
 operator_sql() {
   docker run --rm --user node --volumes-from "$APP_CONTAINER_ID" \
@@ -185,12 +191,13 @@ operator_sql scripts/admission-policy-maintenance.ts freeze --sqlite /data/globa
 operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
 ```
 
-The freeze and returned managed snapshot are transactional. Record the **returned revision** and
-verify `writesFrozen: true`. The export contains managed rules only; **the CLI does not fetch the
-actual deployment baseline**. Separately read the serving container's admission configuration,
-normalize and union each baseline list with the exported managed list, and put that union in `.env`
-(or the AWS SSM source). Set unsafe mode false. While still on current code, apply the reviewed
-configuration; local Compose recreates the app with:
+The CLI first validates the stored rules with the runtime schema. Its write checks both the revision
+and the exact validated JSON. The freeze and returned managed snapshot are transactional. Record the
+**returned revision** and verify `writesFrozen: true`. The export contains managed rules only; **the
+CLI does not fetch the actual deployment baseline**. Separately read the serving container's
+admission configuration, normalize and union each baseline list with the exported managed list, and
+put that union in `.env` (or the AWS SSM source). Set unsafe mode false. While still on current
+code, apply the reviewed configuration; local Compose recreates the app with:
 
 ```bash
 docker compose up -d --build app

@@ -108,8 +108,10 @@ Conflicts and unknown save outcomes preserve the draft but disable saving until 
 Reload updates the reviewed server snapshot while retaining the draft for comparison; it never
 automatically retries a replacement. A successful response becomes the displayed saved state.
 401/403 withdraw access, failed initial reads show Retry rather than an editable empty document, and
-unsafe/frozen policies explain why editing is disabled. Cancel confirms draft discard.
-`beforeunload` warns about unsaved edits; there is no general in-app navigation blocker.
+unsafe/frozen policies explain why editing is disabled. Cancel confirms draft discard. Unsaved edits
+prompt before a settings category change, mobile Back, or page unload. Cancelling navigation keeps
+the current draft and input value. Permission-driven redirects remain unblocked. Native Back/Forward
+also prompts when the browser supports cancellable Navigation API traversal.
 
 ## Validation and Limits
 
@@ -176,7 +178,7 @@ serialize a deployment rollout across processes with different environment bindi
 | `428`         | Missing `If-Match`                                                                                          |
 | `503`         | Policy/audit unavailable; no partial mutation                                                               |
 
-Migration `terraform/d1/migrations/0092_workspace_admission_policy.sql` creates the singleton
+Migration `terraform/d1/migrations/0093_workspace_admission_policy.sql` creates the singleton
 `workspace_admission_policy` with `id=1`, `schema_version=1`, `revision=0`, empty `rules_json`,
 nullable update timestamp/actor snapshot, and **`writes_frozen=1`**. Missing or malformed state is
 an integrity failure, not an empty-policy fallback. The store uses the shared `SqlDatabase` contract
@@ -262,7 +264,7 @@ empty database. D1 uses Wrangler credentials (`CLOUDFLARE_API_TOKEN` and `CLOUDF
 ### Start and Enable
 
 1. Configure OAuth and a provider-compatible deployment baseline, preferably an exact recovery
-   email, with unsafe mode disabled. Apply migration `0092` before new readers serve traffic. Node
+   email, with unsafe mode disabled. Apply migration `0093` before new readers serve traffic. Node
    startup applies the shared migrations; see
    [container startup](../CONTROL_PLANE_CONTAINER.md#quick-start).
 2. Deploy the backend/shared changes and drain every old environment-only auth runtime. Independent

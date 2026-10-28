@@ -425,7 +425,7 @@ enable_service_bindings = false
 # deployment baseline for every enabled provider; managed rules do not satisfy
 # Terraform safety checks. Prefer a known valid recovery admin email below.
 # Google needs email/domain rules; GitHub also supports username/org rules.
-# Migration 0092 seeds editing frozen. After ALL old auth runtimes drain, explicitly
+# Migration 0093 seeds editing frozen. After ALL old auth runtimes drain, explicitly
 # enable using scripts/admission-policy-maintenance.ts unfreeze with a reviewed
 # --expected-revision and --execute. See docs/AUTH.md for exact CLI procedures.
 # Managed limits: 50 total rules, 10 orgs, 64-KiB requests (not baseline limits).

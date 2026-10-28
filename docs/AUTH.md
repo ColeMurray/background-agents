@@ -86,7 +86,7 @@ editor is read-only and the server rejects mutations. To enable secure editing, 
 baseline and disable unsafe mode together, verify that account's login/role, then unfreeze if
 needed.
 
-Migration `0092_workspace_admission_policy.sql` seeds empty managed rules at revision zero with
+Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero with
 **`writes_frozen=1`**. Freezing prevents managed writes, not sign-in: current rules remain enforced.
 The operator must explicitly unfreeze only after all old environment-only auth runtimes drain. The
 frontend may deploy independently first; missing backend routes show unavailable, and migrated

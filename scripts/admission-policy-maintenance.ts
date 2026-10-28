@@ -9,6 +9,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  admissionRulesSchema,
   MAX_MANAGED_ADMISSION_RULES as MAX_MANAGED_RULES,
   MAX_MANAGED_ADMISSION_ORGANIZATIONS as MAX_MANAGED_ORGANIZATIONS,
 } from "../packages/shared/src/admission-settings.ts";
@@ -97,8 +98,12 @@ export function buildMaintenanceSql(input: {
   expectedRevision?: number;
   auditId: string;
   now: number;
+  rulesJson?: string;
 }): { preflight: string; execution: readonly string[] } {
-  const valid = validPolicySql();
+  if (input.rulesJson !== undefined) admissionRulesSchema.parse(JSON.parse(input.rulesJson));
+  const rulesMatch =
+    input.rulesJson === undefined ? "0" : `rules_json = ${sqlLiteral(input.rulesJson)}`;
+  const valid = `${validPolicySql()}${input.rulesJson === undefined ? "" : ` AND ${rulesMatch}`}`;
   const columns =
     "schema_version, revision, rules_json, writes_frozen, updated_at, updated_by_user_id_snapshot";
   if (input.action === "status") {
@@ -121,7 +126,7 @@ export function buildMaintenanceSql(input: {
   const auditId = sqlLiteral(input.auditId);
   const requestId = sqlLiteral(`operator-cli:${input.auditId}`);
   const now = sqlLiteral(input.now);
-  const ready = `${valid} AND revision = ${revision}
+  const ready = `${valid} AND ${rulesMatch} AND revision = ${revision}
     AND (writes_frozen = ${frozen} OR revision < ${Number.MAX_SAFE_INTEGER})`;
   const exactAudit = `EXISTS (
     SELECT 1 FROM authorization_audit_events
@@ -212,7 +217,22 @@ function readReport(output: string, count: number, report: string): Record<strin
   ) {
     throw new Error("Missing admission policy singleton or transaction report");
   }
-  return rows[0];
+  const row = rows[0];
+  if (
+    row.schema_version !== 1 ||
+    !Number.isSafeInteger(row.revision) ||
+    Number(row.revision) < 0 ||
+    (row.writes_frozen !== 0 && row.writes_frozen !== 1) ||
+    typeof row.rules_json !== "string"
+  ) {
+    throw new Error("Invalid admission policy snapshot; operation refused");
+  }
+  try {
+    admissionRulesSchema.parse(JSON.parse(row.rules_json));
+  } catch {
+    throw new Error("Invalid admission policy rules; operation refused");
+  }
+  return row;
 }
 
 export async function run(
@@ -223,19 +243,32 @@ export async function run(
   if (options.action === "status" && (options.execute || options.expectedRevision !== undefined)) {
     throw new Error("status does not accept --execute or --expected-revision");
   }
-  const sql = buildMaintenanceSql({
+  const input = {
     ...options,
     auditId: dependencies.randomUUID?.() ?? crypto.randomUUID(),
     now: dependencies.now?.() ?? Date.now(),
-  });
+  };
+  const sql = buildMaintenanceSql(input);
   const write = options.execute && options.action !== "status";
-  const statements = write ? sql.execution : [sql.preflight];
-  // In particular, freeze and its exported snapshot must come from the same transaction.
-  const row = readReport(
-    runSql(target, statements, write, dependencies.runWrangler),
-    statements.length,
-    write ? "postcondition" : "preflight"
+  let row = readReport(
+    runSql(target, [sql.preflight], false, dependencies.runWrangler),
+    1,
+    "preflight"
   );
+  if (write && (row.status === "ready" || row.status === "no-op")) {
+    // Bind the exact validated document as well as its revision. A concurrent restore must not
+    // let invalid rules through, even if it failed to advance the revision.
+    const statements = buildMaintenanceSql({
+      ...input,
+      rulesJson: row.rules_json as string,
+    }).execution;
+    // Freeze and its exported snapshot still come from the same mutation transaction.
+    row = readReport(
+      runSql(target, statements, true, dependencies.runWrangler),
+      statements.length,
+      "postcondition"
+    );
+  }
   if (row.status === "conflict") {
     throw new Error(
       `Expected revision is stale (current revision: ${row.revision}); inspect status before retrying`
@@ -251,25 +284,7 @@ export async function run(
       "Admission policy maintenance refused or did not prove its exact audit and state"
     );
   }
-  const managed: unknown = typeof row.rules_json === "string" ? JSON.parse(row.rules_json) : null;
-  if (
-    row.schema_version !== 1 ||
-    !Number.isSafeInteger(row.revision) ||
-    Number(row.revision) < 0 ||
-    (row.writes_frozen !== 0 && row.writes_frozen !== 1) ||
-    !isRecord(managed) ||
-    Object.keys(managed).length !== RULE_KEYS.length ||
-    !RULE_KEYS.every(
-      (key) =>
-        Array.isArray(managed[key]) &&
-        managed[key].every((value: unknown) => typeof value === "string")
-    ) ||
-    RULE_KEYS.reduce((total, key) => total + (managed[key] as string[]).length, 0) >
-      MAX_MANAGED_RULES ||
-    (managed.allowedGitHubOrganizations as string[]).length > MAX_MANAGED_ORGANIZATIONS
-  ) {
-    throw new Error("Invalid admission policy snapshot; do not automatically retry changes");
-  }
+  const managed: unknown = JSON.parse(row.rules_json as string);
   const snapshot = {
     action: options.action,
     status: row.status,

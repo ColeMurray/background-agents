@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./page";
 import { SettingsViewportProvider } from "@/components/settings/settings-viewport-context";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
+import { SettingsNavigationGuardProvider } from "@/components/settings/settings-navigation-guard";
 
 expect.extend(matchers);
 
@@ -93,6 +94,23 @@ vi.mock("@/components/settings/skills-settings", () => ({
 vi.mock("@/components/settings/mcp-servers-settings", () => ({
   McpServersSettings: () => <div>MCP servers panel</div>,
 }));
+vi.mock("@/components/settings/workspace-settings", async () => {
+  const { useState } = await import("react");
+  const { useSettingsUnsavedChanges } =
+    await import("@/components/settings/settings-navigation-guard");
+  function WorkspaceSettings() {
+    const [value, setValue] = useState("");
+    useSettingsUnsavedChanges(value.length > 0);
+    return (
+      <input
+        aria-label="Draft rule"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+      />
+    );
+  }
+  return { WorkspaceSettings };
+});
 
 beforeEach(() => {
   mocks.tab = null;
@@ -106,10 +124,12 @@ beforeEach(() => {
   });
 });
 
-function renderSettingsPage() {
+function renderSettingsPage(isMobile = true) {
   return render(
-    <SettingsViewportProvider value={true}>
-      <SettingsPage />
+    <SettingsViewportProvider value={isMobile}>
+      <SettingsNavigationGuardProvider>
+        <SettingsPage />
+      </SettingsNavigationGuardProvider>
     </SettingsViewportProvider>
   );
 }
@@ -120,7 +140,150 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("SettingsPage history navigation", () => {
+  it.each([
+    { navigationType: "push", hashChange: false, cancelable: true },
+    { navigationType: "replace", hashChange: false, cancelable: true },
+    { navigationType: "traverse", hashChange: true, cancelable: true },
+    { navigationType: "traverse", hashChange: false, cancelable: false },
+  ])("leaves non-traversal or non-cancellable navigation alone: %j", async (properties) => {
+    const navigation = new EventTarget();
+    vi.stubGlobal("navigation", navigation);
+    mocks.tab = "workspace";
+    window.history.replaceState(null, "", "/settings?tab=workspace");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const view = renderSettingsPage();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft rule" }), {
+      target: { value: "unfinished@example.com" },
+    });
+    const event = new Event("navigate", { cancelable: properties.cancelable });
+    Object.assign(event, {
+      navigationType: properties.navigationType,
+      hashChange: properties.hashChange,
+    });
+    expect(navigation.dispatchEvent(event)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+
+    view.unmount();
+    const traversal = new Event("navigate", { cancelable: true });
+    Object.assign(traversal, { navigationType: "traverse", hashChange: false });
+    expect(navigation.dispatchEvent(traversal)).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { isMobile: true, destination: "/settings" },
+    { isMobile: true, destination: "/settings?tab=appearance" },
+    { isMobile: true, destination: "/" },
+    { isMobile: false, destination: "/settings?tab=appearance" },
+    { isMobile: false, destination: "/" },
+  ])(
+    "cancels native traversal before Next's popstate handler (mobile=$isMobile, destination=$destination)",
+    async ({ isMobile, destination }) => {
+      const navigation = new EventTarget();
+      vi.stubGlobal("navigation", navigation);
+      mocks.tab = "workspace";
+      const currentUrl = "/settings?tab=workspace#workspace-members";
+      const currentState = { __NA: true, tree: "workspace", openInspectSettingsDetail: true };
+      window.history.replaceState(currentState, "", currentUrl);
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      // Native traversal emits a cancellable navigate event before committing history/popstate.
+      // Next's popstate listener may run before all page listeners regardless of capture.
+      const nextPopState = vi.fn((event: PopStateEvent) => {
+        const destinationUrl = window.location.href;
+        queueMicrotask(() => {
+          window.history.replaceState(event.state, "", destinationUrl);
+          view.rerender(<div>Destination page</div>);
+        });
+      });
+      window.addEventListener("popstate", nextPopState);
+      const view = renderSettingsPage(isMobile);
+      try {
+        fireEvent.change(await screen.findByRole("textbox", { name: "Draft rule" }), {
+          target: { value: "unfinished@example.com" },
+        });
+        const navigate = async () => {
+          await act(async () => {
+            const event = new Event("navigate", { cancelable: true });
+            Object.assign(event, { navigationType: "traverse", hashChange: false });
+            if (!navigation.dispatchEvent(event)) return;
+            const destinationState = { __NA: true, tree: "destination" };
+            window.history.replaceState(destinationState, "", destination);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: destinationState }));
+          });
+        };
+
+        await navigate();
+        expect(confirm).toHaveBeenCalledOnce();
+        expect(nextPopState).not.toHaveBeenCalled();
+        expect(window.location.href).toBe(new URL(currentUrl, window.location.origin).href);
+        expect(window.history.state).toEqual(currentState);
+        expect(screen.getByRole("textbox", { name: "Draft rule" })).toHaveValue(
+          "unfinished@example.com"
+        );
+
+        confirm.mockReturnValue(true);
+        await navigate();
+        expect(nextPopState).toHaveBeenCalledOnce();
+        expect(screen.queryByRole("textbox", { name: "Draft rule" })).not.toBeInTheDocument();
+        expect(screen.getByText("Destination page")).toBeInTheDocument();
+      } finally {
+        window.removeEventListener("popstate", nextPopState);
+      }
+    }
+  );
+});
+
 describe("SettingsPage mobile navigation", () => {
+  it("confirms Back from a direct link before replacing history and unmounting the draft", async () => {
+    mocks.tab = "workspace";
+    window.history.replaceState(null, "", "/settings?tab=workspace");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderSettingsPage();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft rule" }), {
+      target: { value: "unfinished@example.com" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to settings" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(window.location.search).toBe("?tab=workspace");
+    expect(screen.getByRole("textbox", { name: "Draft rule" })).toHaveValue(
+      "unfinished@example.com"
+    );
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Back to settings" }));
+    expect(window.location.search).toBe("");
+    expect(screen.queryByRole("textbox", { name: "Draft rule" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+
+    confirm.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /Appearance/ }));
+    expect(await screen.findByText("Appearance panel")).toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("guards in-app Back when the Navigation API is unavailable", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    renderSettingsPage();
+    await user.click(screen.getByRole("button", { name: /Workspace access/ }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Draft rule" }), {
+      target: { value: "unfinished@example.com" },
+    });
+    await user.click(screen.getByRole("button", { name: "Back to settings" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    expect(back).not.toHaveBeenCalled();
+    expect(window.location.search).toBe("?tab=workspace");
+    expect(screen.getByRole("textbox", { name: "Draft rule" })).toHaveValue(
+      "unfinished@example.com"
+    );
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Back to settings" }));
+    expect(back).toHaveBeenCalledOnce();
+  });
+
   it("pushes category selections and follows browser Back and Forward state", async () => {
     const user = userEvent.setup();
     renderSettingsPage();
