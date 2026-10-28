@@ -74,6 +74,7 @@ describe("useSessionTransport token recovery", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -244,11 +245,15 @@ describe("useSessionTransport token recovery", () => {
     expect(result.current.reconnecting).toBe(false);
   });
 
-  it("increases repeated transient mint delays and keeps retrying at the cap", async () => {
+  it.each([
+    { random: 0, delaysMs: [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000] },
+    { random: 0.5, delaysMs: [750, 1_500, 3_000, 6_000, 12_000, 22_500, 22_500] },
+    { random: 1, delaysMs: [500, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000] },
+  ])("jitters repeated transient mint delays with random=$random", async ({ random, delaysMs }) => {
+    vi.mocked(Math.random).mockReturnValue(random);
     fetchMock.mockImplementation(transientFailures[2].mint);
     const { result } = renderTransport();
     await advance(0);
-    const delaysMs = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
     for (const [attempt, delayMs] of delaysMs.entries()) {
       expect(result.current.authError).toBeNull();
       expect(result.current.reconnecting).toBe(true);

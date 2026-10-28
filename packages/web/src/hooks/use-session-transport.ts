@@ -34,6 +34,7 @@ const WS_CLOSE_INVALID_MESSAGE = 4004;
 // holds retries while the tab is hidden or the browser is offline.
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
+const RECONNECT_JITTER_RATIO = 0.5;
 // RFC 6455 registers 1012 with a randomized 5-30s reconnect. A restart closes
 // every tab at once, so the randomization spreads the return; and a host that
 // is restarting is not listening again a second later anyway.
@@ -47,7 +48,12 @@ const PING_INTERVAL_MS = 30000;
 const MAX_CREDENTIAL_REFRESHES = 1;
 
 function reconnectDelayMs(attemptsSoFar: number): number {
-  return Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar), MAX_RECONNECT_DELAY_MS);
+  const delayMs = Math.min(
+    RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar),
+    MAX_RECONNECT_DELAY_MS
+  );
+  // Jitter after capping so long outages still spread retries without zero-delay loops.
+  return delayMs * (1 - RECONNECT_JITTER_RATIO * Math.random());
 }
 
 function restartDelayMs(): number {

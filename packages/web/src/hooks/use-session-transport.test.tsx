@@ -43,6 +43,7 @@ describe("useSessionTransport", () => {
   beforeEach(() => {
     setVisibility("visible");
     setOnline(true);
+    vi.spyOn(Math, "random").mockReturnValue(0);
     FakeWebSocket.instances = [];
     onMessage = vi.fn<(message: ServerMessage) => void>();
     onClose = vi.fn<() => void>();
@@ -621,6 +622,33 @@ describe("useSessionTransport", () => {
     expect(rendered.result.current.reconnecting).toBe(false);
     rendered.unmount();
   });
+
+  it.each([WS_CLOSE_GOING_AWAY, 4002])(
+    "jitters each retry after close %i, including at the cap",
+    async (code) => {
+      vi.useFakeTimers();
+      const rendered = renderTransport();
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      vi.mocked(Math.random)
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0.5)
+        .mockReturnValueOnce(1)
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0.5)
+        .mockReturnValueOnce(1)
+        .mockReturnValueOnce(0);
+      const delaysMs = [1_000, 1_500, 2_000, 8_000, 12_000, 15_000, 30_000];
+      for (const [attempt, delayMs] of delaysMs.entries()) {
+        act(() => FakeWebSocket.instances[attempt].serverClose(code, true));
+        await act(async () => vi.advanceTimersByTimeAsync(delayMs - 1));
+        expect(FakeWebSocket.instances).toHaveLength(attempt + 1);
+        await act(async () => vi.advanceTimersByTimeAsync(1));
+        expect(FakeWebSocket.instances).toHaveLength(attempt + 2);
+      }
+      expect(Math.random).toHaveBeenCalledTimes(delaysMs.length);
+      rendered.unmount();
+    }
+  );
 
   it("keeps retrying a transient outage at the capped backoff without asking the user", async () => {
     vi.useFakeTimers();
