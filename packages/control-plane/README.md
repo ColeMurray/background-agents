@@ -70,18 +70,33 @@ not pass through Hono.
 | `/actors/me` | POST   | Enroll the signed bot actor with its attested name, email, avatar |
 
 A new bot actor links to an existing user only by the email it presents when it is enrolled, and a
-known actor is never relinked. A bot sends `POST /actors/me` before any other request that carries
-the actor, so the first request that enrolls the actor includes its email.
+known actor is never relinked. The first request that enrolls an actor must include its attested
+email. Slack sends `POST /actors/me` before any other request that carries the actor; Linear
+includes profile claims during session creation and enrolls follow-up and stop authors explicitly.
 
-A new Slack actor is enrolled only with an attested email: any request that would enroll one without
-it, including a claim-less read, is refused with 403 `actor_email_required` and writes nothing. A
-known actor is admitted with or without one. This keeps an email-less enrollment from giving someone
-a second account with the default role and none of their existing account's restrictions. Known
-limitation: new Slack users whose profile email the bot cannot read, typically external Slack
-Connect users, cannot start using the bot; Slack users it already knows keep working. Linear actors
-are not covered, because the Linear bot starts automation-created sessions as its installed app user
-and sends no email for it. The Linear bot enrolls each human author with their Linear profile before
-it acts on their follow-up or stop.
+A new Slack or Linear actor is enrolled only with an attested email: any request that would enroll
+one without it, including a claim-less read, is refused with 403 `actor_email_required` and writes
+nothing. A known actor is admitted with or without one. This keeps an email-less enrollment from
+giving someone a second account with the default role and none of their existing account's
+restrictions. Known limitation: new Slack users whose profile email the bot cannot read, typically
+external Slack Connect users, cannot start using the bot; Slack users it already knows keep working.
+Linear's catalog reads are actorless, session creation carries its actor's email, and follow-up
+authors enroll with their profiles before actor-bearing requests. Stops go directly to the control
+plane; only an `actor_email_required` refusal triggers profile-backed enrollment and a retry.
+
+Before creating a new canonical user, bot enrollment applies the same deployment admission policy as
+web sign-in. An attested Slack or Linear email must match `ALLOWED_EMAILS` or
+`ALLOWED_EMAIL_DOMAINS`; otherwise the response is 403 `actor_admission_denied`, with no user,
+identity, or default role written. `UNSAFE_ALLOW_ALL_USERS` permits new users only when all
+allowlists are empty, as on the web. GitHub bot profile emails are not attested and cannot admit a
+new user. Bots cannot prove GitHub username or organization admission: on deployments using only
+`ALLOWED_USERS` or `ALLOWED_GITHUB_ORGS`, people must sign in on the web first, then use the bot
+with that account's email (or its GitHub identity).
+
+Existing actors and new actors linking by attested email to an existing account do not repeat
+admission. Their existing role and suspension still apply. Newly admitted users retain the Member
+default. These rules do not identify two different emails as one person: if both pass admission,
+separate accounts remain possible and require an administrator to merge them.
 
 ### Sessions
 

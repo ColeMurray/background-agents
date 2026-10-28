@@ -4,6 +4,7 @@
  */
 
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
 import { checkHarnessCompatibility, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
@@ -18,6 +19,7 @@ import {
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { enrollLinearActor } from "./actor-enrollment";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionAgentSettings } from "./model-resolution";
@@ -37,8 +39,6 @@ import {
   resolveLinearTeamBinding,
 } from "./launch-admission";
 import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt } from "./prompts";
-import type { EnrollActorResult } from "@open-inspect/shared/types/actors";
-import { enrollActor } from "./control-plane";
 
 const log = createLogger("handler");
 
@@ -61,7 +61,7 @@ async function getAgentSessionLinearClient(params: {
   orgId: string;
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
-  mode: "start" | "follow_up" | "stop";
+  mode: "start" | "follow_up";
   expectedAppUserId: string;
 }): Promise<LinearApiClient | null> {
   const { env, traceId, orgId, agentSessionId, issue, mode, expectedAppUserId } = params;
@@ -84,68 +84,12 @@ async function getAgentSessionLinearClient(params: {
   }
 }
 
-type EnrollmentMode = "follow_up" | "stop";
-
-const ENROLLMENT_FAILURES: Record<
-  EnrollmentMode,
-  Record<Exclude<EnrollActorResult, "enrolled">, string>
-> = {
-  follow_up: {
-    email_required:
-      "Cannot process this follow-up because your Linear email could not be read to link your account.",
-    unavailable:
-      "Cannot process this follow-up because your Linear account could not be verified. Try again.",
-  },
-  stop: {
-    email_required:
-      "Cannot stop this session because your Linear email could not be read to link your account.",
-    unavailable:
-      "Cannot stop this session because your Linear account could not be verified. Try again.",
-  },
-};
-
-/**
- * Enroll a Linear author with their Linear profile before any request that
- * carries them. A failed profile lookup stops the request instead of enrolling
- * the author with no profile.
- */
-async function enrollLinearAuthor(params: {
-  env: Env;
-  client: LinearApiClient;
-  userId: string;
-  traceId: string;
-  agentSessionId: string;
-  mode: EnrollmentMode;
-}): Promise<EnrollActorResult> {
-  const { env, client, userId, traceId, agentSessionId, mode } = params;
-  const user = await fetchUser(client, userId);
-  const outcome = user
-    ? await enrollActor(
-        env,
-        { userId, displayName: user.name, email: user.email ?? undefined },
-        traceId
-      )
-    : "unavailable";
-  if (outcome !== "enrolled") {
-    log.warn("agent_session.actor_enrollment_failed", {
-      trace_id: traceId,
-      agent_session_id: agentSessionId,
-      linear_user_id: userId,
-      mode,
-      outcome,
-      user_lookup_failed: !user,
-    });
-  }
-  return outcome;
-}
-
 async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
-  const issue = webhook.agentSession.issue;
-  const issueId = issue?.id;
+  const issueId = webhook.agentSession.issue?.id;
 
-  if (issue && issueId) {
+  if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
     if (existingSession) {
       const stopUrl = new URL(`https://internal/sessions/${existingSession.sessionId}/stop`);
@@ -160,49 +104,36 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
         });
         return;
       }
-      const client = await getAgentSessionLinearClient({
-        env,
-        traceId,
-        orgId: webhook.organizationId,
-        agentSessionId,
-        issue,
-        mode: "stop",
-        expectedAppUserId: webhook.appUserId,
-      });
-      if (!client) {
-        log.warn("agent_session.stop_not_sent", {
-          trace_id: traceId,
-          agent_session_id: agentSessionId,
-          session_id: existingSession.sessionId,
-          reason: "linear_client_unavailable",
-        });
-        return;
-      }
-      const enrollment = await enrollLinearAuthor({
-        env,
-        client,
-        userId: actorUserId,
-        traceId,
-        agentSessionId,
-        mode: "stop",
-      });
-      if (enrollment !== "enrolled") {
-        await emitAgentActivity(client, agentSessionId, {
-          type: "error",
-          body: ENROLLMENT_FAILURES.stop[enrollment],
-        });
-        return;
-      }
       // Older mappings lack a team coordinate; the actor's own authorization still governs them.
       const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
       if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
       try {
-        const stopRes = await signedControlPlaneFetch(env, {
+        const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
-        });
+        };
+        // Known actors can stop without relying on Linear's API or token issuance.
+        let stopRes = await signedControlPlaneFetch(env, stopRequest);
+        if (
+          stopRes.status === 403 &&
+          z
+            .object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) })
+            .safeParse(await stopRes.json().catch(() => null)).success
+        ) {
+          const client = await getLinearClientOrThrow(
+            env,
+            webhook.organizationId,
+            webhook.appUserId
+          );
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId);
+          if (refusal) {
+            await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+            return;
+          }
+          stopRes = await signedControlPlaneFetch(env, stopRequest);
+        }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,
@@ -389,19 +320,9 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
-  const enrollment = await enrollLinearAuthor({
-    env,
-    client,
-    userId: followUp.actorUserId,
-    traceId,
-    agentSessionId,
-    mode: "follow_up",
-  });
-  if (enrollment !== "enrolled") {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "error",
-      body: ENROLLMENT_FAILURES.follow_up[enrollment],
-    });
+  const refusal = await enrollLinearActor(env, client, followUp.actorUserId, traceId);
+  if (refusal) {
+    await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
     return;
   }
   const scope = { linearTeamId: issue.team.id };
@@ -638,19 +559,18 @@ async function handleNewSession(
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
-  let actorDisplayName: string | undefined;
-  let actorEmail: string | undefined;
   if (sessionActorUserId) {
     const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
-
-    const linearUser = await fetchUser(client, sessionActorUserId);
-    actorDisplayName = linearUser?.name;
-    actorEmail = linearUser?.email ?? undefined;
   }
+  // Automation-created delegations act as the installed app user; first-time
+  // enrollment needs that actor's profile too.
+  const linearUser = await fetchUser(client, launchActorUserId);
+  const actorDisplayName = linearUser?.name;
+  const actorEmail = linearUser?.email ?? undefined;
 
   const labelModel = extractModelFromLabels(labels);
   const { harness, model, reasoningEffort } = resolveSessionAgentSettings({

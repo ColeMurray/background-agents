@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   SandboxShutdownState,
   ShutdownRecoveryAction,
@@ -38,6 +38,9 @@ function ShutdownPhaseBanner({
 }: SandboxShutdownBannerProps & { shutdown: SandboxShutdownState }) {
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
 
   const { phase } = shutdown;
   const isError = phase === "failed" || phase === "unknown";
@@ -53,6 +56,13 @@ function ShutdownPhaseBanner({
   const canDiscard = shutdown.discardAvailable === true;
   const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
   const detail = isError ? (shutdown.error ?? shutdown.reason) : undefined;
+  const savedAt =
+    mounted && shutdown.hasRecoveryPoint && shutdown.savedAtMs != null
+      ? new Date(shutdown.savedAtMs).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "long",
+        })
+      : null;
   const lossWarning = shutdown.hasRecoveryPoint
     ? "Changes since the last save may be lost."
     : "Unsaved changes may be lost.";
@@ -89,6 +99,7 @@ function ShutdownPhaseBanner({
       )}
     >
       <span className="font-medium">{PHASE_MESSAGES[phase]}</span>
+      {savedAt && <span className="ml-2">Last saved: {savedAt}.</span>}
       {isError && <span className="ml-2">{lossWarning}</span>}
       {isContinuationPaused && (
         <span className="ml-2">
@@ -118,7 +129,9 @@ function ShutdownPhaseBanner({
           onClick={() => {
             if (
               window.confirm(
-                "Restore the last saved sandbox state? Changes since that save may be lost."
+                savedAt
+                  ? `Restore the sandbox state saved on ${savedAt}? Changes since that save may be lost.`
+                  : "Restore the last saved sandbox state? Changes since that save may be lost."
               )
             ) {
               void recover("restore_saved");

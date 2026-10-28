@@ -1,9 +1,8 @@
-"""Model prices and explicit context tiers from OpenCode's cached models.dev catalog.
+"""Model prices and explicit context tiers from the shared models.dev catalog.
 
-The image build writes the catalog with ``opencode models --refresh`` (see
-``supervisor.OPENCODE_MODELS_REFRESH_COMMAND``); ``plugins/codex-auth-plugin.js``
-reads the same file. Prices are model-price equivalents: under a ChatGPT
-subscription they describe usage, not a charge.
+``model_catalog`` publishes the persisted catalog and sets ``OPENCODE_MODELS_PATH``;
+``plugins/codex-auth-plugin.js`` reads the same file. Prices are model-price
+equivalents: under a ChatGPT subscription they describe usage, not a charge.
 """
 
 from __future__ import annotations

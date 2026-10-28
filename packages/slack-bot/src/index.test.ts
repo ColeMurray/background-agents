@@ -1811,9 +1811,12 @@ describe("POST /events", () => {
         { status: 403 }
       );
     const unavailable = () => new Response("unavailable", { status: 500 });
+    const admissionDenied = () =>
+      Response.json({ code: "actor_admission_denied" }, { status: 403 });
 
     it.each([
       ["the control plane needs an email", emailRequired, "read Slack profile emails"],
+      ["admission denies the account", admissionDenied, "admission allowlists"],
       ["the control plane is unavailable", unavailable, "try again"],
     ])(
       "stops a new mention before any actor-carrying request when %s",
@@ -1841,6 +1844,7 @@ describe("POST /events", () => {
 
     it.each([
       ["the control plane needs an email", emailRequired, "read Slack profile emails"],
+      ["admission denies the account", admissionDenied, "admission allowlists"],
       ["the control plane is unavailable", unavailable, "try again"],
     ])(
       "stops a follow-up before any actor-carrying request when %s",

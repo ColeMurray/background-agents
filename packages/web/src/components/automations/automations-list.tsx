@@ -140,20 +140,41 @@ export function AutomationsList({
         {automations.map((automation) => {
           const { canManage, canTrigger } = automation.capabilities;
           return (
-            <div key={automation.id} className="px-4 py-4">
+            <div
+              key={automation.id}
+              className="relative px-4 py-4 transition-colors hover:bg-muted/50 focus-within:bg-muted/50"
+            >
+              <Link
+                href={navigation.detail(automation.id)}
+                aria-label={`View ${automation.name}`}
+                className="absolute inset-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              />
               {/* Header: Name + badge | Actions */}
               <div className="flex items-start justify-between gap-3 sm:items-center sm:gap-4">
                 <div className="flex min-w-0 items-center gap-2">
                   <Link
                     href={navigation.detail(automation.id)}
-                    className="font-medium text-foreground hover:text-accent transition truncate"
+                    className="relative z-10 font-medium text-foreground hover:text-accent transition truncate"
                   >
                     {automation.name}
                   </Link>
-                  <AutomationStatusBadge automation={automation} />
-                  <ExecutionActivity executions={automation.recentExecutions} />
+                  <Link
+                    href={navigation.detail(automation.id)}
+                    draggable={false}
+                    onClick={(event) => {
+                      if (event.detail > 0 && window.getSelection()?.toString()) {
+                        event.preventDefault();
+                      }
+                    }}
+                    className="relative z-10 inline-flex"
+                  >
+                    <AutomationStatusBadge automation={automation} />
+                  </Link>
+                  <div className="relative z-10 shrink-0">
+                    <ExecutionActivity executions={automation.recentExecutions} />
+                  </div>
                 </div>
-                <div className="hidden flex-shrink-0 items-center gap-1 sm:flex">
+                <div className="relative z-10 hidden flex-shrink-0 items-center gap-1 sm:flex">
                   {canManage &&
                     (automation.enabled ? (
                       <Button variant="ghost" size="xs" onClick={() => onPause(automation.id)}>
@@ -188,7 +209,7 @@ export function AutomationsList({
                       <button
                         type="button"
                         aria-label={`Actions for ${automation.name}`}
-                        className="-mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
+                        className="relative z-10 -mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-muted hover:text-foreground sm:hidden"
                       >
                         <MoreIcon className="h-4 w-4" aria-hidden="true" />
                       </button>
@@ -223,7 +244,16 @@ export function AutomationsList({
               </div>
 
               {/* Metadata: icon-paired items */}
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <Link
+                href={navigation.detail(automation.id)}
+                draggable={false}
+                onClick={(event) => {
+                  if (event.detail > 0 && window.getSelection()?.toString()) {
+                    event.preventDefault();
+                  }
+                }}
+                className="relative z-10 mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground"
+              >
                 <span className="inline-flex items-center gap-1">
                   {automation.environmentIds.length > 0 && automation.repositories.length === 0 ? (
                     <BoxIcon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
@@ -248,7 +278,7 @@ export function AutomationsList({
                     Next: {formatFutureRelativeTime(automation.nextRunAt)}
                   </span>
                 )}
-              </div>
+              </Link>
             </div>
           );
         })}

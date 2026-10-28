@@ -67,3 +67,13 @@ def test_supervisor_applies_baked_environment_before_reading_runtime_config(tmp_
         build_supervisor(asyncio.Event())
 
     assert homes_seen_by_config == [baked_home]
+
+
+def test_supervisor_sets_persistent_catalog_before_spawning_services(tmp_path):
+    with patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+        assert os.environ["OPENCODE_MODELS_PATH"] == str(
+            tmp_path / ".local/share/openinspect/models.json"
+        )
+        # The early bridge inherits this path before catalog recovery runs.
+        assert supervisor.agent_bridge is not None

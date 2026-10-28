@@ -1,10 +1,13 @@
 """Turn cost reporting by the native Codex harness."""
 
 import json
+import shutil
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
+from sandbox_runtime import model_catalog
 from sandbox_runtime.harness.base import HarnessPrompt, PromptLimits
 from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
 from sandbox_runtime.harness.codex.client import CodexTransportError
@@ -119,6 +122,40 @@ async def test_completed_turn_reports_cumulative_cost_on_every_step_and_the_outc
         (0.009, 0.009),
         (0.009, 0.009),
     ]
+    assert warnings(events) == []
+
+
+async def test_codex_turn_is_priced_after_snapshot_drops_cache(tmp_path, monkeypatch):
+    environment = {"HOME": str(tmp_path)}
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=CATALOG))
+    monkeypatch.setattr(
+        model_catalog.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    assert await model_catalog.ensure_model_catalog(environment, MagicMock(), refresh=True)
+    cache = tmp_path / ".cache"
+    cache.mkdir()
+    (cache / "models.json").write_text(json.dumps(CATALOG))
+    shutil.rmtree(cache)
+
+    restored_environment = {"HOME": str(tmp_path)}
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", MagicMock(side_effect=AssertionError))
+    assert await model_catalog.ensure_model_catalog(restored_environment, MagicMock())
+    harness = build(
+        tmp_path,
+        [usage("turn-1", tokens(1_000, 100), tokens(1_000, 100)), completed("turn-1")],
+        catalog=None,
+    )
+    harness._prices = ModelPriceCatalog(
+        model_catalog.configure_model_catalog(restored_environment), MagicMock()
+    )
+
+    outcome, events = await run(harness)
+    assert outcome.success
+    assert outcome.message_cost_usd == 0.003
+    assert finishes(events)[-1]["cost"] == 0.003
     assert warnings(events) == []
 
 

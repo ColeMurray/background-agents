@@ -1,6 +1,7 @@
 """Shared test fixtures and utilities for sandbox-runtime tests."""
 
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -69,9 +70,11 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "sandbox_runtime.image_environment.IMAGE_ENVIRONMENT_PATH", image_environment_path
     )
-    # An image-build test would otherwise run the real OpenCode, which downloads
-    # the model catalog into the live session's cache.
-    monkeypatch.setattr("sandbox_runtime.supervisor.OPENCODE_MODELS_REFRESH_COMMAND", ("true",))
+    # Boot tests must never download a catalog into the live session's state.
+    monkeypatch.setenv("OPENCODE_MODELS_PATH", str(tmp_path / "models.json"))
+    monkeypatch.setattr(
+        "sandbox_runtime.supervisor.ensure_model_catalog", AsyncMock(return_value=True)
+    )
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:

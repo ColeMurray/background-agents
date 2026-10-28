@@ -63,6 +63,14 @@ These rules are checked at sign-in. Removing someone from an allowlist or from a
 
 Signing in does not make anyone an Owner or Administrator. Every admitted user has exactly one workspace role, and new users receive the Member role by default.
 
+### Joining through a bot
+
+New users joining through Slack or Linear must provide a bot-attested email that matches the deployment's email or email-domain allowlist. When only GitHub usernames or organizations are allowed, sign in on the web first, then use the same account email in Slack or Linear. GitHub bot actors must already be known to the workspace. An operator's explicit unsafe allow-all setting permits new users only when all allowlists are empty.
+
+Known bot actors and new actors linking to an existing account by attested email keep its role and suspension; they do not repeat admission. Newly admitted bot users receive Member. A bot cannot enroll a new Slack or Linear actor without an email, including external Slack Connect users whose emails it cannot read.
+
+If the bot reports that your account is not authorized to join, ask an administrator to check the admission rules or sign in on the web with the email on your bot profile. Two different emails that both pass admission can still create separate accounts; an administrator can [merge duplicate member accounts](#merging-duplicate-accounts).
+
 ## Roles
 
 OpenInspect has four built-in roles. This table describes workspace feature permissions, not unconditional access to every resource. The session, automation, and environment rules below also apply.

@@ -595,7 +595,10 @@ export interface HeartbeatConfig {
  * Default heartbeat configuration.
  */
 export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
-  timeoutMs: 90000, // 90 seconds (3x 30s heartbeat interval)
+  // 3x the 30s heartbeat interval. Must exceed the bridge's maximum reconnect
+  // delay plus that interval; mirrored as CONTROL_PLANE_HEARTBEAT_TIMEOUT_SECONDS
+  // in packages/sandbox-runtime/src/sandbox_runtime/reconnect_backoff.py.
+  timeoutMs: 90000,
 };
 
 /**

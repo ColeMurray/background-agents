@@ -8,7 +8,6 @@ import {
   createLinearFetchMock,
   linearClientCredentialsResponse,
   linearIdentityResponse,
-  linearUserResponse,
   makeLinearBotEnv,
 } from "./test-helpers";
 
@@ -178,12 +177,6 @@ describe("handleAgentSessionEvent harness selection", () => {
       createLinearFetchMock({
         clientCredentials: () => linearClientCredentialsResponse("runtime-token"),
         identity: () => linearIdentityResponse(),
-        user: () =>
-          linearUserResponse({
-            id: "human-user-1",
-            name: "Human User",
-            email: "human@example.com",
-          }),
         graphql: () => Response.json({ data: {} }),
       })
     );

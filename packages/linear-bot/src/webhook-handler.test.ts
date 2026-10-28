@@ -10,7 +10,6 @@ import {
   createLinearFetchMock,
   linearClientCredentialsResponse,
   linearIdentityResponse,
-  linearUserResponse,
   makeLinearBotEnv,
 } from "./test-helpers";
 
@@ -189,8 +188,6 @@ describe("handleAgentSessionEvent environment targets", () => {
       createLinearFetchMock({
         clientCredentials: () => linearClientCredentialsResponse("transitioned-runtime-token"),
         identity: () => linearIdentityResponse(),
-        user: () =>
-          linearUserResponse({ id: "linear-user", name: "Linear User", email: "user@example.com" }),
         graphql: () => Response.json({ data: {} }),
       })
     );
@@ -619,37 +616,77 @@ describe("handleAgentSessionEvent environment targets", () => {
     ).toContain(message);
   });
 
-  it("posts a membership error without linking or prompting an app-user fallback session", async () => {
-    const { kv, store } = createFakeKV({
+  it("attests the installed app user's profile for an automation-created delegation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createLinearFetchMock({
+        identity: () => linearIdentityResponse(),
+        graphql: ({ body }) => {
+          if (String(body.query).includes("FetchUser")) {
+            expect(body.variables).toEqual({ id: "app-user-1" });
+            return Response.json({
+              data: { user: { id: "app-user-1", name: "Installed app", email: "app@corp.test" } },
+            });
+          }
+          return Response.json({ data: {} });
+        },
+      })
+    );
+    const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "config:team-repos": JSON.stringify({ "team-1": [{ owner: "acme", name: "backend" }] }),
     });
     const env = makeLinearBotEnv(kv);
-    const fetchMock = stubControlPlane(env, {
-      bindingResponse: Response.json({ teamId: "team_internal", kind: "primary" }),
-      createResponse: Response.json({ code: "not_member" }, { status: 403 }),
-    });
+    const fetchMock = stubControlPlane(env);
     const webhook = makeWebhook();
     webhook.agentSession.creatorId = null;
 
-    await handleAgentSessionEvent(webhook, env, "trace-app-not-member");
+    await handleAgentSessionEvent(webhook, env, "trace-app-profile");
 
-    expect(createSessionBody(fetchMock)).toMatchObject({ teamId: "team_internal" });
-    const createCall = fetchMock.mock.calls.find(
-      ([input]) => String(input) === "https://internal/sessions"
-    );
-    expect(new Headers(createCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
-      "linear:app-user-1"
-    );
-    expect(promptBody(fetchMock)).toBeNull();
-    expect(store.has("issue:issue-1")).toBe(false);
-    expect(
-      vi
-        .mocked(fetch)
-        .mock.calls.map(([, init]) => String(init?.body))
-        .join("\n")
-    ).toContain("not a member");
+    expect(createSessionBody(fetchMock)).toMatchObject({
+      actorDisplayName: "Installed app",
+      actorEmail: "app@corp.test",
+    });
   });
+
+  it.each([
+    ["not_member", "not a member"],
+    ["actor_admission_denied", "admission allowlists"],
+    ["actor_email_required", "email is unavailable"],
+  ])(
+    "posts %s without linking or prompting an app-user fallback session",
+    async (code, message) => {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "config:team-repos": JSON.stringify({ "team-1": [{ owner: "acme", name: "backend" }] }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const fetchMock = stubControlPlane(env, {
+        bindingResponse: Response.json({ teamId: "team_internal", kind: "primary" }),
+        createResponse: Response.json({ code }, { status: 403 }),
+      });
+      const webhook = makeWebhook();
+      webhook.agentSession.creatorId = null;
+
+      await handleAgentSessionEvent(webhook, env, "trace-app-not-member");
+
+      expect(createSessionBody(fetchMock)).toMatchObject({ teamId: "team_internal" });
+      const createCall = fetchMock.mock.calls.find(
+        ([input]) => String(input) === "https://internal/sessions"
+      );
+      expect(new Headers(createCall?.[1]?.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:app-user-1"
+      );
+      expect(promptBody(fetchMock)).toBeNull();
+      expect(store.has("issue:issue-1")).toBe(false);
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.map(([, init]) => String(init?.body))
+          .join("\n")
+      ).toContain(message);
+    }
+  );
 
   it("names the refused repository when the target team lacks an environment member grant", async () => {
     const { kv, store } = createFakeKV({
@@ -1005,6 +1042,60 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("linear:replier-user-2");
   });
 
+  it.each(["prompted", "stopped"])(
+    "stops %s after enrollment is denied and retains the session mapping",
+    async (action) => {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch.mockResolvedValue(
+        Response.json({ code: "actor_admission_denied" }, { status: 403 })
+      );
+      if (action === "stopped") {
+        controlPlaneFetch.mockResolvedValueOnce(
+          Response.json({ code: "actor_email_required" }, { status: 403 })
+        );
+      }
+      const webhook = makeWebhook();
+      webhook.action = action;
+      webhook.agentActivity = {
+        userId: "new-collaborator",
+        content: { type: "prompt", body: "Please continue" },
+      };
+
+      await handleAgentSessionEvent(webhook, env, "trace-enrollment-denied");
+
+      expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        ...(action === "stopped"
+          ? ["https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1"]
+          : []),
+        "https://internal/actors/me",
+      ]);
+      const enrollmentInit = controlPlaneFetch.mock.calls.at(-1)?.[1] as RequestInit;
+      expect(new Headers(enrollmentInit.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:new-collaborator"
+      );
+      expect(store.has("issue:issue-1")).toBe(true);
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.map(([, init]) => String(init?.body))
+          .join("\n")
+      ).toContain("admission allowlists");
+    }
+  );
+
   it("attributes follow-up prompts to the human activity author", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
@@ -1087,7 +1178,6 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
@@ -1145,44 +1235,102 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body.content).not.toContain("Previous agent response");
   });
 
-  it("stops an existing session when Linear sends a stop signal", async () => {
-    const { kv, store } = createFakeKV({
-      "issue:issue-1": JSON.stringify({
-        sessionId: "session-xyz",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-42",
-        model: "anthropic/claude-haiku-4-5",
-        createdAt: Date.now(),
-      }),
-    });
-    const env = makeLinearBotEnv(kv);
-    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
-      .fetch;
-    controlPlaneFetch.mockResolvedValue(Response.json({ status: "stopping" }));
-    const webhook = makeWebhook();
-    webhook.action = "prompted";
-    webhook.agentActivity = {
-      userId: "follow-up-human-user",
-      signal: "stop",
-      content: { type: "prompt", body: "stop" },
-    };
+  it.each([200, 403, 503])(
+    "handles a stop response of %s without Linear API calls when credential issuance is unavailable",
+    async (status) => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Linear API unavailable")));
+      const { kv, store } = createFakeKV({
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch.mockResolvedValue(
+        Response.json({ status: "stopping", code: "not_member" }, { status })
+      );
+      const webhook = makeWebhook();
+      webhook.action = "prompted";
+      webhook.agentActivity = {
+        userId: "follow-up-human-user",
+        signal: "stop",
+        content: { type: "prompt", body: "stop" },
+      };
 
-    await handleAgentSessionEvent(webhook, env, "trace-stop");
+      await handleAgentSessionEvent(webhook, env, "trace-stop");
 
-    const stopCalls = controlPlaneFetch.mock.calls.filter(([input]) =>
-      String(input).includes("/stop")
-    );
-    expect(stopCalls).toHaveLength(1);
-    expect(stopCalls[0]?.[0]).toBe(
-      "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1"
-    );
-    const stopInit = stopCalls[0]?.[1] as RequestInit | undefined;
-    expect(stopInit?.method).toBe("POST");
-    expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
-      "linear:follow-up-human-user"
-    );
-    expect(store.has("issue:issue-1")).toBe(false);
-  });
+      expect(controlPlaneFetch).toHaveBeenCalledOnce();
+      expect(controlPlaneFetch).toHaveBeenCalledWith(
+        "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1",
+        expect.objectContaining({ method: "POST" })
+      );
+      const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe(
+        "linear:follow-up-human-user"
+      );
+      expect(store.has("issue:issue-1")).toBe(status !== 200);
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([200, 403])(
+    "enrolls a new stop author before retrying and receiving %s",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        createLinearFetchMock({
+          identity: () => linearIdentityResponse(),
+          graphql: () =>
+            Response.json({
+              data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } },
+            }),
+        })
+      );
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const controlPlaneFetch = (
+        env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }
+      ).fetch;
+      controlPlaneFetch
+        .mockResolvedValueOnce(Response.json({ code: "actor_email_required" }, { status: 403 }))
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(Response.json({ status: "stopping" }, { status }));
+      const webhook = makeWebhook();
+      webhook.agentActivity = { userId: "new-author", signal: "stop" };
+
+      await handleAgentSessionEvent(webhook, env, "trace-new-stop-author");
+
+      const stopUrl = "https://internal/sessions/session-xyz/stop?channel=linear%3Ateam-1";
+      expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
+        stopUrl,
+        "https://internal/actors/me",
+        stopUrl,
+      ]);
+      expect(JSON.parse(String(controlPlaneFetch.mock.calls[1]?.[1]?.body))).toEqual({
+        displayName: "Ada",
+        email: "ada@corp.test",
+      });
+      for (const [, init] of controlPlaneFetch.mock.calls) {
+        expect(new Headers(init.headers).get("X-OpenInspect-Actor")).toBe("linear:new-author");
+      }
+      expect(store.has("issue:issue-1")).toBe(status !== 200);
+    }
+  );
 
   it("fails closed and retains the session mapping when a stop author is missing", async () => {
     const { kv, store } = createFakeKV({
@@ -1242,9 +1390,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       `https://internal/sessions/session-xyz/stop${query}`,
       expect.objectContaining({ method: "POST" })
     );
-    const stopInit = controlPlaneFetch.mock.calls.find(([input]) =>
-      String(input).includes("/stop")
-    )?.[1] as RequestInit | undefined;
+    const stopInit = controlPlaneFetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(new Headers(stopInit?.headers).get("X-OpenInspect-Actor")).toBe("linear:human-user-1");
     expect(store.has("issue:issue-1")).toBe(false);
   });
@@ -1323,7 +1469,6 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/actors/me")) return new Response(null, { status: 204 });
       if (url.includes("/integration-settings/")) return Response.json({ config: null });
       if (url.includes("/events?")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
