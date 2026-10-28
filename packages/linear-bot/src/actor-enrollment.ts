@@ -3,6 +3,7 @@ import { abortable } from "@open-inspect/shared/abortable";
 import {
   ACTOR_ADMISSION_DENIED_CODE,
   ACTOR_EMAIL_REQUIRED_CODE,
+  type ActorProfileClaims,
 } from "@open-inspect/shared/types/actors";
 import type { Env } from "./types";
 import { fetchUser, type LinearApiClient } from "./utils/linear-client";
@@ -21,7 +22,7 @@ export function describeActorAdmissionFailure(code: string): string | null {
   return null;
 }
 
-/** First-time collaborators must present their email before claim-less requests. */
+/** Resolve known actors without a profile lookup; unknown actors must attest their email. */
 export async function enrollLinearActor(
   env: Env,
   client: LinearApiClient,
@@ -29,36 +30,43 @@ export async function enrollLinearActor(
   traceId: string
 ): Promise<string | null> {
   const context = { trace_id: traceId, actor: `linear:${actorUserId}` };
+  let httpStatus: number | undefined;
   try {
     const signal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS);
-    const profile = await abortable(fetchUser(client, actorUserId, signal), signal);
-    const result = await enrollActor(
-      "linear-bot",
-      env,
-      {
-        actor: context.actor,
-        profile: { displayName: profile?.name, email: profile?.email ?? undefined },
-        traceId,
-      },
-      signal
-    );
-    if (result.outcome === "enrolled") return null;
-    const message =
-      result.outcome !== "unavailable" && result.errorCode
-        ? describeActorAdmissionFailure(result.errorCode)
-        : null;
-    log.warn("control_plane.enroll_actor", {
-      ...context,
-      outcome: message ? "denied" : "unavailable",
-      http_status: result.httpStatus,
-      error_code: result.errorCode,
-      error: result.error,
-    });
-    if (message) return message;
+    let claims: ActorProfileClaims = {};
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await enrollActor(
+        "linear-bot",
+        env,
+        { actor: context.actor, profile: claims, traceId },
+        signal
+      );
+      httpStatus = result.httpStatus ?? httpStatus;
+      if (result.outcome === "enrolled") return null;
+      if (attempt === 0 && result.outcome === "email_required") {
+        const profile = await abortable(fetchUser(client, actorUserId, signal), signal);
+        claims = { displayName: profile?.name, email: profile?.email ?? undefined };
+        continue;
+      }
+      const message =
+        result.outcome !== "unavailable" && result.errorCode
+          ? describeActorAdmissionFailure(result.errorCode)
+          : null;
+      log.warn("control_plane.enroll_actor", {
+        ...context,
+        outcome: message ? "denied" : "unavailable",
+        http_status: httpStatus,
+        error_code: result.errorCode,
+        error: result.error,
+      });
+      if (message) return message;
+      break;
+    }
   } catch (error) {
     log.warn("control_plane.enroll_actor", {
       ...context,
       outcome: "unavailable",
+      http_status: httpStatus,
       error: error instanceof Error ? error : new Error(String(error)),
     });
   }

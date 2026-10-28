@@ -68,6 +68,7 @@ function makeWebhook(interaction: Interaction): AgentSessionWebhook {
 async function interact(
   interaction: Interaction,
   options: {
+    initialEnrollResponse?: () => Promise<Response>;
     enrollResponse?: () => Promise<Response>;
     userLookup?: () => Response;
     firstStopResponse?: () => Response;
@@ -125,6 +126,13 @@ async function interact(
       body: typeof init?.body === "string" ? init.body : undefined,
     });
     if (url.pathname === "/actors/me") {
+      const enrollCount = requests.filter(({ path }) => path === url.pathname).length;
+      if (enrollCount === 1) {
+        return (
+          options.initialEnrollResponse?.() ??
+          Response.json({ code: ACTOR_EMAIL_REQUIRED_CODE }, { status: 403 })
+        );
+      }
       return options.enrollResponse
         ? options.enrollResponse()
         : new Response(null, { status: 204 });
@@ -171,13 +179,18 @@ async function interact(
 }
 
 const ENROLLMENT_PATHS: Record<Interaction, string[]> = {
-  follow_up: ["/actors/me"],
-  stop: ["/sessions/session-xyz/stop", "/actors/me"],
+  follow_up: ["/actors/me", "/actors/me"],
+  stop: ["/sessions/session-xyz/stop", "/actors/me", "/actors/me"],
 };
 
 const SUCCESS_PATHS: Record<Interaction, string[]> = {
-  follow_up: ["/actors/me", "/sessions/session-xyz/events", "/sessions/session-xyz/prompt"],
-  stop: ["/sessions/session-xyz/stop", "/actors/me", "/sessions/session-xyz/stop"],
+  follow_up: [
+    "/actors/me",
+    "/actors/me",
+    "/sessions/session-xyz/events",
+    "/sessions/session-xyz/prompt",
+  ],
+  stop: ["/sessions/session-xyz/stop", "/actors/me", "/actors/me", "/sessions/session-xyz/stop"],
 };
 
 const FAILED_ENROLLMENTS: Array<[string, () => Promise<Response>, FailedOutcome]> = [
@@ -211,13 +224,14 @@ describe("Linear actor enrollment for existing-session interactions", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches the follow-up author's profile and enrolls before resolving settings, reading events, or prompting", async () => {
+  it("probes before fetching the follow-up author's profile and enrolls before resolving settings, reading events, or prompting", async () => {
     const { actorRequests, sequence, sessionMappingRetained, mappingDeleteCount } =
       await interact("follow_up");
 
     expect(sequence).toEqual([
       "linear:credentials",
       "linear:identity",
+      "/actors/me",
       "linear:profile",
       "/actors/me",
       "/integration-settings/linear/resolved/acme/backend",
@@ -227,7 +241,9 @@ describe("Linear actor enrollment for existing-session interactions", () => {
     expect(actorRequests.map(({ path }) => path)).toEqual(SUCCESS_PATHS.follow_up);
     expect(actorRequests.every(({ actor }) => actor === `linear:${AUTHOR.id}`)).toBe(true);
     expect(actorRequests[0]?.method).toBe("POST");
-    expect(JSON.parse(String(actorRequests[0]?.body))).toEqual({
+    expect(JSON.parse(String(actorRequests[0]?.body))).toEqual({});
+    expect(actorRequests[1]?.method).toBe("POST");
+    expect(JSON.parse(String(actorRequests[1]?.body))).toEqual({
       displayName: AUTHOR.name,
       email: AUTHOR.email,
     });
@@ -243,6 +259,7 @@ describe("Linear actor enrollment for existing-session interactions", () => {
       "/sessions/session-xyz/stop",
       "linear:credentials",
       "linear:identity",
+      "/actors/me",
       "linear:profile",
       "/actors/me",
       "/sessions/session-xyz/stop",
@@ -257,8 +274,9 @@ describe("Linear actor enrollment for existing-session interactions", () => {
       actor: `linear:${AUTHOR.id}`,
       body: undefined,
     });
-    expect(actorRequests[2]).toEqual(actorRequests[0]);
-    expect(JSON.parse(String(actorRequests[1]?.body))).toEqual({
+    expect(actorRequests[3]).toEqual(actorRequests[0]);
+    expect(JSON.parse(String(actorRequests[1]?.body))).toEqual({});
+    expect(JSON.parse(String(actorRequests[2]?.body))).toEqual({
       displayName: AUTHOR.name,
       email: AUTHOR.email,
     });
@@ -299,13 +317,20 @@ describe("Linear actor enrollment for existing-session interactions", () => {
     }
   );
 
-  it("sends a known email-less author's follow-up when the control plane admits them", async () => {
+  it("sends a known email-less author's follow-up after only a probe without fetching their profile", async () => {
+    const userLookup = vi.fn(() => linearUserResponse({ ...AUTHOR, email: null }));
     const { actorRequests, activities } = await interact("follow_up", {
-      userLookup: () => linearUserResponse({ ...AUTHOR, email: null }),
+      initialEnrollResponse: async () => new Response(null, { status: 204 }),
+      userLookup,
     });
 
-    expect(actorRequests.map(({ path }) => path)).toEqual(SUCCESS_PATHS.follow_up);
-    expect(JSON.parse(String(actorRequests[0]?.body))).toEqual({ displayName: AUTHOR.name });
+    expect(actorRequests.map(({ path }) => path)).toEqual([
+      "/actors/me",
+      "/sessions/session-xyz/events",
+      "/sessions/session-xyz/prompt",
+    ]);
+    expect(JSON.parse(String(actorRequests[0]?.body))).toEqual({});
+    expect(userLookup).not.toHaveBeenCalled();
     expect(activities.some(({ type }) => type === "error")).toBe(false);
   });
 
@@ -327,7 +352,7 @@ describe("Linear actor enrollment for existing-session interactions", () => {
           expect(actorRequests.map(({ path }) => path)).toEqual(
             admitted ? SUCCESS_PATHS[interaction] : ENROLLMENT_PATHS[interaction]
           );
-          const enrollment = actorRequests.find(({ path }) => path === "/actors/me");
+          const enrollment = actorRequests.filter(({ path }) => path === "/actors/me").at(-1);
           expect(JSON.parse(String(enrollment?.body))).toEqual({});
           expect(sessionMappingRetained).toBe(!(admitted && interaction === "stop"));
           expect(mappingDeleteCount).toBe(admitted && interaction === "stop" ? 1 : 0);
