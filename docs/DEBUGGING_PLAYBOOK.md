@@ -270,7 +270,8 @@ outcomes, `sandbox.restored` to `sandbox.restore` outcomes, and `sandbox.timeout
 | `sandbox.circuit_breaker_open`  | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
 
 Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable identifier is in
-`event`.
+`event`. On both heartbeat events, `last_heartbeat_ms` is the heartbeat's age in milliseconds, not a
+timestamp.
 
 #### Provider Clients
 

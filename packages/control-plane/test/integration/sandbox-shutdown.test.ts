@@ -1867,10 +1867,15 @@ describe("heartbeat watchdog and a reconnecting bridge", () => {
     expect(await queryDO(stub, "SELECT status FROM messages WHERE id = 'msg-in-flight'")).toEqual([
       { status: "processing" },
     ]);
+    const [{ last_heartbeat: lastHeartbeat }] = await queryDO<{ last_heartbeat: number }>(
+      stub,
+      "SELECT last_heartbeat FROM sandbox"
+    );
     const graceAlarm = await runInSessionDO(stub, (_instance: SessionDO, durableState) =>
       durableState.storage.getAlarm()
     );
-    expect(graceAlarm).toBeGreaterThan(Date.now() + reconnectGraceMs - 5_000);
+    // The watchdog checks again exactly when the grace after the stale threshold ends.
+    expect(graceAlarm).toBe(lastHeartbeat + timeoutMs + 1 + reconnectGraceMs);
 
     const { ws, response } = await openSandboxWs(name, {
       authToken: AUTH_TOKEN,
