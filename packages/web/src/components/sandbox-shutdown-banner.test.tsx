@@ -205,32 +205,63 @@ describe("SandboxShutdownBanner", () => {
     }
   );
 
-  it("offers bounded failure recovery and confirms restoring older state", async () => {
-    const onRecover = acceptedRecovery();
+  it.each(["failed", "unknown"] as const)(
+    "shows the save time in the %s banner and restore confirmation",
+    async (phase) => {
+      const savedAtMs = Date.parse("2026-10-20T21:53:00Z");
+      const savedAt = new Date(savedAtMs).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "long",
+      });
+      const onRecover = acceptedRecovery();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(
+        <Banner
+          shutdown={{
+            phase,
+            expiresAtMs: 2,
+            drainAtMs: 1,
+            savedAtMs,
+            hasRecoveryPoint: true,
+            availableRecoveryActions: ["retry", "restore_saved"],
+          }}
+          onRecover={onRecover}
+        />
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent(`Last saved: ${savedAt}.`);
+      fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+      expect(onRecover).toHaveBeenCalledWith("retry");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
+      expect(confirm).toHaveBeenCalledWith(
+        `Restore the sandbox state saved on ${savedAt}? Changes since that save may be lost.`
+      );
+      expect(onRecover).not.toHaveBeenCalledWith("restore_saved");
+      confirm.mockReturnValue(true);
+      fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
+      expect(onRecover).toHaveBeenCalledWith("restore_saved");
+    }
+  );
+
+  it("does not invent a save time for an older recovery projection without a timestamp", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
       <Banner
         shutdown={{
-          phase: "failed",
-          expiresAtMs: 2,
-          drainAtMs: 1,
+          phase: "unknown",
+          expiresAtMs: null,
+          drainAtMs: null,
           hasRecoveryPoint: true,
-          availableRecoveryActions: ["retry", "restore_saved"],
+          availableRecoveryActions: ["restore_saved"],
         }}
-        onRecover={onRecover}
+        onRecover={acceptedRecovery()}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
-    expect(onRecover).toHaveBeenCalledWith("retry");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Last saved:");
     fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
     expect(confirm).toHaveBeenCalledWith(
       "Restore the last saved sandbox state? Changes since that save may be lost."
     );
-    expect(onRecover).not.toHaveBeenCalledWith("restore_saved");
-    confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "Restore saved state" }));
-    expect(onRecover).toHaveBeenCalledWith("restore_saved");
   });
 
   it("says unsaved changes may be lost when no save exists, and offers retry and discard", async () => {

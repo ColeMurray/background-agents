@@ -6,6 +6,8 @@ import { SessionStorageIntegrityError } from "./types";
 
 const receiptSchema = z.object({
   kind: z.enum(["snapshot", "retained"]),
+  /** Receipts predating checkpoint promotion were all shutdown captures. */
+  captureKind: z.enum(["checkpoint", "shutdown"]).optional(),
   artifactId: z.string().min(1),
   sourceObjectId: z.string().min(1).optional(),
   provider: z.string(),

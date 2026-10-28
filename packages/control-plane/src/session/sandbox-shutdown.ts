@@ -600,7 +600,7 @@ export class SandboxShutdownCoordinator {
       !state.checkpointInFlight &&
       state.sourceRetired !== true &&
       !!state.providerObjectId &&
-      !this.receiptCoversSource(state) &&
+      (!this.receiptCoversSource(state) || state.receipt?.captureKind === "checkpoint") &&
       state.stopByMs !== undefined &&
       state.captureByMs !== undefined &&
       now < state.stopByMs + RETRY_WINDOW_MS &&
@@ -849,20 +849,45 @@ export class SandboxShutdownCoordinator {
         reason,
         deadlineAtMs
       );
-      const current = this.deps.sandbox.getSandbox();
-      if (
-        this.checkpointOperationId !== id ||
-        current?.modal_sandbox_id !== checkpointGeneration.sandboxId ||
-        current.created_at !== checkpointGeneration.createdAt ||
-        !this.deps.sandbox.recordSandboxSnapshot(
-          checkpointGeneration.sandboxId,
-          result.imageId,
-          row.runtime_version
+      // Preserve a shutdown's concurrent drain claim while committing both
+      // restore projections under the checkpoint's generation and operation fence.
+      const saved = this.deps.session.transaction(() => {
+        const current = this.deps.store.read();
+        if (
+          this.checkpointOperationId !== id ||
+          !current ||
+          !this.current(current) ||
+          !this.matches(current, checkpointGeneration) ||
+          !current.checkpointInFlight ||
+          current.captureOp?.id !== id
         )
-      ) {
+          return null;
+        if (
+          !this.deps.sandbox.recordSandboxSnapshot(
+            checkpointGeneration.sandboxId,
+            result.imageId,
+            row.runtime_version
+          )
+        )
+          throw new Error("Snapshot generation was superseded");
+        const receipt = {
+          kind: "snapshot" as const,
+          captureKind: "checkpoint" as const,
+          artifactId: result.imageId,
+          sourceObjectId: result.sourceObjectId,
+          provider: this.deps.provider.name,
+          savedAtMs: this.now(),
+          runtimeVersion: row.runtime_version,
+        };
+        const next = { ...current, receipt, savedAtMs: receipt.savedAtMs };
+        this.deps.store.write(next);
+        return next;
+      });
+      if (!saved) {
         await this.endCheckpoint(id, true);
         return { outcome: "unknown" };
       }
+      this.announce(saved);
       this.broadcast({ type: "snapshot_saved", imageId: result.imageId, reason });
       if (result.sourceStopped) {
         this.deps.sandbox.updateSandboxStatus("stopped");
@@ -1496,6 +1521,7 @@ export class SandboxShutdownCoordinator {
   ): ShutdownRecord {
     const receipt = {
       kind,
+      captureKind: "shutdown" as const,
       artifactId,
       ...(sourceObjectId ? { sourceObjectId } : {}),
       provider: this.deps.provider.name,

@@ -53,6 +53,13 @@ function ShutdownPhaseBanner({
   const canDiscard = shutdown.discardAvailable === true;
   const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
   const detail = isError ? (shutdown.error ?? shutdown.reason) : undefined;
+  const savedAt =
+    shutdown.hasRecoveryPoint && shutdown.savedAtMs != null
+      ? new Date(shutdown.savedAtMs).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "long",
+        })
+      : null;
   const lossWarning = shutdown.hasRecoveryPoint
     ? "Changes since the last save may be lost."
     : "Unsaved changes may be lost.";
@@ -89,6 +96,7 @@ function ShutdownPhaseBanner({
       )}
     >
       <span className="font-medium">{PHASE_MESSAGES[phase]}</span>
+      {savedAt && <span className="ml-2">Last saved: {savedAt}.</span>}
       {isError && <span className="ml-2">{lossWarning}</span>}
       {isContinuationPaused && (
         <span className="ml-2">
@@ -118,7 +126,9 @@ function ShutdownPhaseBanner({
           onClick={() => {
             if (
               window.confirm(
-                "Restore the last saved sandbox state? Changes since that save may be lost."
+                savedAt
+                  ? `Restore the sandbox state saved on ${savedAt}? Changes since that save may be lost.`
+                  : "Restore the last saved sandbox state? Changes since that save may be lost."
               )
             ) {
               void recover("restore_saved");
