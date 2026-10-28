@@ -9,146 +9,22 @@ import {
   pullRequestReviewCommentEventSchema,
   workflowRunEventSchema,
 } from "./webhook-types";
+import { githubAutomationEventSchema, type GitHubAutomationEvent } from "../types";
 import {
-  automationEventSchema,
-  githubAutomationEventSchema,
-  type GitHubAutomationEvent,
-} from "../types";
-
-// ─── Shared fixture data ───────────────────────────────────────────────────────
-
-const repo = {
-  id: 9001,
-  name: "my-app",
-  owner: { login: "acme-org" },
-};
-
-const sender = { login: "dev-user", type: "User" };
-
-const basePR = {
-  number: 42,
-  title: "Add new feature",
-  body: "This PR adds a great new feature.",
-  user: { login: "pr-author" },
-  head: { ref: "feature/my-feature", sha: "abc1234def5678" },
-  base: { ref: "main" },
-  labels: [{ name: "enhancement" }, { name: "review-needed" }],
-  changed_files: 3,
-};
-
-const pullRequestOpenedPayload = {
-  action: "opened",
-  repository: repo,
+  repo,
   sender,
-  pull_request: basePR,
-};
-
-const pullRequestSynchronizePayload = {
-  action: "synchronize",
-  repository: repo,
-  sender,
-  pull_request: {
-    ...basePR,
-    head: { ref: "feature/my-feature", sha: "deadbeef99" },
-  },
-};
-
-const pullRequestClosedPayload = {
-  action: "closed",
-  repository: repo,
-  sender,
-  pull_request: {
-    ...basePR,
-    merged: true,
-  },
-};
-
-const issueCommentPayload = {
-  action: "created",
-  repository: repo,
-  sender,
-  issue: {
-    id: 10010,
-    number: 10,
-    title: "Bug report",
-  },
-  comment: {
-    id: 9001,
-    user: { login: "commenter-user" },
-    body: "This is a helpful comment.",
-  },
-};
-
-const reviewCommentPayload = {
-  action: "created",
-  repository: repo,
-  sender,
-  pull_request: basePR,
-  comment: {
-    id: 5555,
-    user: { login: "reviewer-user" },
-    body: "Please fix this line.",
-    path: "src/index.ts",
-    diff_hunk: "@@ -1,3 +1,4 @@\n+import foo from 'bar';",
-  },
-};
-
-const checkSuiteCompletedPayload = {
-  action: "completed",
-  repository: repo,
-  sender,
-  check_suite: {
-    id: 77777,
-    head_branch: "feature/my-feature",
-    head_sha: "abc1234def5678",
-    conclusion: "failure",
-    pull_requests: [{ number: 42 }, { number: 43 }],
-  },
-};
-
-const workflowRunCompletedPayload = {
-  action: "completed",
-  repository: repo,
-  sender,
-  workflow_run: {
-    id: 123456789,
-    run_attempt: 1,
-    name: "CI",
-    conclusion: "failure",
-    head_branch: "main",
-    head_sha: "abc1234def5678",
-    path: ".github/workflows/ci.yml",
-    html_url: "https://github.com/acme-org/my-app/actions/runs/123456789",
-  },
-};
-
-const issuesOpenedPayload = {
-  action: "opened",
-  repository: repo,
-  sender,
-  issue: {
-    id: 50101,
-    number: 101,
-    title: "New bug found",
-    body: "Steps to reproduce...",
-    user: { login: "reporter" },
-    labels: [],
-  },
-};
-
-const issuesLabeledPayload = {
-  action: "labeled",
-  repository: repo,
-  sender,
-  issue: {
-    id: 50101,
-    number: 101,
-    title: "New bug found",
-    body: "Steps to reproduce...",
-    user: { login: "reporter" },
-    labels: [{ name: "bug" }, { name: "priority:high" }],
-  },
-};
+  basePR,
+  pullRequestOpenedPayload,
+  pullRequestSynchronizePayload,
+  pullRequestClosedPayload,
+  issueCommentPayload,
+  reviewCommentPayload,
+  checkSuiteCompletedPayload,
+  workflowRunCompletedPayload,
+  issuesOpenedPayload,
+  issuesLabeledPayload,
+  CATALOG_PAYLOADS,
+} from "../../../test-fixtures/github-webhook-payloads";
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -817,28 +693,6 @@ const CONDITION_SOURCE_FIELD = {
   draft: "pullRequest",
 } as const satisfies Record<string, keyof GitHubAutomationEvent>;
 
-/** A payload per catalog event type. */
-const CATALOG_PAYLOADS: Record<string, [event: string, payload: Record<string, unknown>]> = {
-  "pull_request.opened": ["pull_request", pullRequestOpenedPayload],
-  "pull_request.synchronize": ["pull_request", pullRequestSynchronizePayload],
-  "pull_request.ready_for_review": [
-    "pull_request",
-    { ...pullRequestOpenedPayload, action: "ready_for_review" },
-  ],
-  "pull_request.closed": ["pull_request", pullRequestClosedPayload],
-  "issue_comment.created": ["issue_comment", issueCommentPayload],
-  "pull_request_review_comment.created": ["pull_request_review_comment", reviewCommentPayload],
-  "check_suite.completed": ["check_suite", checkSuiteCompletedPayload],
-  "workflow_run.completed": ["workflow_run", workflowRunCompletedPayload],
-  // The shared opened fixture covers the unlabelled case; a catalog entry that
-  // promises `label` has to be checked against a payload that carries labels.
-  "issues.opened": [
-    "issues",
-    { ...issuesOpenedPayload, issue: { ...issuesOpenedPayload.issue, labels: [{ name: "bug" }] } },
-  ],
-  "issues.labeled": ["issues", issuesLabeledPayload],
-};
-
 const RAW_EVENT_SCHEMAS = {
   pull_request: pullRequestEventSchema,
   issue_comment: issueCommentEventSchema,
@@ -931,58 +785,6 @@ describe("GitHub repository routing identity", () => {
 
     expect(event).toMatchObject({ repositoryId: repo.id });
     expect(event?.actor).toBeUndefined();
-    expect(event?.actorKind).toBeUndefined();
-  });
-});
-
-describe("GitHub sender kind", () => {
-  it.each(
-    Object.entries(CATALOG_PAYLOADS).flatMap(([eventType, raw]) => [
-      [eventType, "User", "person", raw] as const,
-      [eventType, "Bot", "bot", raw] as const,
-    ])
-  )("%s reports a %s sender as a %s", (_eventType, type, actorKind, [header, payload]) => {
-    const event = normalizeGitHubEvent(header, {
-      ...payload,
-      sender: { login: "sender", type },
-    });
-    expect(event).toMatchObject({ actor: "sender", actorKind });
-    expect(githubAutomationEventSchema.parse(event)).toEqual(event);
-  });
-
-  it.each(["Organization", "Mannequin", undefined, null, 7])(
-    "reports no kind for a %s sender rather than guessing",
-    (type) => {
-      const event = normalizeGitHubEvent("pull_request", {
-        ...pullRequestOpenedPayload,
-        sender: { login: "someone", type },
-      });
-      expect(event).toMatchObject({ actor: "someone" });
-      expect(event?.actorKind).toBeUndefined();
-    }
-  );
-
-  it("ignores the type of users other than the sender", () => {
-    const event = normalizeGitHubEvent("pull_request", {
-      ...pullRequestOpenedPayload,
-      pull_request: { ...basePR, user: { login: "author", type: null } },
-    });
-    expect(event).toMatchObject({ actor: sender.login, actorKind: "person" });
-  });
-
-  // github-bot and the control plane deploy independently: a consumer must drop
-  // a field a newer producer adds, as an older one drops actorKind.
-  it("strips fields a newer producer adds rather than rejecting the event", () => {
-    const event = normalizeGitHubEvent("pull_request", pullRequestOpenedPayload)!;
-    expect(automationEventSchema.parse({ ...event, addedLater: true })).toEqual(event);
-  });
-
-  it("does not infer a bot from the login alone", () => {
-    const event = normalizeGitHubEvent("pull_request", {
-      ...pullRequestOpenedPayload,
-      sender: { login: "renovate[bot]" },
-    });
-    expect(event?.actorKind).toBeUndefined();
   });
 });
 
