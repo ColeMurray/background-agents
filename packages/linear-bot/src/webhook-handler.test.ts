@@ -1096,7 +1096,13 @@ describe("handleAgentSessionEvent environment targets", () => {
     }
   );
 
-  it("attributes follow-up prompts to the human activity author", async () => {
+  it("attributes a known actor's follow-up without fetching a stalled Linear profile", async () => {
+    const linearFetch = vi.mocked(fetch);
+    const dispatch = linearFetch.getMockImplementation()!;
+    linearFetch.mockImplementation((input, init) => {
+      if (String(init?.body).includes("FetchUser")) return new Promise<Response>(() => {});
+      return dispatch(input, init);
+    });
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
       "issue:issue-1": JSON.stringify({
@@ -1128,6 +1134,9 @@ describe("handleAgentSessionEvent environment targets", () => {
     };
 
     await handleAgentSessionEvent(webhook, env, "trace-follow-up");
+    expect(
+      linearFetch.mock.calls.some(([, init]) => String(init?.body).includes("FetchUser"))
+    ).toBe(false);
 
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
@@ -1308,6 +1317,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       ).fetch;
       controlPlaneFetch
         .mockResolvedValueOnce(Response.json({ code: "actor_email_required" }, { status: 403 }))
+        .mockResolvedValueOnce(Response.json({ code: "actor_email_required" }, { status: 403 }))
         .mockResolvedValueOnce(new Response(null, { status: 204 }))
         .mockResolvedValueOnce(Response.json({ status: "stopping" }, { status }));
       const webhook = makeWebhook();
@@ -1319,9 +1329,11 @@ describe("handleAgentSessionEvent environment targets", () => {
       expect(controlPlaneFetch.mock.calls.map(([url]) => String(url))).toEqual([
         stopUrl,
         "https://internal/actors/me",
+        "https://internal/actors/me",
         stopUrl,
       ]);
-      expect(JSON.parse(String(controlPlaneFetch.mock.calls[1]?.[1]?.body))).toEqual({
+      expect(JSON.parse(String(controlPlaneFetch.mock.calls[1]?.[1]?.body))).toEqual({});
+      expect(JSON.parse(String(controlPlaneFetch.mock.calls[2]?.[1]?.body))).toEqual({
         displayName: "Ada",
         email: "ada@corp.test",
       });
