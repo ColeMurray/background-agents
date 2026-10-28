@@ -2,6 +2,9 @@ import { z } from "zod";
 import type { Env } from "./types";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { fetchUser, type LinearApiClient } from "./utils/linear-client";
+import { abortable } from "./utils/abortable";
+
+export const ACTOR_ENROLLMENT_TIMEOUT_MS = 10_000;
 
 export function describeActorAdmissionFailure(code: string): string | null {
   if (code === "actor_email_required") {
@@ -22,17 +25,27 @@ export async function enrollLinearActor(
 ): Promise<string | null> {
   try {
     const profile = await fetchUser(client, actorUserId);
-    const response = await signedControlPlaneFetch(env, {
-      method: "POST",
-      url: "https://internal/actors/me",
-      actor: `linear:${actorUserId}`,
-      body: JSON.stringify({ displayName: profile?.name, email: profile?.email ?? undefined }),
-      traceId,
-    });
+    const signal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS);
+    const response = await abortable(
+      signedControlPlaneFetch(
+        env,
+        {
+          method: "POST",
+          url: "https://internal/actors/me",
+          actor: `linear:${actorUserId}`,
+          body: JSON.stringify({ displayName: profile?.name, email: profile?.email ?? undefined }),
+          traceId,
+        },
+        { signal }
+      ),
+      signal
+    );
     if (response.ok) return null;
-    const refusal = z
-      .object({ code: z.string() })
-      .safeParse(await response.json().catch(() => null));
+    const body = await abortable(
+      response.json().catch(() => null),
+      signal
+    );
+    const refusal = z.object({ code: z.string() }).safeParse(body);
     if (response.status === 403 && refusal.success) {
       const message = describeActorAdmissionFailure(refusal.data.code);
       if (message) return message;
