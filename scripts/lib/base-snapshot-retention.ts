@@ -1,5 +1,39 @@
-/** @param {{provider: string, prefix: string}} policy */
-export function managedNamePattern(policy) {
+export interface BaseSnapshotPolicyInput {
+  provider: "vercel" | "daytona";
+  prefix?: string;
+  protectedReferences: string[];
+  keepLatest?: number;
+  minAgeMs?: number;
+}
+
+export type BaseSnapshotPolicy = Required<BaseSnapshotPolicyInput>;
+export type BaseSnapshotScope = Pick<BaseSnapshotPolicy, "provider" | "prefix">;
+
+export interface BaseSnapshot {
+  id: string;
+  name: string;
+  createdAtMs: number;
+  lastUsedAtMs?: number;
+  ready: boolean;
+  terminal: boolean;
+}
+
+export type BaseSnapshotReference = Pick<BaseSnapshot, "id" | "name">;
+
+export interface BaseSnapshotClient {
+  list(): Promise<BaseSnapshot[]>;
+  delete(snapshot: BaseSnapshotReference): Promise<void>;
+}
+
+type KeepReason = "protected" | "newest" | "not-terminal" | "unknown-age" | "recent";
+
+interface CleanupPlan {
+  provider: BaseSnapshotPolicy["provider"];
+  keep: (BaseSnapshotReference & { reason: KeepReason })[];
+  delete: BaseSnapshotReference[];
+}
+
+export function managedNamePattern(policy: BaseSnapshotScope): RegExp {
   const prefix = policy.prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `^${prefix}${policy.provider === "daytona" ? "-m[1-9][0-9]*" : ""}-[a-f0-9]{16}$`
@@ -9,49 +43,63 @@ export function managedNamePattern(policy) {
 const DEFAULT_KEEP_LATEST = 5;
 const DEFAULT_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-export function validatePolicy(input) {
-  if (!input || !["vercel", "daytona", "opencomputer"].includes(input.provider)) {
-    throw new Error("policy.provider must be vercel, daytona, or opencomputer");
+export function validatePolicy(input: unknown): BaseSnapshotPolicy {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    !("provider" in input) ||
+    (input.provider !== "vercel" && input.provider !== "daytona")
+  ) {
+    throw new Error("policy.provider must be vercel or daytona");
   }
   const prefix =
-    input.prefix ??
-    { vercel: "openinspect-base", opencomputer: "openinspect-runtime" }[input.provider];
+    ("prefix" in input ? input.prefix : undefined) ??
+    (input.provider === "vercel" ? "openinspect-base" : undefined);
   if (typeof prefix !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(prefix)) {
     throw new Error(
       "policy.prefix must be an explicit base snapshot prefix (required for Daytona)"
     );
   }
+  const protectedReferences =
+    "protectedReferences" in input ? input.protectedReferences : undefined;
   if (
-    !Array.isArray(input.protectedReferences) ||
-    input.protectedReferences.length === 0 ||
-    input.protectedReferences.some((ref) => typeof ref !== "string" || !ref.trim())
+    !Array.isArray(protectedReferences) ||
+    protectedReferences.length === 0 ||
+    !protectedReferences.every(
+      (ref: unknown): ref is string =>
+        typeof ref === "string" && ref.length > 0 && ref === ref.trim()
+    )
   ) {
     throw new Error(
       "policy.protectedReferences must list deployed and rollback snapshot names/IDs"
     );
   }
-  const keepLatest = input.keepLatest ?? DEFAULT_KEEP_LATEST;
-  const minAgeMs = input.minAgeMs ?? DEFAULT_MIN_AGE_MS;
-  if (!Number.isSafeInteger(keepLatest) || keepLatest < 1) {
+  const keepLatest = ("keepLatest" in input ? input.keepLatest : undefined) ?? DEFAULT_KEEP_LATEST;
+  const minAgeMs = ("minAgeMs" in input ? input.minAgeMs : undefined) ?? DEFAULT_MIN_AGE_MS;
+  if (typeof keepLatest !== "number" || !Number.isSafeInteger(keepLatest) || keepLatest < 1) {
     throw new Error("policy.keepLatest must be a positive integer");
   }
-  if (!Number.isSafeInteger(minAgeMs) || minAgeMs < 0) {
+  if (typeof minAgeMs !== "number" || !Number.isSafeInteger(minAgeMs) || minAgeMs < 0) {
     throw new Error("policy.minAgeMs must be a non-negative integer");
   }
   return {
     provider: input.provider,
     prefix,
-    protectedReferences: input.protectedReferences,
+    protectedReferences,
     keepLatest,
     minAgeMs,
   };
 }
 
-export function planCleanup(inventory, input, nowMs = Date.now()) {
+export function planCleanup(
+  inventory: BaseSnapshot[],
+  input: BaseSnapshotPolicyInput,
+  nowMs = Date.now()
+): CleanupPlan {
   const policy = validatePolicy(input);
   const pattern = managedNamePattern(policy);
   const managed = inventory.filter((snapshot) => pattern.test(snapshot.name));
-  const seen = new Set();
+  const seen = new Set<string>();
   for (const snapshot of managed) {
     if (!snapshot.id || seen.has(snapshot.id)) throw new Error("Invalid or duplicate snapshot ID");
     seen.add(snapshot.id);
@@ -63,7 +111,7 @@ export function planCleanup(inventory, input, nowMs = Date.now()) {
       throw new Error(`Protected managed reference is absent from inventory: ${reference}`);
     }
   }
-  const isProtected = (snapshot) =>
+  const isProtected = (snapshot: BaseSnapshot) =>
     protectedReferences.has(snapshot.id) || protectedReferences.has(snapshot.name);
   if (managed.length && !managed.some(isProtected)) {
     throw new Error(
@@ -77,9 +125,9 @@ export function planCleanup(inventory, input, nowMs = Date.now()) {
       .slice(0, policy.keepLatest)
       .map((snapshot) => snapshot.id)
   );
-  const result = { provider: policy.provider, keep: [], delete: [] };
+  const result: CleanupPlan = { provider: policy.provider, keep: [], delete: [] };
   for (const snapshot of managed) {
-    let reason;
+    let reason: KeepReason | undefined;
     if (isProtected(snapshot)) reason = "protected";
     else if (newest.has(snapshot.id)) reason = "newest";
     else if (!snapshot.terminal) reason = "not-terminal";
@@ -97,10 +145,14 @@ export function planCleanup(inventory, input, nowMs = Date.now()) {
   return result;
 }
 
-export async function cleanup(client, policy, { apply = false, nowMs = Date.now() } = {}) {
+export async function cleanup(
+  client: BaseSnapshotClient,
+  policy: BaseSnapshotPolicyInput,
+  { apply = false, nowMs = Date.now() }: { apply?: boolean; nowMs?: number } = {}
+) {
   // Finish listing and validating every page before the first mutation.
   const plan = planCleanup(await client.list(), policy, nowMs);
-  const deleted = [];
+  const deleted: BaseSnapshotReference[] = [];
   if (apply) {
     for (const snapshot of plan.delete) {
       await client.delete(snapshot);

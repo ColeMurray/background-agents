@@ -76,13 +76,13 @@ Terraform base builds are immutable. Replacing their `null_resource` does not re
 provider artifacts. The image-build scheduler's reaper covers database-tracked prepared images; it
 does not track these Terraform bases.
 
-Use the shared cleanup command for Vercel, Daytona, and OpenComputer after deployment. Create a
-local JSON policy for one provider/account and managed name prefix:
+Use the shared cleanup command for Vercel and Daytona after deployment. Create a local JSON policy
+for one provider/account and managed name prefix:
 
 ```json
 {
-  "provider": "opencomputer",
-  "protectedReferences": ["openinspect-runtime-0123456789abcdef"],
+  "provider": "vercel",
+  "protectedReferences": ["openinspect-base-0123456789abcdef"],
   "keepLatest": 5,
   "minAgeMs": 604800000
 }
@@ -99,11 +99,10 @@ even when another protection matches; missing managed references abort both prev
 Manual and out-of-scope references remain allowed. A prefix is ownership scope, not evidence that an
 artifact is unused.
 
-| Provider     | Environment variables                                                                         | Policy prefix                                          |
-| ------------ | --------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Vercel       | `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`; optional `VERCEL_TEAM_ID`, `VERCEL_SANDBOX_API_BASE_URL` | Defaults to `openinspect-base`                         |
-| Daytona      | `DAYTONA_API_KEY`, `DAYTONA_API_URL`                                                          | Required: the Terraform `daytona_base_snapshot` prefix |
-| OpenComputer | `OPENCOMPUTER_API_KEY`; optional `OPENCOMPUTER_API_URL`                                       | Defaults to `openinspect-runtime`                      |
+| Provider | Environment variables                                                                         | Policy prefix                                          |
+| -------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Vercel   | `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`; optional `VERCEL_TEAM_ID`, `VERCEL_SANDBOX_API_BASE_URL` | Defaults to `openinspect-base`                         |
+| Daytona  | `DAYTONA_API_KEY`, `DAYTONA_API_URL`                                                          | Required: the Terraform `daytona_base_snapshot` prefix |
 
 Only complete Terraform base names match: `<prefix>-<16 hex hash>`, or
 `<prefix>-m<memory GiB>-<16 hex hash>` for Daytona. Session checkpoints, prepared images, manual
@@ -121,11 +120,11 @@ npm run --silent sandbox:cleanup-base-snapshots -- --policy /tmp/base-retention.
 npm run --silent sandbox:cleanup-base-snapshots -- --policy /tmp/base-retention.json --apply
 ```
 
-The npm command builds the shared package and bundles the Node entry point before running it.
-Inventory and deletion use the canonical Vercel/Daytona clients and OpenComputer's `Snapshots` SDK;
-the typed adapters only identify base artifacts and normalize their metadata for the retention
-planner. Provider request handling and pagination stay with those clients. Diagnostics go to stderr
-so stdout remains the JSON cleanup report.
+The npm command builds the shared package, typechecks the CLI, adapters, and retention planner, and
+bundles the Node entry point before running it. Inventory and deletion use the canonical
+Vercel/Daytona clients; the typed adapters only identify base artifacts and normalize their metadata
+for the retention planner. Provider request handling and pagination stay with those clients.
+Diagnostics go to stderr so stdout remains the JSON cleanup report.
 
 Pause deployments and manual reference changes while collecting protections and running cleanup. Run
 the same command periodically in your operator job only if it refreshes protections and shares the

@@ -8,7 +8,13 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "allowJs": true
+    "allowJs": true,
+    "checkJs": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["lib/base-snapshot-client.ts", "../packages/control-plane/types/node-web.d.ts"]
+  "include": [
+    "cleanup-base-snapshots.mjs",
+    "lib/base-snapshot-*.ts",
+    "../packages/control-plane/types/node-web.d.ts"
+  ]
 }

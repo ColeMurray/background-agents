@@ -1,5 +1,9 @@
-import { managedNamePattern } from "./base-snapshot-retention.mjs";
-import { Snapshots } from "@opencomputer/sdk/node";
+import { managedNamePattern } from "./base-snapshot-retention.ts";
+import type {
+  BaseSnapshot,
+  BaseSnapshotClient,
+  BaseSnapshotScope,
+} from "./base-snapshot-retention.ts";
 import {
   DaytonaNotFoundError,
   DaytonaRestClient,
@@ -8,25 +12,6 @@ import {
   VercelSandboxApiError,
   VercelSandboxClient,
 } from "../../packages/control-plane/src/sandbox/providers/vercel/client";
-
-export interface BaseSnapshotScope {
-  provider: "vercel" | "daytona" | "opencomputer";
-  prefix: string;
-}
-
-export interface BaseSnapshot {
-  id: string;
-  name: string;
-  createdAtMs: number;
-  lastUsedAtMs?: number;
-  ready: boolean;
-  terminal: boolean;
-}
-
-export interface BaseSnapshotClient {
-  list(): Promise<BaseSnapshot[]>;
-  delete(snapshot: Pick<BaseSnapshot, "id" | "name">): Promise<void>;
-}
 
 function timestamp(value: string | null | undefined): number {
   return value == null ? NaN : Date.parse(value);
@@ -89,28 +74,6 @@ export function daytonaBaseSnapshots(
   };
 }
 
-export function openComputerBaseSnapshots(
-  client: Pick<Snapshots, "list" | "delete">
-): BaseSnapshotClient {
-  return {
-    async list() {
-      return (await client.list()).map((snapshot) => {
-        if (typeof snapshot.id !== "string" || typeof snapshot.name !== "string")
-          throw new Error("Invalid snapshot metadata");
-        return {
-          id: snapshot.id,
-          name: snapshot.name,
-          createdAtMs: timestamp(snapshot.createdAt),
-          lastUsedAtMs: snapshot.lastUsedAt == null ? undefined : timestamp(snapshot.lastUsedAt),
-          ready: snapshot.status === "ready",
-          terminal: snapshot.status === "ready" || snapshot.status === "failed",
-        };
-      });
-    },
-    delete: (snapshot) => client.delete(snapshot.name),
-  };
-}
-
 function required(env: NodeJS.ProcessEnv, key: string): string {
   if (!env[key]) throw new Error(`${key} is required`);
   return env[key];
@@ -154,13 +117,6 @@ export function createSnapshotClient(
         new DaytonaRestClient({
           apiKey: required(env, "DAYTONA_API_KEY"),
           apiUrl: providerUrl(required(env, "DAYTONA_API_URL"))!,
-        })
-      );
-    case "opencomputer":
-      return openComputerBaseSnapshots(
-        new Snapshots({
-          apiKey: required(env, "OPENCOMPUTER_API_KEY"),
-          apiUrl: providerUrl(env.OPENCOMPUTER_API_URL),
         })
       );
   }

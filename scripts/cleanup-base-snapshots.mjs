@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { createSnapshotClient } from "./lib/base-snapshot-client.ts";
-import { cleanup, validatePolicy } from "./lib/base-snapshot-retention.mjs";
+import { cleanup, validatePolicy } from "./lib/base-snapshot-retention.ts";
 
 async function main() {
   const { values } = parseArgs({

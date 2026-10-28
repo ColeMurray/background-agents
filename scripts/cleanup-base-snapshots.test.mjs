@@ -10,18 +10,14 @@ import {
   planCleanup,
   validatePolicy,
   managedNamePattern,
-} from "./lib/base-snapshot-retention.mjs";
-import {
-  createSnapshotClient,
-  daytonaBaseSnapshots,
-  openComputerBaseSnapshots,
-} from "./lib/base-snapshot-client.ts";
+} from "./lib/base-snapshot-retention.ts";
+import { createSnapshotClient, daytonaBaseSnapshots } from "./lib/base-snapshot-client.ts";
 
-const name = (i) => `openinspect-runtime-${i.toString(16).padStart(16, "0")}`;
+const name = (i) => `openinspect-base-${i.toString(16).padStart(16, "0")}`;
 const NOW_MS = Date.UTC(2026, 9, 15);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const policy = {
-  provider: "opencomputer",
+  provider: "vercel",
   protectedReferences: [name(0)],
   keepLatest: 1,
   minAgeMs: DAY_MS,
@@ -67,7 +63,7 @@ test("default policy retains five newest builds plus protected references", () =
   const inventory = Array.from({ length: 10 }, (_, i) => artifact(i));
   const plan = planCleanup(
     inventory,
-    { provider: "opencomputer", protectedReferences: [name(0)] },
+    { provider: "vercel", protectedReferences: [name(0)] },
     NOW_MS
   );
   assert.equal(plan.keep.length, 6);
@@ -76,10 +72,16 @@ test("default policy retains five newest builds plus protected references", () =
 
 test("policy requires a positive retention count and explicit protection", () => {
   for (const invalid of [
+    null,
+    [],
+    "vercel",
     { ...policy, provider: "modal" },
+    { ...policy, keepLatest: "5" },
     { ...policy, keepLatest: 0 },
     { ...policy, keepLatest: 1.5 },
     { ...policy, minAgeMs: -1 },
+    { ...policy, minAgeMs: "0" },
+    { ...policy, protectedReferences: [1] },
     { ...policy, protectedReferences: [] },
     { ...policy, protectedReferences: [""] },
     { ...policy, provider: "daytona" },
@@ -90,7 +92,6 @@ test("policy requires a positive retention count and explicit protection", () =>
 
 test("managed name matching excludes sessions, manual names, and other prefixes", () => {
   const policies = [
-    [{ provider: "opencomputer", prefix: "openinspect-runtime" }, name(1)],
     [{ provider: "vercel", prefix: "openinspect-base" }, "openinspect-base-0123456789abcdef"],
     [{ provider: "daytona", prefix: "my-base" }, "my-base-m4-0123456789abcdef"],
   ];
@@ -105,6 +106,26 @@ test("managed name matching excludes sessions, manual names, and other prefixes"
       "my-base-m0-0123456789abcdef",
     ]) {
       assert.equal(pattern.test(other), false);
+    }
+  }
+});
+
+test("padded protections abort preview and apply even when another protection matches", async () => {
+  for (const reference of [` ${name(1)}`, `${name(1)} `, "\tsnap-1\n"]) {
+    for (const apply of [false, true]) {
+      const deleted = [];
+      await assert.rejects(
+        cleanup(
+          {
+            list: async () => [artifact(0), artifact(1), artifact(2)],
+            delete: async (snapshot) => deleted.push(snapshot),
+          },
+          { ...policy, protectedReferences: [name(0), reference] },
+          { apply, nowMs: NOW_MS }
+        ),
+        /policy.protectedReferences/
+      );
+      assert.deepEqual(deleted, []);
     }
   }
 });
@@ -159,7 +180,6 @@ test("inventory failure prevents deletion and delete failure stops the batch", a
 
 test("every protected managed name must resolve before preview or deletion", async () => {
   for (const [provider, prefix, baseName] of [
-    ["opencomputer", "openinspect-runtime", name],
     ["vercel", "openinspect-base", (i) => `openinspect-base-${i.toString(16).padStart(16, "0")}`],
     ["daytona", "my-base", (i) => `my-base-m2-${i.toString(16).padStart(16, "0")}`],
   ]) {
@@ -346,16 +366,18 @@ test("malformed or repeated pagination cannot authorize partial cleanup", async 
 test("HTTP errors abort inventory, 404 deletion is idempotent, and credentials are not echoed", async (t) => {
   const config = validatePolicy(policy);
   for (const status of [401, 500]) {
-    t.mock.method(globalThis, "fetch", async () => new Response("sensitive response", { status }));
-    const client = createSnapshotClient(config, { OPENCOMPUTER_API_KEY: "secret" });
+    t.mock.method(globalThis, "fetch", async () => new Response("secret", { status }));
+    const client = createSnapshotClient(
+      { ...config, provider: "daytona" },
+      { DAYTONA_API_KEY: "secret", DAYTONA_API_URL: "https://daytona.test/api" }
+    );
     await assert.rejects(
       client.list(),
-      (error) => error.message.includes(String(status)) && !error.message.includes("sensitive")
+      (error) => error.message.includes(String(status)) && !error.message.includes("secret")
     );
   }
   t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 404 }));
   for (const [scope, env] of [
-    [config, { OPENCOMPUTER_API_KEY: "secret" }],
     [
       { ...config, provider: "vercel" },
       { VERCEL_TOKEN: "secret", VERCEL_PROJECT_ID: "project" },
@@ -395,22 +417,16 @@ test("typed adapters preserve uncertain metadata and normalize only provider rea
   );
   assert.ok(Number.isNaN(inventory[0].lastUsedAtMs));
   assert.ok(Number.isNaN(inventory[1].createdAtMs));
-  const openComputer = openComputerBaseSnapshots({
-    list: async () => [{ id: "a", name: name(0), status: "unknown", createdAt: "invalid" }],
-    delete: async () => {},
-  });
-  const [snapshot] = await openComputer.list();
-  assert.equal(snapshot.terminal, false);
-  assert.ok(Number.isNaN(snapshot.createdAtMs));
 });
 
 test("clients reject missing credentials and insecure non-local URLs", () => {
-  assert.throws(() => createSnapshotClient(policy, {}), /OPENCOMPUTER_API_KEY/);
+  assert.throws(() => createSnapshotClient(policy, {}), /VERCEL_TOKEN/);
   assert.throws(
     () =>
       createSnapshotClient(policy, {
-        OPENCOMPUTER_API_KEY: "test",
-        OPENCOMPUTER_API_URL: "http://provider.example/api",
+        VERCEL_TOKEN: "test",
+        VERCEL_PROJECT_ID: "project",
+        VERCEL_SANDBOX_API_BASE_URL: "http://provider.example/api",
       }),
     /HTTPS/
   );
@@ -418,22 +434,32 @@ test("clients reject missing credentials and insecure non-local URLs", () => {
 
 test("cleanup bounds accumulated base snapshots while preserving the deployed base", async (t) => {
   // Ten distinct source builds have left ten immutable artifacts in the provider.
+  const prefix = "openinspect-daytona";
+  const baseName = (i) => `${prefix}-m2-${i.toString(16).padStart(16, "0")}`;
   const snapshots = Array.from({ length: 10 }, (_, i) => ({
     id: `snap-${i}`,
-    name: name(i),
+    name: baseName(i),
     createdAt: new Date(Date.UTC(2020, 0, i + 1)).toISOString(),
-    status: "ready",
+    state: "active",
   }));
   const deleted = [];
   const server = createServer((req, res) => {
-    assert.equal(req.headers["x-api-key"], "test-token");
-    if (req.method === "GET" && req.url === "/api/snapshots") {
+    assert.equal(req.headers.authorization, "Bearer test-token");
+    const url = new URL(req.url, "http://localhost");
+    if (req.method === "GET" && url.pathname === "/api/snapshots") {
+      const page = Number(url.searchParams.get("page"));
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(snapshots));
+      res.end(
+        JSON.stringify({
+          items: snapshots.slice((page - 1) * 3, page * 3),
+          page,
+          totalPages: Math.ceil(snapshots.length / 3),
+        })
+      );
     } else if (req.method === "DELETE" && req.url.startsWith("/api/snapshots/")) {
       const reference = decodeURIComponent(req.url.split("/").at(-1));
       deleted.push(reference);
-      const index = snapshots.findIndex((snapshot) => snapshot.name === reference);
+      const index = snapshots.findIndex((snapshot) => snapshot.id === reference);
       if (index !== -1) snapshots.splice(index, 1);
       res.writeHead(204).end();
     } else {
@@ -448,8 +474,9 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
   await writeFile(
     policyPath,
     JSON.stringify({
-      provider: "opencomputer",
-      protectedReferences: [name(0)],
+      provider: "daytona",
+      prefix,
+      protectedReferences: [baseName(0)],
       keepLatest: 2,
       minAgeMs: 0,
     })
@@ -458,8 +485,8 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
     const child = spawn(process.execPath, ["dist/cleanup-base-snapshots.mjs", ...args], {
       env: {
         ...process.env,
-        OPENCOMPUTER_API_KEY: "test-token",
-        OPENCOMPUTER_API_URL: `http://127.0.0.1:${server.address().port}/api`,
+        DAYTONA_API_KEY: "test-token",
+        DAYTONA_API_URL: `http://127.0.0.1:${server.address().port}/api`,
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -477,9 +504,9 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
   assert.deepEqual(deleted, [], "preview must not delete snapshots");
   const result = await run(["--policy", policyPath, "--apply"]);
   assert.equal(result.deleted.length, 7);
-  assert.deepEqual(new Set(deleted), new Set(Array.from({ length: 7 }, (_, i) => name(i + 1))));
+  assert.deepEqual(new Set(deleted), new Set(Array.from({ length: 7 }, (_, i) => `snap-${i + 1}`)));
   assert.deepEqual(
     snapshots.map((snapshot) => snapshot.name),
-    [name(0), name(8), name(9)]
+    [baseName(0), baseName(8), baseName(9)]
   );
 });
