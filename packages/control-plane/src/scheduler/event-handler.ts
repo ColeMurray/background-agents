@@ -43,8 +43,9 @@ export class AutomationEventHandler {
             automation,
             repositories,
             source: "event",
-            // The normalized GitHub event keeps the sender's login but drops sender.type.
-            actorKind: "unknown",
+            // Absent from older github-bots, and when GitHub's sender is missing
+            // or neither a User nor a Bot.
+            actorKind: event.actorKind ?? "unknown",
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
             eventRepositoryId: event.repositoryId,

@@ -48,7 +48,7 @@ export class GitHubAutomationStore {
           `INSERT INTO automation_invocations
            (id, automation_id, source, actor_kind, trigger_key, concurrency_key, created_at,
             updated_at)
-           SELECT ?, ?, 'event', 'unknown', ?, ?, ?, ?
+           SELECT ?, ?, 'event', ?, ?, ?, ?, ?
            WHERE EXISTS (SELECT 1 FROM automations a WHERE a.id = ? AND a.owner_team_id IS NOT NULL
                          AND NOT EXISTS (SELECT 1 FROM team_repository_grants g
                                          WHERE g.team_id = a.owner_team_id
@@ -59,6 +59,7 @@ export class GitHubAutomationStore {
         .bind(
           invocationId,
           automationId,
+          event.actorKind ?? "unknown",
           event.triggerKey,
           event.concurrencyKey,
           createdAt,
