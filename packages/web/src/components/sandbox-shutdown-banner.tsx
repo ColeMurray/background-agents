@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   SandboxShutdownState,
   ShutdownRecoveryAction,
@@ -38,6 +38,9 @@ function ShutdownPhaseBanner({
 }: SandboxShutdownBannerProps & { shutdown: SandboxShutdownState }) {
   const [pendingAction, setPendingAction] = useState<ShutdownRecoveryAction | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
 
   const { phase } = shutdown;
   const isError = phase === "failed" || phase === "unknown";
@@ -54,7 +57,7 @@ function ShutdownPhaseBanner({
   const canResumeQueuedWork = isContinuationPaused && canRestoreSaved;
   const detail = isError ? (shutdown.error ?? shutdown.reason) : undefined;
   const savedAt =
-    shutdown.hasRecoveryPoint && shutdown.savedAtMs != null
+    mounted && shutdown.hasRecoveryPoint && shutdown.savedAtMs != null
       ? new Date(shutdown.savedAtMs).toLocaleString(undefined, {
           dateStyle: "medium",
           timeStyle: "long",

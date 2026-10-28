@@ -3,6 +3,8 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect, useRef, type ComponentProps } from "react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import type {
   SandboxShutdownState,
   ShutdownRecoveryAction,
@@ -209,10 +211,13 @@ describe("SandboxShutdownBanner", () => {
     "shows the save time in the %s banner and restore confirmation",
     async (phase) => {
       const savedAtMs = Date.parse("2026-10-20T21:53:00Z");
-      const savedAt = new Date(savedAtMs).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "long",
-      });
+      const savedAt = new Date(savedAtMs)
+        .toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "long",
+        })
+        .replace(/ /g, "\u202f");
+      vi.spyOn(Date.prototype, "toLocaleString").mockReturnValue(savedAt);
       const onRecover = acceptedRecovery();
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       render(
@@ -228,7 +233,9 @@ describe("SandboxShutdownBanner", () => {
           onRecover={onRecover}
         />
       );
-      expect(screen.getByRole("alert")).toHaveTextContent(`Last saved: ${savedAt}.`);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        `Last saved: ${savedAt.replace(/\s+/g, " ")}.`
+      );
       fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
       expect(onRecover).toHaveBeenCalledWith("retry");
       await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeEnabled());
@@ -242,6 +249,40 @@ describe("SandboxShutdownBanner", () => {
       expect(onRecover).toHaveBeenCalledWith("restore_saved");
     }
   );
+
+  it("formats the save time only after hydration without a server/client mismatch", async () => {
+    const format = vi.spyOn(Date.prototype, "toLocaleString").mockReturnValue("Server time");
+    const banner = (
+      <Banner
+        shutdown={{
+          phase: "unknown",
+          expiresAtMs: null,
+          drainAtMs: null,
+          hasRecoveryPoint: true,
+          savedAtMs: Date.parse("2026-10-20T21:53:00Z"),
+          availableRecoveryActions: ["restore_saved"],
+        }}
+        onRecover={acceptedRecovery()}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(banner);
+    expect(container).not.toHaveTextContent("Last saved:");
+    expect(format).not.toHaveBeenCalled();
+
+    format.mockReturnValue("Browser local time");
+    const onRecoverableError = vi.fn();
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, banner, { onRecoverableError });
+    });
+    try {
+      expect(container).toHaveTextContent("Last saved: Browser local time.");
+      expect(onRecoverableError).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
 
   it("does not invent a save time for an older recovery projection without a timestamp", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
