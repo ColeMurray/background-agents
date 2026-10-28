@@ -168,9 +168,9 @@ export class SandboxCommandOutbox {
 
   async flush(): Promise<void> {
     const socket = this.targetSocket();
-    if (socket && !this.protocol()) {
-      // A socket surviving a control-plane rollout may predate negotiation.
-      // Its next connection will announce readiness; heartbeats alone cannot.
+    if (socket && !this.protocol() && !this.deps.wsManager.expectsSandboxReady(socket)) {
+      // Untagged sockets surviving a rollout need a new handshake. Fresh sockets
+      // may drain buffered heartbeats before ready and must be allowed to finish.
       this.deps.wsManager.close(socket, 1012, "Sandbox command negotiation required");
       this.deps.messenger.broadcast({ type: "sandbox_connection", status: "reconnecting" });
     }

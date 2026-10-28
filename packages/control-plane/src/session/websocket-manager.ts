@@ -37,6 +37,7 @@ import {
 
 /** Stop trusting an open socket before the lifecycle heartbeat watchdog retires it. */
 export const SANDBOX_COMMAND_HEARTBEAT_TIMEOUT_MS = 45_000;
+const SANDBOX_READY_EXPECTED_TAG = "sandbox-ready-expected";
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -67,6 +68,9 @@ export interface SessionWebSocketManager {
 
   /** Whether `ws` is the sandbox socket the session currently dispatches to. */
   isActiveSandboxSocket(ws: SessionWebSocket): boolean;
+
+  /** Whether this socket was accepted expecting a ready handshake, even after hibernation. */
+  expectsSandboxReady(ws: SessionWebSocket): boolean;
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
   classify(ws: SessionWebSocket): ConnectionClassification;
@@ -181,7 +185,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   acceptAndSetSandboxSocket(ws: SessionWebSocket, sandboxId?: string): { replaced: boolean } {
     const socketId = `sbws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : []), `socket:${socketId}`];
+    const tags = [
+      "sandbox",
+      ...(sandboxId ? [`sid:${sandboxId}`] : []),
+      `socket:${socketId}`,
+      SANDBOX_READY_EXPECTED_TAG,
+    ];
     this.host.adopt(ws, tags);
     // Advance the persisted identity before anything else observes the new
     // socket: from here on every earlier bridge socket is refused at dispatch
@@ -230,6 +239,10 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   isActiveSandboxSocket(ws: SessionWebSocket): boolean {
     return this.isAuthoritative(this.classify(ws), this.sandboxRepository.getSandbox());
+  }
+
+  expectsSandboxReady(ws: SessionWebSocket): boolean {
+    return this.host.tags(ws).includes(SANDBOX_READY_EXPECTED_TAG);
   }
 
   /**

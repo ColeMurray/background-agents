@@ -88,6 +88,43 @@ describe("Sandbox command replay through the live session runtime", () => {
     return { sessionName, stub, ws };
   }
 
+  it.each(["before", "after"] as const)(
+    "keeps a fresh reconnect open when a heartbeat arrives %s ready",
+    async (order) => {
+      const { sessionName, stub } = await setup();
+      const replacement = await connect(sessionName);
+      const previousHeartbeat = Date.now() - 1000;
+      await runInSessionDO(stub, (instance, state) => {
+        state.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", previousHeartbeat);
+        vi.spyOn(componentsOf(instance).wsManager, "close");
+      });
+      if (order === "after") await ready(stub, replacement);
+      replacement.send(
+        JSON.stringify({
+          type: "heartbeat",
+          sandboxId: SANDBOX_AUTH.sandboxId,
+          timestamp: Date.now(),
+        })
+      );
+      await vi.waitFor(async () => {
+        const [sandbox] = await queryDO<{ last_heartbeat: number }>(
+          stub,
+          "SELECT last_heartbeat FROM sandbox"
+        );
+        expect(sandbox.last_heartbeat).toBeGreaterThan(previousHeartbeat);
+      });
+      await runInSessionDO(stub, (instance) => {
+        const manager = componentsOf(instance).wsManager;
+        expect(manager.close).not.toHaveBeenCalled();
+        expect(manager.getSandboxSocket()).not.toBeNull();
+      });
+      if (order === "before") await ready(stub, replacement);
+      await runInSessionDO(stub, (instance) => {
+        expect(componentsOf(instance).wsManager.close).not.toHaveBeenCalled();
+      });
+    }
+  );
+
   async function dropFirstCommand(stub: DurableObjectStub, type: ReplayCommand["type"]) {
     const dropped: ReplayCommand[] = [];
     await runInSessionDO(stub, (instance) => {

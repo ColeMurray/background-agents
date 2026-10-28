@@ -318,7 +318,29 @@ describe("SessionWebSocketManagerImpl", () => {
 
       manager.acceptAndSetSandboxSocket(ws);
 
-      expect(sockets.get(ws)).toEqual(["sandbox", expect.stringMatching(/^socket:sbws-/)]);
+      expect(sockets.get(ws)).toEqual([
+        "sandbox",
+        expect.stringMatching(/^socket:sbws-/),
+        "sandbox-ready-expected",
+      ]);
+    });
+
+    it("retains the ready-handshake expectation across hibernation without marking legacy sockets", () => {
+      const h = createManager();
+      const current = createFakeWebSocket();
+      h.manager.acceptAndSetSandboxSocket(current, "sb-1");
+      const legacy = createFakeWebSocket();
+      h.sockets.set(legacy, ["sandbox", "sid:sb-1", "socket:legacy"]);
+      const recovered = new SessionWebSocketManagerImpl(
+        h.host,
+        h.mockRepo.repo,
+        h.mockRepo.repo as unknown as WsClientMappingRepository,
+        h.alarmScheduler,
+        h.log,
+        TEST_CONFIG
+      );
+      expect(recovered.expectsSandboxReady(current)).toBe(true);
+      expect(recovered.expectsSandboxReady(legacy)).toBe(false);
     });
 
     it("persists the new socket's identity before closing the socket it replaces", () => {

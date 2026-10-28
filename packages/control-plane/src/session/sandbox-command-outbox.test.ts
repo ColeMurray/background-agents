@@ -52,6 +52,7 @@ function setup() {
     getSandboxSocket: vi.fn((): SessionWebSocket | null => ws),
     getSandboxCommandTarget: vi.fn((): SandboxCommandTarget => ({ kind: "dispatch", socket: ws })),
     isActiveSandboxSocket: vi.fn(() => true),
+    expectsSandboxReady: vi.fn(() => false),
     send: vi.fn((_ws: SessionWebSocket, _payload: string | object) => true),
     close: vi.fn(),
   };
@@ -258,6 +259,21 @@ describe("SandboxCommandOutbox", () => {
       "Sandbox command negotiation required"
     );
     expect(h.wsManager.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fresh socket open and holds commands until ready, including after reconstruction", async () => {
+    h.sandbox.active_socket_id = "fresh-socket";
+    h.wsManager.expectsSandboxReady.mockReturnValue(true);
+    const recovered = new SandboxCommandOutbox(h.deps);
+    await recovered.flush();
+    expect(recovered.send(h.ws, prompt)).toBe(true);
+    await recovered.flush();
+    expect(h.wsManager.close).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+    recovered.recordProtocol(true, "bridge-1", 1);
+    await recovered.flush();
+    expect(h.wsManager.send).toHaveBeenCalledOnce();
+    expect(h.wsManager.close).not.toHaveBeenCalled();
   });
 
   it("retires a confirmed stop even when its receipt ACK was lost, matching command and message", async () => {
