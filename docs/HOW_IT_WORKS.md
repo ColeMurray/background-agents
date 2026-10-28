@@ -204,7 +204,8 @@ reconnect grace before that check retires it. Explicit lifecycle paths such as i
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
 While the coordinator that started their checkpoint is still capturing the sandbox, a refused bridge
 is told to retry rather than exit, so the save is not aborted by the container shutting down. After
-a control-plane restart the new coordinator cannot record that checkpoint, so the bridge exits.
+a control-plane restart the new coordinator cannot record such a checkpoint, so the bridge exits. A
+shutdown save that is `draining`, `prepared`, or `capturing` is persisted and still answers retry.
 
 ### Data Plane (Sandbox Backends)
 
