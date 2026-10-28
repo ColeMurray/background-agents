@@ -386,6 +386,37 @@ describe("AutomationsList actions", () => {
 });
 
 describe("AutomationsList execution activity", () => {
+  it.each([false, true])("names each automation's activity links (history=%s)", (hasHistory) => {
+    const recentExecutions: AutomationListItem["recentExecutions"] = hasHistory
+      ? [{ id: "inv-1", status: "completed", createdAt: 100 }]
+      : [];
+    const automations = [
+      makeAutomation({ recentExecutions }),
+      makeAutomation({ id: "auto-2", name: "Release checks", recentExecutions }),
+    ];
+    render(
+      <AutomationsList
+        canCreate
+        automations={automations}
+        emptyState={{ kind: "no-automations" }}
+        onPause={noop}
+        onResume={noop}
+        onTrigger={noop}
+        onDelete={noop}
+      />
+    );
+
+    for (const automation of automations) {
+      const name = hasHistory
+        ? `Completed, ${new Date(100).toLocaleString()}, ${automation.name}`
+        : `No runs for ${automation.name}`;
+      expect(screen.getByRole("link", { name })).toHaveAttribute(
+        "href",
+        `/automations/${automation.id}`
+      );
+    }
+  });
+
   it.each([
     [undefined, false],
     [undefined, true],
@@ -417,7 +448,7 @@ describe("AutomationsList execution activity", () => {
 
     const links = hasHistory
       ? within(screen.getByRole("list")).getAllByRole("link")
-      : [screen.getByRole("link", { name: "No runs" })];
+      : [screen.getByRole("link", { name: "No runs for Nightly review" })];
     expect(links).toHaveLength(hasHistory ? 2 : 1);
     const href = `/automations/auto%2F1%20%3F${teamId ? "?teamId=team%2Fone+%26+two" : ""}`;
     const rowLink = screen.getByRole("link", { name: "View Nightly review" });
@@ -569,10 +600,10 @@ describe("AutomationsList execution activity", () => {
     expect(executions[1]).not.toHaveAccessibleName();
     const occurredAt = new Date(100).toLocaleString();
     expect(within(executions[0]).getByRole("link")).toHaveAccessibleName(
-      `Completed, ${occurredAt}`
+      `Completed, ${occurredAt}, Nightly review`
     );
     expect(within(executions[1]).getByRole("link")).toHaveAccessibleName(
-      `Failed, ${new Date(200).toLocaleString()}`
+      `Failed, ${new Date(200).toLocaleString()}, Nightly review`
     );
     expect(activity.children[0]).toHaveAttribute("data-status-shape", "completed");
     expect(activity.children[1]).toHaveAttribute("data-status-shape", "failed");

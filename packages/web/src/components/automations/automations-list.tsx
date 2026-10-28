@@ -174,6 +174,7 @@ export function AutomationsList({
                     <ExecutionActivity
                       executions={automation.recentExecutions}
                       href={navigation.detail(automation.id)}
+                      automationName={automation.name}
                     />
                   </div>
                 </div>

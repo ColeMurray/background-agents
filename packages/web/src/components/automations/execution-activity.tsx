@@ -43,9 +43,11 @@ function StatusShape({ status }: { status: AutomationInvocationStatus }) {
 export function ExecutionActivity({
   executions,
   href,
+  automationName,
 }: {
   executions: AutomationExecutionSummary[];
   href: string;
+  automationName: string;
 }) {
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.detail > 0 && window.getSelection()?.toString()) {
@@ -57,6 +59,7 @@ export function ExecutionActivity({
     return (
       <Link
         href={href}
+        aria-label={`No runs for ${automationName}`}
         draggable={false}
         onClick={onClick}
         className="rounded-sm text-[10px] text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -85,7 +88,7 @@ export function ExecutionActivity({
             <Link
               href={href}
               title={`${presentation.label} - ${occurredAt}`}
-              aria-label={`${presentation.label}, ${occurredAt}`}
+              aria-label={`${presentation.label}, ${occurredAt}, ${automationName}`}
               draggable={false}
               onClick={onClick}
               className="flex h-4 w-2 items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
