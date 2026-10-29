@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
 import {
-  readCompletionDelivery,
-  recordCompletionEnqueued,
-  recordCompletionPosted,
+  isCompletionEnqueued,
+  isCompletionPosted,
+  markCompletionEnqueued,
+  markCompletionPosted,
   SLACK_COMPLETION_DELIVERY_TTL_MS,
 } from "./delivery-ledger";
+
+const deliveryId = "completion:session-1:message-1";
 
 function memoryKv() {
   const store = new Map<string, { value: string; expirationTtl?: number }>();
@@ -28,31 +31,40 @@ function envWith(kv: KVNamespace): Env {
 }
 
 describe("completion delivery ledger", () => {
-  it("records an enqueue and then a confirmed post without shortening the ttl", async () => {
+  it("records an enqueue and a post on separate keys", async () => {
     const { kv, store } = memoryKv();
     const env = envWith(kv);
 
-    expect(await readCompletionDelivery(env, "session-1", "message-1")).toBe("missing");
-    await recordCompletionEnqueued(env, "session-1", "message-1");
-    expect(await readCompletionDelivery(env, "session-1", "message-1")).toBe("enqueued");
-    await recordCompletionPosted(env, "session-1", "message-1");
-    expect(await readCompletionDelivery(env, "session-1", "message-1")).toBe("posted");
+    expect(await isCompletionEnqueued(env, deliveryId)).toBe(false);
+    expect(await isCompletionPosted(env, deliveryId)).toBe(false);
 
-    const marker = [...store.values()][0];
-    expect(marker?.expirationTtl).toBe(SLACK_COMPLETION_DELIVERY_TTL_MS / 1000);
+    await markCompletionEnqueued(env, deliveryId);
+    expect(await isCompletionEnqueued(env, deliveryId)).toBe(true);
+    expect(await isCompletionPosted(env, deliveryId)).toBe(false);
+
+    await markCompletionPosted(env, deliveryId);
+    expect(await isCompletionPosted(env, deliveryId)).toBe(true);
+    expect(await isCompletionEnqueued(env, deliveryId)).toBe(true);
+    expect(store.size).toBe(2);
+
+    for (const marker of store.values()) {
+      expect(marker.expirationTtl).toBe(SLACK_COMPLETION_DELIVERY_TTL_MS / 1000);
+      expect(marker.value).toBe("1");
+    }
   });
 
-  it("does not downgrade a posted completion when a late enqueue is recorded", async () => {
-    const { kv } = memoryKv();
+  it("does not let a late enqueue clear the posted marker", async () => {
+    const { kv, store } = memoryKv();
     const env = envWith(kv);
 
-    await recordCompletionPosted(env, "session-1", "message-1");
-    await recordCompletionEnqueued(env, "session-1", "message-1");
+    await markCompletionPosted(env, deliveryId);
+    await markCompletionEnqueued(env, deliveryId);
 
-    expect(await readCompletionDelivery(env, "session-1", "message-1")).toBe("posted");
+    expect(await isCompletionPosted(env, deliveryId)).toBe(true);
+    expect(store.size).toBe(2);
   });
 
-  it("treats a ledger read failure as unavailable", async () => {
+  it("treats a marker read failure as not recorded", async () => {
     const env = envWith({
       get: vi.fn(async () => {
         throw new Error("kv down");
@@ -60,17 +72,18 @@ describe("completion delivery ledger", () => {
       put: vi.fn(async () => {}),
     } as unknown as KVNamespace);
 
-    expect(await readCompletionDelivery(env, "session-1", "message-1")).toBe("unavailable");
-    await recordCompletionEnqueued(env, "session-1", "message-1");
-    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+    expect(await isCompletionEnqueued(env, deliveryId)).toBe(false);
+    expect(await isCompletionPosted(env, deliveryId)).toBe(false);
+    await markCompletionEnqueued(env, deliveryId);
+    expect(env.SLACK_KV.put).toHaveBeenCalledOnce();
   });
 
-  it("keeps distinct messages distinct", async () => {
+  it("keeps distinct deliveries distinct", async () => {
     const { kv } = memoryKv();
     const env = envWith(kv);
 
-    await recordCompletionPosted(env, "session-1", "message-1");
+    await markCompletionPosted(env, deliveryId);
 
-    expect(await readCompletionDelivery(env, "session-1", "message-2")).toBe("missing");
+    expect(await isCompletionPosted(env, "completion:session-1:message-2")).toBe(false);
   });
 });

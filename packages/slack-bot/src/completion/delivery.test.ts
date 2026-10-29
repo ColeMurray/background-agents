@@ -509,7 +509,7 @@ describe("processSlackCompletion", () => {
     }
   );
 
-  it("skips a redelivered completion after Slack accepted the reply", async () => {
+  it("skips a redelivered completion with the same delivery id", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue({
       ...successfulAgentResponse(),
       mediaArtifacts: [],
@@ -521,30 +521,48 @@ describe("processSlackCompletion", () => {
       return Response.json({ ok: true });
     });
     const env = makeEnv();
-    const first = job();
-    const redelivered = job({ deliveryId: "22222222-2222-4222-8222-222222222222" });
+    const completion = job();
 
-    await expect(processSlackCompletion(first, env)).resolves.toEqual({ kind: "ack" });
-    await expect(processSlackCompletion(redelivered, env)).resolves.toEqual({ kind: "ack" });
+    await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "ack" });
+    await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "ack" });
 
     const posts = fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"));
     expect(posts).toHaveLength(1);
     expect(extractAgentResponse).toHaveBeenCalledTimes(1);
   });
 
-  it("posts again when Slack rejected the first reply", async () => {
+  it("does not dedupe a different delivery id", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      ...successfulAgentResponse(),
+      mediaArtifacts: [],
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("chat.postMessage")) {
+        return Response.json({ ok: true, channel: "C123", ts: "333.444" });
+      }
+      return Response.json({ ok: true });
+    });
+    const env = makeEnv();
+
+    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+    await expect(
+      processSlackCompletion(job({ deliveryId: "22222222-2222-4222-8222-222222222222" }), env)
+    ).resolves.toEqual({ kind: "ack" });
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"))
+    ).toHaveLength(2);
+  });
+
+  it("does not post again after Slack rejects the reply", async () => {
     vi.mocked(extractAgentResponse).mockResolvedValue({
       ...successfulAgentResponse(),
       textContent: "Finished.",
       mediaArtifacts: [],
     });
-    let attempts = 0;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       if (!String(input).includes("chat.postMessage")) return Response.json({ ok: true });
-      attempts += 1;
-      return attempts === 1
-        ? Response.json({ ok: false, error: "channel_not_found" })
-        : Response.json({ ok: true, channel: "C123", ts: "333.444" });
+      return Response.json({ ok: false, error: "channel_not_found" });
     });
     const env = makeEnv();
 
@@ -553,7 +571,59 @@ describe("processSlackCompletion", () => {
 
     expect(
       fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"))
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(extractAgentResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the reply when a concurrent delivery marks the completion posted during extraction", async () => {
+    let releaseSlowExtract: () => void = () => {};
+    let markSlowExtractStarted: () => void = () => {};
+    const slowExtractStarted = new Promise<void>((resolve) => {
+      markSlowExtractStarted = resolve;
+    });
+    vi.mocked(extractAgentResponse).mockImplementation(async () => {
+      if (vi.mocked(extractAgentResponse).mock.calls.length === 1) {
+        markSlowExtractStarted();
+        await new Promise<void>((resolve) => {
+          releaseSlowExtract = resolve;
+        });
+      }
+      return { ...successfulAgentResponse(), mediaArtifacts: [] };
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("chat.postMessage")) {
+        return Response.json({ ok: true, channel: "C123", ts: "333.444" });
+      }
+      return Response.json({ ok: true });
+    });
+    const env = makeEnv();
+    const completion = job();
+
+    const slow = processSlackCompletion(completion, env);
+    await slowExtractStarted;
+    await expect(processSlackCompletion(completion, env)).resolves.toEqual({ kind: "ack" });
+    releaseSlowExtract();
+    await expect(slow).resolves.toEqual({ kind: "ack" });
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("chat.postMessage"))
+    ).toHaveLength(1);
+  });
+
+  it("does not share media again after a share attempt", async () => {
+    const env = makeEnv();
+    vi.mocked(extractAgentResponse).mockResolvedValue(successfulAgentResponse());
+    vi.mocked(deliverMediaArtifacts).mockImplementation(async (input) => {
+      await input.onShareAttempt();
+      vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValue(new Response(null, { status: 404 }));
+      return { uploaded: 1, failed: 0, omitted: 0 };
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true }));
+
+    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+    await expect(processSlackCompletion(job(), env)).resolves.toEqual({ kind: "ack" });
+
+    expect(deliverMediaArtifacts).toHaveBeenCalledOnce();
   });
 
   it("still posts when the delivery ledger cannot be read", async () => {

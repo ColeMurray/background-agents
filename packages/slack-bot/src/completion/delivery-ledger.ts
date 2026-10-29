@@ -1,7 +1,6 @@
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import { slackCompletionDeliveryId } from "./job";
 
 const log = createLogger("completion-ledger");
 
@@ -13,86 +12,63 @@ const log = createLogger("completion-ledger");
 export const SLACK_COMPLETION_DELIVERY_TTL_MS = 24 * 60 * 60 * 1000;
 
 const LEDGER_KEY_PREFIX = "slack-completion-delivery:";
-const KV_KEY_MAX_BYTES = 512;
 
-export type CompletionDeliveryPhase = "missing" | "enqueued" | "posted" | "unavailable";
-
-function ledgerKey(sessionId: string, messageId: string): string | null {
-  const key = `${LEDGER_KEY_PREFIX}${slackCompletionDeliveryId(sessionId, messageId)}`;
-  if (new TextEncoder().encode(key).length > KV_KEY_MAX_BYTES) return null;
-  return key;
+function markerKey(deliveryId: string, phase: "enqueued" | "posted"): string {
+  return `${LEDGER_KEY_PREFIX}${phase}:${deliveryId}`;
 }
 
-function logKvFailure(
-  operation: "get" | "put",
-  sessionId: string,
-  messageId: string,
-  error: unknown
-): void {
+function logKvFailure(operation: "get" | "put", deliveryId: string, error: unknown): void {
   log.warn("slack.completion.ledger", {
     operation,
-    session_id: sessionId,
-    message_id: messageId,
+    delivery_id: deliveryId,
     outcome: "unavailable",
     error: error instanceof Error ? error : new Error(String(error)),
   });
 }
 
-/**
- * Best-effort lookup. KV has no compare-and-swap, so two deliveries that both
- * observe `missing` can still both post. A read failure is `unavailable` and
- * must not be treated as a recorded delivery.
- */
-export async function readCompletionDelivery(
+/** A read failure is not a recorded marker. KV has no compare-and-swap. */
+async function readMarker(
   env: Env,
-  sessionId: string,
-  messageId: string
-): Promise<CompletionDeliveryPhase> {
-  const key = ledgerKey(sessionId, messageId);
-  if (!key) return "unavailable";
+  deliveryId: string,
+  phase: "enqueued" | "posted"
+): Promise<boolean> {
   try {
-    const value = await createKvCacheStore(env.SLACK_KV).get(key);
-    if (value === "enqueued" || value === "posted") return value;
-    return "missing";
+    const value = await createKvCacheStore(env.SLACK_KV).get(markerKey(deliveryId, phase));
+    return value === "1";
   } catch (error) {
-    logKvFailure("get", sessionId, messageId, error);
-    return "unavailable";
+    logKvFailure("get", deliveryId, error);
+    return false;
   }
 }
 
-async function writePhase(
+/** Write-once. Each phase has its own key, so a later enqueue cannot clear a post. */
+async function writeMarker(
   env: Env,
-  sessionId: string,
-  messageId: string,
+  deliveryId: string,
   phase: "enqueued" | "posted"
 ): Promise<void> {
-  const key = ledgerKey(sessionId, messageId);
-  if (!key) return;
   try {
-    await createKvCacheStore(env.SLACK_KV).put(key, phase, {
+    await createKvCacheStore(env.SLACK_KV).put(markerKey(deliveryId, phase), "1", {
       ttlMs: SLACK_COMPLETION_DELIVERY_TTL_MS,
     });
   } catch (error) {
-    logKvFailure("put", sessionId, messageId, error);
+    logKvFailure("put", deliveryId, error);
   }
 }
 
-/** Records a queue handoff. Does not overwrite a marker that already exists. */
-export async function recordCompletionEnqueued(
-  env: Env,
-  sessionId: string,
-  messageId: string
-): Promise<void> {
-  const current = await readCompletionDelivery(env, sessionId, messageId);
-  if (current !== "missing") return;
-  await writePhase(env, sessionId, messageId, "enqueued");
+export async function isCompletionEnqueued(env: Env, deliveryId: string): Promise<boolean> {
+  return readMarker(env, deliveryId, "enqueued");
 }
 
-/** Called only after Slack confirms the completion reply was posted. */
-export async function recordCompletionPosted(
-  env: Env,
-  sessionId: string,
-  messageId: string
-): Promise<void> {
-  await writePhase(env, sessionId, messageId, "posted");
+export async function markCompletionEnqueued(env: Env, deliveryId: string): Promise<void> {
+  await writeMarker(env, deliveryId, "enqueued");
+}
+
+export async function isCompletionPosted(env: Env, deliveryId: string): Promise<boolean> {
+  return readMarker(env, deliveryId, "posted");
+}
+
+/** Called when publication starts and the job will not be replayed. */
+export async function markCompletionPosted(env: Env, deliveryId: string): Promise<void> {
+  await writeMarker(env, deliveryId, "posted");
 }

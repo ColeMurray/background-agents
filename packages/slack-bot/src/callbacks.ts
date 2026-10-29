@@ -7,7 +7,11 @@ import { TOKEN_VALIDITY_MS, verifyCallbackFromControlPlane } from "@open-inspect
 import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { readCompletionDelivery, recordCompletionEnqueued } from "./completion/delivery-ledger";
+import {
+  isCompletionEnqueued,
+  isCompletionPosted,
+  markCompletionEnqueued,
+} from "./completion/delivery-ledger";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
@@ -199,8 +203,11 @@ async function enqueueCompletion(
   if (await isThreadSessionClosed(c.env, job.channel, job.threadTs, job.sessionId)) {
     return c.json({ ok: true });
   }
-  const delivery = await readCompletionDelivery(c.env, job.sessionId, job.messageId);
-  if (delivery === "enqueued" || delivery === "posted") {
+  const [posted, enqueued] = await Promise.all([
+    isCompletionPosted(c.env, job.deliveryId),
+    isCompletionEnqueued(c.env, job.deliveryId),
+  ]);
+  if (posted || enqueued) {
     log.info("slack.completion.enqueue", {
       trace_id: job.traceId,
       delivery_id: job.deliveryId,
@@ -225,7 +232,7 @@ async function enqueueCompletion(
     });
     return c.json({ error: "completion enqueue failed" }, 503);
   }
-  await recordCompletionEnqueued(c.env, job.sessionId, job.messageId);
+  await markCompletionEnqueued(c.env, job.deliveryId);
 
   log.info("http.request", {
     trace_id: job.traceId,

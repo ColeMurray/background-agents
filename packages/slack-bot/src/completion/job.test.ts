@@ -39,23 +39,24 @@ describe("slackCompletionDeliveryId", () => {
 });
 
 describe("slackCompletionJobSchema", () => {
-  it("accepts a derived id and a legacy uuid", () => {
+  it("accepts the derived delivery id", () => {
     const derived = createSlackCompletionJob(jobInput());
     expect(slackCompletionJobSchema.parse(derived)).toMatchObject({
       deliveryId: "completion:session-1:message-1",
     });
+  });
+
+  it("accepts any non-empty delivery id and rejects an empty one", () => {
+    const derived = createSlackCompletionJob(jobInput());
     expect(
       slackCompletionJobSchema.safeParse({
         ...derived,
         deliveryId: "11111111-1111-4111-8111-111111111111",
       }).success
     ).toBe(true);
-  });
-
-  it("rejects an unrelated delivery id", () => {
-    const derived = createSlackCompletionJob(jobInput());
     expect(
       slackCompletionJobSchema.safeParse({ ...derived, deliveryId: "not-a-delivery" }).success
-    ).toBe(false);
+    ).toBe(true);
+    expect(slackCompletionJobSchema.safeParse({ ...derived, deliveryId: "" }).success).toBe(false);
   });
 });

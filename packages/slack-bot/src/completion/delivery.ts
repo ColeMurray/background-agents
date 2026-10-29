@@ -6,27 +6,12 @@ import { createLogger } from "../logger";
 import { requirePublicationAccess } from "../sessions/control-plane-client";
 import { isThreadSessionClosed } from "../sessions/thread-session-store";
 import { buildCompletionBlocks, truncateError } from "./blocks";
-import { readCompletionDelivery, recordCompletionPosted } from "./delivery-ledger";
+import { isCompletionPosted, markCompletionPosted } from "./delivery-ledger";
 import { extractAgentResponse } from "./extractor";
 import type { SlackCompletionJob } from "./job";
 import { deliverMediaArtifacts } from "./media-upload";
 
 const log = createLogger("completion-delivery");
-
-/**
- * Transport and parse failures can mean Slack already accepted `chat.postMessage`.
- * A named Slack API error means the reply was not posted.
- */
-function slackTextPostMayHaveLanded(error: string): boolean {
-  return (
-    error === "network_error" ||
-    error === "delivery_unknown" ||
-    error === "timeout" ||
-    error === "cancelled" ||
-    error === "invalid_response" ||
-    /^http_5\d\d$/.test(error)
-  );
-}
 
 /**
  * Sentinel an agent emits as its entire final message to decline replying in
@@ -87,11 +72,19 @@ export async function processSlackCompletion(
   };
   let shouldClearReaction = false;
   let publicationAttempted = false;
-  let textPostAttempted = false;
+  let publicationMarker: Promise<void> | undefined;
+
+  // The marker matches the point after which this job acks and is never replayed.
+  const markPublication = (): Promise<void> => {
+    publicationAttempted = true;
+    publicationMarker ??= markCompletionPosted(env, job.deliveryId);
+    return publicationMarker;
+  };
 
   const ackPostedDuplicate = async (): Promise<boolean> => {
-    if ((await readCompletionDelivery(env, job.sessionId, job.messageId)) !== "posted")
-      return false;
+    // This attempt already owns the marker; a re-check would skip its own reply.
+    if (publicationAttempted) return false;
+    if (!(await isCompletionPosted(env, job.deliveryId))) return false;
     log.info("slack.completion.duplicate", { ...base, outcome: "skipped" });
     shouldClearReaction = true;
     return true;
@@ -123,9 +116,7 @@ export async function processSlackCompletion(
         threadTs: job.threadTs,
         artifacts: mediaArtifacts,
         traceId: job.traceId,
-        onShareAttempt: () => {
-          publicationAttempted = true;
-        },
+        onShareAttempt: () => markPublication(),
       });
       unavailableMedia = mediaResult.failed + mediaResult.omitted;
       if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
@@ -145,36 +136,27 @@ export async function processSlackCompletion(
       });
       if (await ackPostedDuplicate()) return { kind: "ack" };
       await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
-      publicationAttempted = true;
-      textPostAttempted = true;
-      const failurePost = await postMessage(
-        env.SLACK_BOT_TOKEN,
-        job.channel,
-        `The agent failed: ${displayError}`,
-        {
-          thread_ts: job.threadTs,
-          blocks: [
-            {
-              type: "section",
-              text: { type: "mrkdwn", text: `:x: *Agent failed:* ${displayError}` },
-            },
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  text: { type: "plain_text", text: "View Session" },
-                  url: `${env.WEB_APP_URL}/session/${job.sessionId}`,
-                  action_id: "view_session",
-                },
-              ],
-            },
-          ],
-        }
-      );
-      if (failurePost.ok || slackTextPostMayHaveLanded(failurePost.error)) {
-        await recordCompletionPosted(env, job.sessionId, job.messageId);
-      }
+      await markPublication();
+      await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
+        thread_ts: job.threadTs,
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: `:x: *Agent failed:* ${displayError}` },
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "View Session" },
+                url: `${env.WEB_APP_URL}/session/${job.sessionId}`,
+                action_id: "view_session",
+              },
+            ],
+          },
+        ],
+      });
       return { kind: "ack" };
     }
 
@@ -205,8 +187,7 @@ export async function processSlackCompletion(
     // Without top-level text, Slack derives screen-reader text from the blocks.
     if (await ackPostedDuplicate()) return { kind: "ack" };
     await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
-    publicationAttempted = true;
-    textPostAttempted = true;
+    await markPublication();
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
     });
@@ -217,12 +198,8 @@ export async function processSlackCompletion(
         slack_error: postResult.error,
         retry_after: postResult.retryAfter,
       });
-      if (slackTextPostMayHaveLanded(postResult.error)) {
-        await recordCompletionPosted(env, job.sessionId, job.messageId);
-      }
       return { kind: "ack" };
     }
-    await recordCompletionPosted(env, job.sessionId, job.messageId);
 
     if (
       unavailableMedia > 0 &&
@@ -256,8 +233,7 @@ export async function processSlackCompletion(
       duration_ms: Date.now() - startTime,
     });
     if (!publicationAttempted) shouldClearReaction = false;
-    // The Slack call may have landed even though its result never came back.
-    if (textPostAttempted) await recordCompletionPosted(env, job.sessionId, job.messageId);
+    if (publicationMarker) await publicationMarker;
     return {
       kind:
         publicationAttempted || (error instanceof ProtectedReadError && error.kind === "denied")

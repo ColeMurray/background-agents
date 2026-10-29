@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
-import { recordCompletionPosted } from "./completion/delivery-ledger";
+import { markCompletionPosted } from "./completion/delivery-ledger";
 import { slackCompletionDeliveryId } from "./completion/job";
 import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { Env } from "./types";
@@ -841,7 +841,7 @@ describe("POST /callbacks/complete", () => {
 
   it("does not enqueue when that completion was already posted", async () => {
     const env = makeEnv({ SLACK_KV: memoryKv() });
-    await recordCompletionPosted(env, "session-1", "message-1");
+    await markCompletionPosted(env, slackCompletionDeliveryId("session-1", "message-1"));
     const payload = await signPayload(completeCallbackData());
 
     const { response } = await postCallback("/callbacks/complete", payload, env);
