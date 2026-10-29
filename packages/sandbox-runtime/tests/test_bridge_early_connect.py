@@ -558,8 +558,8 @@ class TestConnectSnapshot:
     async def test_ready_names_a_prompt_that_finishes_while_the_reconnect_flushes(
         self, tmp_path, monkeypatch
     ):
-        """The prompt's terminal is selected but not yet handed to the forwarder
-        when the flushed backlog lets ``ready`` go out; it must still be named."""
+        """The prompt finishes while the reconnect flushes its backlog: its
+        terminal joins the forwarder behind it, and ``ready`` must still name it."""
         harness = OpeningHarness([])
         bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
         _write_lines(HARNESS_COMPLETED)
@@ -606,6 +606,55 @@ class TestConnectSnapshot:
                 break
             if event["type"] == "ready":
                 assert event["activeMessageId"] == "msg-x"
+
+    async def test_ready_names_a_prompt_whose_result_has_not_reached_the_forwarder(
+        self, tmp_path, monkeypatch
+    ):
+        """The supervisor has selected the prompt's terminal, but its delivery has
+        not handed it to the forwarder when ``ready`` goes out. The prompt must
+        still be named, or the control plane would fail a prompt whose result
+        is on its way."""
+        harness = OpeningHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        _write_lines(HARNESS_COMPLETED)
+        bridge.event_forwarder.send = AsyncMock()
+        await bridge.boot_attach._relay_boot_events()
+        forward = bridge.event_forwarder.__class__.send.__get__(bridge.event_forwarder)
+        selected = asyncio.Event()
+        hand_over = asyncio.Event()
+
+        async def send(event: dict, **kwargs) -> bool:
+            if event["type"] == "execution_complete":
+                selected.set()
+                await hand_over.wait()
+            return await forward(event, **kwargs)
+
+        bridge.event_forwarder.send = send
+
+        async def finished_prompt() -> dict:
+            return {"type": "execution_complete", "messageId": "msg-x", "success": True}
+
+        bridge.activity.start_prompt("msg-x", finished_prompt)
+        await asyncio.wait_for(selected.wait(), timeout=1)
+        assert bridge.activity.current_prompt_message_id is None
+        assert bridge.event_forwarder.unacknowledged_message_ids("execution_complete") == []
+        ws = self._connect(bridge, monkeypatch)
+
+        await bridge._connect_and_run()
+
+        assert [(event["type"], event["activeMessageId"]) for event in ws.sent] == [
+            ("ready", "msg-x")
+        ]
+
+        hand_over.set()
+
+        async def handed_over() -> None:
+            while bridge.activity.undelivered_terminal_message_ids():
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(handed_over(), timeout=1)
+        assert bridge.event_forwarder.unacknowledged_message_ids("execution_complete") == ["msg-x"]
+        assert bridge._build_ready_event()["activeMessageId"] == "msg-x"
 
     @pytest.mark.parametrize(
         ("build_harness", "reports"),
