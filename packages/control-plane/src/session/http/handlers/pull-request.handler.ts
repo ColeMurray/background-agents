@@ -110,7 +110,7 @@ export class PullRequestHandler {
         repoOwner: target.repoOwner,
         repoName: target.repoName,
         promptingUserId: promptingParticipant.user_id,
-        resolvePromptingAuth: () => this.participants.resolveAuthForPR(promptingParticipant),
+        resolvePromptingAuth: promptingParticipantResult.resolveAuth,
         sessionUrl: this.getSessionUrl(session),
         draft: body.draft,
       },

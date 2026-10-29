@@ -171,7 +171,11 @@ export function AutomationsList({
                     <AutomationStatusBadge automation={automation} />
                   </Link>
                   <div className="relative z-10 shrink-0">
-                    <ExecutionActivity executions={automation.recentExecutions} />
+                    <ExecutionActivity
+                      executions={automation.recentExecutions}
+                      href={navigation.detail(automation.id)}
+                      automationName={automation.name}
+                    />
                   </div>
                 </div>
                 <div className="relative z-10 hidden flex-shrink-0 items-center gap-1 sm:flex">

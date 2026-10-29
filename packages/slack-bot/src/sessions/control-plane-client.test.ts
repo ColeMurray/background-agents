@@ -222,6 +222,25 @@ describe("control plane client request payloads", () => {
     expect(parseRequestBody(fetch)).not.toHaveProperty("visibility");
   });
 
+  it.each([true, undefined])(
+    "marks a direct message only when asked (%s)",
+    async (directMessage) => {
+      const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        okJson({ sessionId: "s1", status: "created" })
+      );
+      await createSession(makeEnv(fetch), {
+        target,
+        harness: "opencode",
+        model: "openai/gpt-5.4",
+        directMessage,
+      });
+      const body = parseRequestBody(fetch);
+      if (directMessage) expect(body).toMatchObject({ directMessage: true });
+      else expect(body).not.toHaveProperty("directMessage");
+      expect(body).not.toHaveProperty("includePersonalMemories");
+    }
+  );
+
   it.each([
     [403, { code: "session_action_denied", reason_code: "not_member" }],
     [403, { code: "not_member" }],

@@ -27,26 +27,22 @@ export interface SessionMemorySelectorDeps {
   preferences: Pick<MemoryPreferenceStore, "get">;
   /** Bounded selection candidates from the memory records. */
   records: Pick<MemoryRecordStore, "listCandidates">;
-  /** Whether the session principal may read each shared partition. */
+  /** Whether the session principal may read each partition. */
   access: Pick<SessionMemoryAccessPolicy, "check">;
 }
 
 /**
- * Chooses the memories a new root session pins. Shared partitions the principal cannot read are
- * omitted — memory never decides whether a session can exist; that is `authorizeSessionTarget`'s
- * job. Children copy their parent's selection instead, so later preferences or grants cannot
- * widen delegated context.
+ * Chooses the memories a new root session pins. Partitions the principal cannot read, including a
+ * personal store whose owner lacks `memories.manage_own`, are omitted — memory never decides
+ * whether a session can exist; that is `authorizeSessionTarget`'s job. Children copy their
+ * parent's selection instead, so later preferences or grants cannot widen delegated context.
  */
 export class SessionMemorySelector {
   constructor(private readonly deps: SessionMemorySelectorDeps) {}
 
   async select(request: SessionMemorySelectionRequest): Promise<SessionMemorySelection> {
-    const owner = request.principal.userId;
-    const include =
-      request.includePersonalMemories ??
-      (owner ? (await this.deps.preferences.get(owner)).includePersonalMemories : false);
     const sources: MemorySources = {
-      personalOwnerUserId: include ? owner : null,
+      personalOwnerUserId: await this.readablePersonalOwner(request),
       repositories: await this.readableRepositories(request),
       environmentId: await this.readableEnvironment(request),
     };
@@ -54,6 +50,18 @@ export class SessionMemorySelector {
       sourcePartitions(sources)
     );
     return selectWithinBudget(candidates, sources, omittedCount);
+  }
+
+  /** The principal, when personal memory is included and its owner may still use it. */
+  private async readablePersonalOwner(request: SessionMemorySelectionRequest) {
+    const owner = request.principal.userId;
+    if (!owner) return null;
+    const include =
+      request.includePersonalMemories ??
+      (await this.deps.preferences.get(owner)).includePersonalMemories;
+    return include && (await this.canRead(request, { type: "personal", userId: owner }))
+      ? owner
+      : null;
   }
 
   /** Repositories with a stable ID whose memories the principal may read. */

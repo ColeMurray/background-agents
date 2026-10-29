@@ -20,35 +20,142 @@ providers configured by the deployment operator.
 Signing in has two stages:
 
 1. Your identity provider verifies your identity and email address.
-2. The deployment's admission rules determine whether you may join the workspace.
+2. The additive union of deployment and workspace-managed admission rules determines whether you may
+   join the workspace.
 
-Depending on the deployment configuration, admission can be limited by:
+Admission can be limited by:
 
 - GitHub username
 - Verified email address
 - Verified email domain
 - Active membership in an allowed GitHub organization
 
-These rules are checked when you sign in. Removing someone from an allowlist or GitHub organization
-does not end an existing browser session; an Administrator or Owner can suspend the member when
-access must be revoked immediately.
+Any matching rule admits the identity. Email rules use verified provider evidence, including
+verified secondary GitHub emails; an exact domain does not include its subdomains. GitHub usernames
+and organizations apply only to GitHub sign-in, and GitHub still requires a verified email even when
+one of those rules matches. An organization match requires active membership.
+
+These rules are checked when you sign in and on other operations that recheck eligibility, such as
+internal GitHub account-info resolution. Removing someone from an allowlist or GitHub organization
+does not end an ordinary existing browser session; an Administrator or Owner can suspend the member
+when access must be revoked. See [Suspension](#suspension) for live-connection timing and
+limitations.
 
 Authentication does not make someone an Owner or Administrator. Every admitted user has exactly one
 workspace role, and new users receive the Member role by default.
 
+### Sign-In Allowlist
+
+Active built-in Owners and Administrators manage rules at **Settings > Workspace access > Who can
+sign in**. Custom roles, even with member-management permission, cannot read or edit this policy.
+The policy covers browser sign-in and creation of new accounts through bot enrollment using the
+evidence described below. The member directory, general bot invocation restrictions, integration
+trigger restrictions, and resource authorization remain separate controls. Adding a rule itself
+sends no invitation and creates no member.
+
+The editor lists every rule as one plain-language line (for example, "Anyone with an @example.com
+email"). Type an email, domain, or GitHub name into the single add field; the editor infers the rule
+type and asks whether a bare name is a GitHub user or organization. Rules marked with a lock come
+from the deployment; the lock tooltip names the source variable. Deployment rules come from
+`ALLOWED_EMAILS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_USERS` (GitHub usernames), and
+`ALLOWED_GITHUB_ORGS`, or the corresponding Terraform `allowed_*` inputs. They are read-only in the
+UI. Settings rules are persisted in the global SQL store and survive deployments. Both sources are
+combined with OR semantics: neither overwrites or subtracts from the other. Removing a settings copy
+cannot narrow a deployment grant or negate an overlapping broad grant. Terraform changes cannot
+remove a persisted settings grant.
+
+Managed rules are normalized and deduplicated, with **50 total rules**, including at most **10
+GitHub organizations**, and a **64-KiB** PUT request cap at both proxy and control plane. New
+managed values use strict ASCII email, exact DNS domain (punycode for international domains), or
+bare GitHub login syntax. Existing deployment syntax remains supported. The effective organization
+growth check preserves large existing baselines and allows reductions/unrelated edits without adding
+further over-limit fan-out. Saving performs syntax validation, not DNS or membership verification.
+
+Review additions/removals before saving. Domain and organization rules admit matching people who are
+not already members. The review warns about overlapping grants and existing sessions, but does not
+enumerate all affected people or guarantee recovery-account reachability. Conflicts and unknown save
+outcomes require an explicit reload and draft review, not automatic retry. Discard confirms; browser
+unload warns about unsaved changes, but arbitrary in-app navigation is not blocked.
+
+The deployment must still have a compatible baseline for every enabled provider; managed rules do
+not satisfy Terraform's safety gates or rescue invalid runtime configuration. Keep an exact verified
+recovery administrator email in `allowed_emails` / `ALLOWED_EMAILS`, with unsafe mode disabled.
+Google requires email/domain rules; GitHub also supports username/organization rules. An empty
+deployment baseline managed entirely through the UI is not supported.
+
+`UNSAFE_ALLOW_ALL_USERS=true` only allows any otherwise valid identity when **all effective lists
+are empty**. Nonempty managed or deployment rules keep it dormant. Whenever the flag is true, the
+editor is read-only and the server rejects mutations. To enable secure editing, deploy a recovery
+baseline and disable unsafe mode together, then verify that account's login/role.
+
+Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero. Owners
+and Administrators can edit them as soon as the backend serves the settings routes. The frontend may
+deploy independently first; missing backend routes show unavailable.
+
+### Policy Safety and Audit
+
+Management uses human-authorized `GET`/`PUT /settings/admission-policy` through the signed
+`/api/settings/admission-policy` web proxy. PUT requires `If-Match` for the reviewed revision and
+deployment fingerprint. Actor role/status and revision are checked in the mutation transaction;
+required audit failure prevents the write. Applied writes advance revision; no-ops do not.
+Environment fingerprints do not serialize concurrent deployment versions.
+
+The new browser PUT route requires **exactly `Sec-Fetch-Site: same-origin`**. Missing, `same-site`,
+`cross-site`, and `none` are rejected. It does not trust `Host` or forwarded-host headers and needs
+no new environment variable. Responses are private/no-store.
+
+The operation audit action is `workspace.admission_policy_updated`. Its metadata includes managed
+`before`/`after`, `requested: { expectedRevision }`, current/result revision, and deployment hash,
+not another full requested rule document. The 50-rule limit keeps normal before/after metadata under
+30 KiB, about 3 MB for 100 such audit events before response overhead. Rule values include emails
+and are visible to authorized `workspace.audit.read` holders.
+
+Each admission evaluation reads the current SQL policy; cached auth runtimes do not cache managed
+rules. An evaluation already holding an older snapshot may finish under it. A missing, malformed, or
+unreadable policy fails admission closed even for a deployment-matching recovery account. There is
+no environment-only or unsafe-mode fallback on database failure.
+
+### Authentication Time Budgets
+
+GitHub organization evaluation uses at most **four concurrent checks** under **one total 10-second
+deadline**, including queued checks and response bodies. Any active membership can win without
+waiting for earlier slow checks; four stalled requests can still occupy the pool until the deadline.
+Earlier username/email/domain matches skip org calls. Adding org rules requests no new OAuth scopes
+or `read:org`; the GitHub App flow uses App permissions and the user's token. Configure and approve
+Organization Members read-only permission as needed; saving a rule does not validate those rights.
+
+Browser OAuth callbacks have a **240-second** application proxy transport budget: GitHub verified
+email pagination can consume roughly **200 seconds** (10 pages, up to two 10-second attempts per
+page), plus organization checks, token exchange, and persistence. The Next.js auth route declares
+**`maxDuration = 300` seconds**; ordinary resource/non-callback transport retains its **15-second**
+default. Hosting platform/function and ingress caps still apply and can end requests earlier.
+Provider token exchange currently has no explicit bound inside the auth library; the proxy bounds
+its own wait, not guaranteed cancellation of provider work. These settings are not evidence of
+successful real-provider or hosting validation; verify them in the target deployment.
+
 ### Bot enrollment
 
-Creating a new user through a bot also requires deployment admission. Slack and Linear must provide
-an attested email that matches `ALLOWED_EMAILS` or `ALLOWED_EMAIL_DOMAINS`. Unsafe allow-all applies
-only when no allowlists are configured. Bots cannot prove GitHub username or organization rules;
-people admitted by those rules must sign in on the web first and use the matching account email in
-Slack or Linear. GitHub bot profile emails are not admission evidence; GitHub actors must already be
-known unless unsafe allow-all is effective.
+Creating a new user through a bot also requires admission against the effective union of deployment
+and SQL-managed rules. Slack and Linear must provide an attested email matching an effective exact
+email or domain rule: `ALLOWED_EMAILS` / `ALLOWED_EMAIL_DOMAINS` plus their settings-managed
+counterparts. New-account admission reads the current managed policy; an unreadable or malformed
+policy fails closed, not back to deployment-only rules. Unsafe allow-all applies only when all four
+effective lists across both sources are empty. It does not waive Slack/Linear's attested-email
+requirement.
+
+Bots cannot prove GitHub username or organization rules; people admitted by those rules must sign in
+on the web first and use the matching account email in Slack or Linear. GitHub bot profile emails
+are not verified admission evidence and cannot be used to link an unknown actor by email. GitHub
+actors must already be known unless unsafe allow-all is effective; a GitHub username or organization
+rule cannot enroll an unknown GitHub bot actor.
 
 Known actors and actors linking to an existing account by attested email keep that account's role
 and suspension without repeating admission. A denied new enrollment creates no account or role.
 Newly admitted users still receive Member. New Slack and Linear actors without an attested email
-cannot enroll, including Slack Connect users whose emails the bot cannot read.
+cannot enroll, including Slack Connect users whose emails the bot cannot read, even in unsafe mode.
+Removing a rule does not revoke existing bot accounts or turn each bot invocation into a new
+admission check. Suspension, role permissions, service operation limits, and integration ingress
+restrictions still apply; linking to an existing account cannot bypass them.
 
 Admission does not establish that two different emails belong to the same person. If both emails
 pass admission, separate accounts can still be created; use the member merge tool to consolidate
@@ -170,6 +277,25 @@ access, and lifecycle operations need lifecycle permission. Deleting a team-owne
 session when enforcement is `on`, also requires session ownership, owning-team lead status, or a
 workspace Owner/Administrator role. Only the session owner or a workspace Owner can change private
 visibility. Leading a team does not grant access to its private sessions.
+
+### Personal Memory in Sessions
+
+Session access and personal memory are separate. However many people can read or prompt a session,
+its owner's personal memories serve only the owner's own prompts. On anyone else's prompt the agent
+cannot search, read, or save them, and once anyone else has prompted the session, personal memory
+search stays off there and in its children for good, because that prompt can leave something running
+in the sandbox. The session's memory sidebar lists personal items only for the owner. New automation
+runs, manual ones included, and new sessions started from Slack channels, Linear, or GitHub don't
+include personal memory. Sessions started earlier keep what they pinned but no longer read it live.
+Sessions also leave personal memory out while its owner lacks `memories.manage_own`.
+
+Two things still reach beyond the owner's prompts. The personal directives and catalog pinned when
+the session started shape every prompt, whoever wrote it, though they give no one else's prompt live
+access to the personal store. Agent replies built from personal memory remain visible to everyone
+who can read the session. Sandbox access is trusted like the session's other credentials: anyone who
+can open its terminal, editor, or desktop can do what its agent can, including reaching the owner's
+personal memories while the owner's prompts run. See
+[Personal memory follows the owner's prompts](MEMORY.md#personal-memory-follows-the-owners-prompts).
 
 ### Team Defaults and Migration
 
@@ -459,6 +585,7 @@ their own role, they can:
 - Review workspace members and assigned roles
 - Change a member's role
 - Suspend or restore a member
+- Manage additive sign-in allowlist rules separately from existing members
 
 Only an Owner can assign or remove the Owner role or suspend and restore another Owner. The final
 active Owner cannot be suspended or demoted.
@@ -469,6 +596,63 @@ The first person who signs in receives the default Member role and is not promot
 automatically. On a new deployment, the intended Owner must sign in once, after which a deployment
 operator runs the Owner bootstrap command using that person's Open-Inspect user ID. See
 [Getting Started](GETTING_STARTED.md#step-9-bootstrap-the-workspace-owner) for the deployment steps.
+
+From a repository checkout with Node.js 24+, select exactly one database target. D1 commands use
+remote Wrangler credentials (`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` or `wrangler login`).
+SQLite commands require an existing global database file; they never create one. The canonical user
+ID is 32 lowercase hexadecimal characters, not an email address or GitHub login.
+
+```bash
+# Remote D1: preview, execute after review, then verify no-op.
+node scripts/bootstrap-workspace-owner.ts --database <D1-name> --user <canonical-user-id>
+node scripts/bootstrap-workspace-owner.ts --database <D1-name> --user <canonical-user-id> --execute
+node scripts/bootstrap-workspace-owner.ts --database <D1-name> --user <canonical-user-id>
+
+# SQLite alternative: preview, then execute after review.
+node scripts/bootstrap-workspace-owner.ts --sqlite /path/to/existing/global.db --user <canonical-user-id>
+node scripts/bootstrap-workspace-owner.ts --sqlite /path/to/existing/global.db --user <canonical-user-id> --execute
+```
+
+Bootstrap refuses suspended/nonexistent targets or another active Owner. It does not bypass normal
+ownership administration or suspension. Its result-bearing SQL runner uses
+`wrangler d1 execute --remote --command ... --json` for remote D1 rather than file import; SQLite
+writes use `BEGIN IMMEDIATE`. Mutation and audit proof are performed together.
+
+### Rollback and Recovery
+
+Rolling back to old code that ignores managed rules drops every managed grant. Before such a
+rollback, stop concurrent deployments, baseline edits, and Settings policy edits, and
+disable/control automated rollback. Nothing locks the editor or deployment configuration for you.
+
+While still on new code, reload Settings, discard any unsaved draft, and copy the managed rules;
+protect the copy as sensitive data. If Settings is unavailable, a signed-in Owner or Administrator
+can open `/api/settings/admission-policy` on the web app for the same snapshot, or you can read the
+rules from the database:
+
+```bash
+npx wrangler d1 execute <D1-name> --remote --json \
+  --command "SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1"
+```
+
+Both direct reads report the policy `revision`; record it with the copy. The copy does not include
+the deployment baseline: separately retrieve the actual serving baseline, normalize and union each
+list with the managed rules, and deploy that complete union with unsafe mode false. Verify the
+deployed union, provider compatibility, and intended login eligibility. Immediately before old-code
+rollback, reload Settings (or repeat the direct read) and confirm the managed rules, any recorded
+revision, and the deployed union are unchanged. Stop if anything drifted.
+
+Only after those checks should old code serve traffic. Retain the policy table and audit history. A
+frontend-only rollback leaves backend enforcement intact; restore a compatible editor to change
+managed rules.
+
+For a policy mistake, deploy a known valid recovery email in the baseline with unsafe mode false,
+then verify login and active administrative role. A corrupted/unavailable policy needs database
+repair or restore first. Do not delete the singleton or enable allow-all as recovery. Baseline
+copies added for rollback remain until deliberately removed by a later reviewed deployment.
+
+See [container operations](CONTROL_PLANE_CONTAINER.md#sign-in-allowlist-operations) for access to
+the actual SQLite volume. These procedures are not claims that rollout or live-provider verification
+has already been completed.
 
 ## Related Guides
 

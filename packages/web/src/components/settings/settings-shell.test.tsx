@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Profiler } from "react";
 import { renderToString } from "react-dom/server";
 import { hydrateRoot } from "react-dom/client";
@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS_CATEGORY } from "./settings-nav";
 import { SettingsShell } from "./settings-shell";
 import { useSettingsIsMobile } from "./settings-viewport-context";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
+import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 expect.extend(matchers);
 
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   tab: "",
   permissions: [] as string[],
   replace: vi.fn(),
+  push: vi.fn(),
   canEditTeam: false,
   teamsError: false,
   teamsLoading: false,
@@ -32,7 +34,7 @@ const SHELL_FIXTURE_DEFAULTS = {
 
 vi.mock("next/navigation", () => ({
   usePathname: () => mocks.pathname,
-  useRouter: () => ({ push: vi.fn(), replace: mocks.replace }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
   useSearchParams: () => new URLSearchParams(`tab=${mocks.tab}`),
 }));
 
@@ -59,6 +61,7 @@ beforeEach(() => {
   mocks.teamsError = false;
   mocks.teamsLoading = false;
   mocks.replace.mockClear();
+  mocks.push.mockClear();
   vi.stubGlobal("matchMedia", () => ({
     matches: mocks.isMobile,
     addEventListener: vi.fn(),
@@ -68,10 +71,61 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("SettingsShell", () => {
+  it("does not let a dirty editor block a permission-driven redirect", () => {
+    mocks.tab = "workspace";
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    function Editor() {
+      useSettingsUnsavedChanges(true);
+      return <div>Unsaved editor</div>;
+    }
+    const { rerender } = render(
+      <SettingsShell>
+        <Editor />
+      </SettingsShell>
+    );
+    mocks.permissions = [];
+    rerender(
+      <SettingsShell>
+        <Editor />
+      </SettingsShell>
+    );
+    expect(mocks.replace).toHaveBeenCalledWith("/settings?tab=appearance");
+    expect(screen.queryByText("Unsaved editor")).not.toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("confirms desktop category navigation and clears the guard when the editor unmounts", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    function Editor() {
+      useSettingsUnsavedChanges(true);
+      return <div>Unsaved editor</div>;
+    }
+    const { rerender } = render(
+      <SettingsShell>
+        <Editor />
+      </SettingsShell>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.getByText("Unsaved editor")).toBeInTheDocument();
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(mocks.push).toHaveBeenCalledWith("/settings?tab=models");
+
+    rerender(<SettingsShell>Other settings</SettingsShell>);
+    confirm.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("renders only the mobile child tree on a fresh client mount", () => {
     mocks.isMobile = true;
     const viewports: boolean[] = [];

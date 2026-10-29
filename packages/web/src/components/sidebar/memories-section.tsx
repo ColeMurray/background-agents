@@ -81,18 +81,27 @@ function MemoryRow({ item }: { item: MemoryItem }) {
   );
 }
 
-/** Inspect the bounded pinned selection grouped by scope, with live drift/archive notices. */
+/**
+ * Inspect the bounded pinned selection grouped by scope, with live drift/archive notices. The
+ * session owner's personal memories are listed only for them; other viewers see how many.
+ */
 export function MemoriesSection({ sessionId }: { sessionId: string }) {
   const { diagnostics, loading, error } = useSessionMemories(sessionId);
   if (loading) return <p className="text-xs text-muted-foreground">Loading memories…</p>;
   if (error) return <p className="text-xs text-muted-foreground">Memories unavailable.</p>;
   if (!diagnostics) return null;
   const groups = groupByScope(diagnostics.items);
+  const { hiddenPersonalCount } = diagnostics;
   return (
-    <CollapsibleSection title={`Memories (${diagnostics.items.length})`} defaultOpen={false}>
+    <CollapsibleSection
+      title={`Memories (${diagnostics.items.length + hiddenPersonalCount})`}
+      defaultOpen={false}
+    >
       <TooltipProvider delayDuration={150}>
         <div className="space-y-3 text-xs">
-          {groups.length === 0 && <p className="text-muted-foreground">No memories were loaded.</p>}
+          {groups.length === 0 && hiddenPersonalCount === 0 && (
+            <p className="text-muted-foreground">No memories were loaded.</p>
+          )}
           {groups.map((group) => (
             <div key={memoryScopeDisplayKey(group.scope)}>
               <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-secondary-foreground">
@@ -105,6 +114,16 @@ export function MemoriesSection({ sessionId }: { sessionId: string }) {
               </ul>
             </div>
           ))}
+          {hiddenPersonalCount > 0 && (
+            <div>
+              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-secondary-foreground">
+                Personal · {hiddenPersonalCount}
+              </p>
+              <p className="text-muted-foreground">
+                The session owner&apos;s personal memories aren&apos;t listed here.
+              </p>
+            </div>
+          )}
           <p className="text-[10px] text-muted-foreground">
             ~{formatTokens(diagnostics.estimatedTokens)} tokens · personal{" "}
             {diagnostics.includePersonalMemories ? "included" : "excluded"}

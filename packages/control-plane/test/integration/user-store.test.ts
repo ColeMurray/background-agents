@@ -194,7 +194,7 @@ describe("UserStore", () => {
         displayName: "Alice",
       });
 
-      expect(result.isNew).toBe(true);
+      expect(result.outcome).toBe("created");
       expect(result.displayName).toBe("Alice");
       expect(result.email).toBeNull();
 
@@ -217,7 +217,7 @@ describe("UserStore", () => {
         providerEmail: "Alice@Example.COM",
       });
 
-      expect(result.isNew).toBe(true);
+      expect(result.outcome).toBe("created");
       expect(result.email).toBe("alice@example.com");
 
       const user = await store.getUserById(result.id);
@@ -282,49 +282,34 @@ describe("UserStore", () => {
       expect(user!.emailVerified).toBe(false);
     });
 
-    it("carries attestation through the late email backfill", async () => {
-      // Slack user first seen without an email, whose profile later reports
-      // one: the backfill write carries the same attestation as creation.
-      const first = await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "U1LATE",
-      });
-      expect(first.email).toBeNull();
-
-      const second = await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "U1LATE",
-        providerEmail: "late.person@example.com",
-      });
-
-      expect(second.id).toBe(first.id);
-      expect(await store.getUserById(first.id)).toMatchObject({
-        email: "late.person@example.com",
-        emailVerified: true,
-      });
-    });
-
-    it("returns existing user for known identity and updates display_name", async () => {
+    it("returns existing user for known identity without mutating profile or identity metadata", async () => {
       const first = await enrollFixtureUser({
         provider: "github",
         providerUserId: "12345",
         displayName: "Alice",
       });
-      const beforeUpdate = await store.getUserById(first.id);
 
       const second = await enrollFixtureUser({
         provider: "github",
         providerUserId: "12345",
         displayName: "Alice Updated",
+        providerLogin: "alice-login",
+        providerEmail: "alice@example.com",
       });
 
       expect(second.id).toBe(first.id);
-      expect(second.isNew).toBe(false);
-      expect(second.displayName).toBe("Alice Updated");
+      expect(second.outcome).toBe("existing");
+      expect(second.displayName).toBe("Alice");
+      expect(second.email).toBeNull();
 
-      const user = await store.getUserById(first.id);
-      expect(user!.displayName).toBe("Alice Updated");
-      expect(user!.updatedAt).toBeGreaterThanOrEqual(beforeUpdate!.updatedAt);
+      await expect(store.getUserById(first.id)).resolves.toMatchObject({
+        displayName: "Alice",
+        email: null,
+      });
+      await expect(store.getIdentity("github", "12345")).resolves.toMatchObject({
+        providerLogin: null,
+        providerEmail: null,
+      });
     });
 
     it("does not repair a missing role assignment during identity resolution", async () => {
@@ -365,7 +350,7 @@ describe("UserStore", () => {
       });
 
       expect(slack.id).toBe(github.id);
-      expect(slack.isNew).toBe(false);
+      expect(slack.outcome).toBe("linked");
 
       const identities = await store.getIdentitiesForUser(github.id);
       expect(identities).toHaveLength(2);
@@ -388,7 +373,7 @@ describe("UserStore", () => {
       });
 
       expect(google.id).toBe(github.id);
-      expect(google.isNew).toBe(false);
+      expect(google.outcome).toBe("linked");
 
       const identities = await store.getIdentitiesForUser(github.id);
       expect(identities).toHaveLength(2);
@@ -403,66 +388,13 @@ describe("UserStore", () => {
       expect(googleIdentity!.providerUserId).toBe("google-sub-900");
     });
 
-    it("backfills email on existing user when email becomes available", async () => {
-      // Create user without email (e.g. Slack bot before users:read.email scope)
-      const first = await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "UABC",
-        displayName: "Alice",
-      });
-      expect(first.email).toBeNull();
-
-      // Same identity, now with email
-      const second = await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "UABC",
-        displayName: "Alice",
-        providerEmail: "alice@example.com",
-      });
-
-      expect(second.id).toBe(first.id);
-      expect(second.email).toBe("alice@example.com");
-
-      const user = await store.getUserById(first.id);
-      expect(user!.email).toBe("alice@example.com");
-    });
-
-    it("refreshes identity metadata on repeat sign-in", async () => {
-      // Create user without email or login
-      await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "UABC",
-        displayName: "Alice",
-      });
-
-      const before = await store.getIdentity("slack", "UABC");
-      expect(before!.providerEmail).toBeNull();
-      expect(before!.providerLogin).toBeNull();
-
-      // Same identity, now with email and login (after Slack scope added)
-      await enrollFixtureUser({
-        provider: "slack",
-        providerUserId: "UABC",
-        displayName: "Alice",
-        providerLogin: "alice.smith",
-        providerEmail: "alice@example.com",
-      });
-
-      const after = await store.getIdentity("slack", "UABC");
-      expect(after!.providerEmail).toBe("alice@example.com");
-      expect(after!.providerLogin).toBe("alice.smith");
-    });
-
-    it("re-links identity to email-owning user when email conflict is discovered", async () => {
-      // User A owns the email (e.g. GitHub login)
+    it("does not relink an existing identity when another user owns the reported email", async () => {
       const userA = await enrollFixtureUser({
         provider: "github",
         providerUserId: "gh-111",
         displayName: "User A",
         providerEmail: "shared@example.com",
       });
-
-      // User B created without email (e.g. Slack before users:read.email scope)
       const userB = await enrollFixtureUser({
         provider: "slack",
         providerUserId: "slack-222",
@@ -471,22 +403,25 @@ describe("UserStore", () => {
       expect(userB.email).toBeNull();
       expect(userB.id).not.toBe(userA.id);
 
-      // User B's provider now reports the same email — identity should
-      // re-link to User A (same principle as step 3 email-based linking)
       const result = await enrollFixtureUser({
         provider: "slack",
         providerUserId: "slack-222",
-        displayName: "User B",
+        displayName: "User B Updated",
         providerEmail: "shared@example.com",
       });
 
-      expect(result.id).toBe(userA.id);
-      expect(result.email).toBe("shared@example.com");
-
-      // Both identities now belong to User A
-      const identities = await store.getIdentitiesForUser(userA.id);
-      expect(identities).toHaveLength(2);
-      expect(identities.map((i) => i.provider).sort()).toEqual(["github", "slack"]);
+      expect(result).toEqual({
+        id: userB.id,
+        displayName: "User B",
+        email: null,
+        outcome: "existing",
+      });
+      await expect(store.getIdentitiesForUser(userA.id)).resolves.toMatchObject([
+        { provider: "github", providerUserId: "gh-111" },
+      ]);
+      await expect(store.getIdentitiesForUser(userB.id)).resolves.toMatchObject([
+        { provider: "slack", providerUserId: "slack-222", providerEmail: null },
+      ]);
     });
 
     it("stores avatar_url on new user", async () => {

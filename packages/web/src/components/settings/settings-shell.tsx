@@ -10,11 +10,24 @@ import { resolveSettingsCategory } from "@/components/settings/settings-registry
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useMeTeams } from "@/hooks/use-teams";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  SettingsNavigationGuardProvider,
+  useConfirmSettingsNavigation,
+} from "./settings-navigation-guard";
 
 /**
  * Hosts responsive settings content and redirects routes whose category is unavailable to the current user.
  */
 export function SettingsShell({ children }: { children: React.ReactNode }) {
+  return (
+    <SettingsNavigationGuardProvider>
+      <SettingsShellContent>{children}</SettingsShellContent>
+    </SettingsNavigationGuardProvider>
+  );
+}
+
+function SettingsShellContent({ children }: { children: React.ReactNode }) {
+  const confirmNavigation = useConfirmSettingsNavigation();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -91,7 +104,10 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       <div className="flex h-dvh overflow-hidden bg-background">
         <SettingsNav
           activeCategory={activeCategory}
-          onSelect={(category) => router.push(`/settings?tab=${category}`)}
+          onSelect={(category) => {
+            if (category !== activeCategory && !confirmNavigation()) return;
+            router.push(`/settings?tab=${category}`);
+          }}
         />
         <main className="min-w-0 flex-1 overflow-y-auto px-8 py-10 lg:px-12">
           <div className="mx-auto max-w-3xl">{children}</div>

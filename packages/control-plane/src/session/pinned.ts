@@ -5,7 +5,7 @@
 export type Pinned<T> =
   { kind: "resolved"; value: T } | { kind: "inherited"; parentSessionId: string };
 
-export function resolvedPin<T>(value: T): Pinned<T> {
+export function resolvedPin<T>(value: T): Extract<Pinned<T>, { kind: "resolved" }> {
   return { kind: "resolved", value };
 }
 

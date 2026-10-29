@@ -247,27 +247,39 @@ export function createMockStorage(
         sandbox.created_at = data.createdAt;
       }
     }),
-    completeProviderResume: vi.fn(async (generation, access) => {
-      calls.push("completeProviderResume");
-      if (
-        !sandbox ||
-        sandbox.modal_sandbox_id !== generation.sandboxId ||
-        sandbox.created_at !== generation.createdAt ||
-        !["connecting", "ready"].includes(sandbox.status) ||
-        sandbox.fenced !== 0
-      ) {
-        return false;
+    commitProviderAccess: vi.fn(
+      async (generation, access, _expectedReference, allowFailedSelfHeal) => {
+        calls.push("commitProviderAccess");
+        if (
+          !sandbox ||
+          sandbox.modal_sandbox_id !== generation.sandboxId ||
+          sandbox.created_at !== generation.createdAt ||
+          !(
+            ["connecting", "ready"].includes(sandbox.status) ||
+            (allowFailedSelfHeal && sandbox.status === "failed")
+          ) ||
+          sandbox.fenced !== 0
+        ) {
+          return false;
+        }
+        if (access.providerObjectId !== null) sandbox.modal_object_id = access.providerObjectId;
+        if (access.codeServer !== undefined) {
+          sandbox.code_server_url = access.codeServer?.url ?? null;
+          sandbox.code_server_password = access.codeServer?.password ?? null;
+        }
+        if (access.vnc !== undefined) {
+          sandbox.vnc_url = access.vnc?.url ?? null;
+          sandbox.vnc_password = access.vnc?.password ?? null;
+        }
+        if (access.ttyd !== undefined) {
+          sandbox.ttyd_url = access.ttyd?.url ?? null;
+          sandbox.ttyd_token = access.ttyd?.token ?? null;
+        }
+        if (access.tunnelUrls !== undefined)
+          sandbox.tunnel_urls = access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null;
+        return true;
       }
-      sandbox.modal_object_id = access.providerObjectId;
-      sandbox.code_server_url = access.codeServer?.url ?? null;
-      sandbox.code_server_password = access.codeServer?.password ?? null;
-      sandbox.vnc_url = access.vnc?.url ?? null;
-      sandbox.vnc_password = access.vnc?.password ?? null;
-      sandbox.ttyd_url = access.ttyd?.url ?? null;
-      sandbox.ttyd_token = access.ttyd?.token ?? null;
-      sandbox.tunnel_urls = access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null;
-      return true;
-    }),
+    ),
     updateSandboxModalObjectId: vi.fn((id: string | null) => {
       calls.push(`updateSandboxModalObjectId:${id}`);
       if (sandbox) sandbox.modal_object_id = id;
@@ -310,13 +322,6 @@ export function createMockStorage(
         sandbox.last_spawn_error_at = timestamp;
       }
     }),
-    updateSandboxAccess: vi.fn(async (kind: SandboxAccessKind, url: string, secret: string) => {
-      calls.push(`updateSandboxAccess:${kind}:${url}`);
-      if (sandbox) {
-        sandbox[ACCESS_FIELDS[kind].url] = url;
-        sandbox[ACCESS_FIELDS[kind].secret] = secret;
-      }
-    }),
     getSandboxAccessSecret: vi.fn(async (kind: SandboxAccessKind) => {
       calls.push(`getSandboxAccessSecret:${kind}`);
       return sandbox?.[ACCESS_FIELDS[kind].secret] ?? null;
@@ -331,12 +336,6 @@ export function createMockStorage(
     clearSandboxAccessUrl: vi.fn((kind: SandboxAccessKind) => {
       calls.push(`clearSandboxAccessUrl:${kind}`);
       if (sandbox) sandbox[ACCESS_FIELDS[kind].url] = null;
-    }),
-    updateSandboxTunnelUrls: vi.fn(async (urls: Record<string, string>) => {
-      calls.push(`updateSandboxTunnelUrls`);
-      if (sandbox) {
-        sandbox.tunnel_urls = JSON.stringify(urls);
-      }
     }),
     clearSandboxTunnelUrls: vi.fn(() => {
       calls.push("clearSandboxTunnelUrls");

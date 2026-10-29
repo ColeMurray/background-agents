@@ -178,9 +178,10 @@ export const githubAutomationEventSchema = z.object({
    * The webhook sender's `sender.type`: `bot` for a GitHub App installation
    * identity, `person` for any user account. That includes machine users and
    * actions taken with a user's OAuth token, such as pull requests Open-Inspect
-   * opens for an owner with a linked GitHub account. Absent when the sender is
-   * missing or neither. Deploy the control plane before a producer sends a new
-   * value: an older one rejects the whole event.
+   * opens for a prompting user with a linked GitHub account. Pull requests an
+   * automation run's own prompt opens are the App's, so they are `bot`. Absent
+   * when the sender is missing or neither. Deploy the control plane before a
+   * producer sends a new value: an older one rejects the whole event.
    */
   actorKind: z.enum(["person", "bot"]).optional(),
   changedFiles: z.array(z.string()).optional(),

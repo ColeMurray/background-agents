@@ -177,8 +177,12 @@ describe("SandboxLifecycleManager", () => {
           )
         ).toBe(true);
         expect(launch.sessionId).toBe(session.session_name || session.id);
-        expect(storage.updateSandboxAccess).toHaveBeenCalledExactlyOnceWith("ttyd", ttydUrl, token);
-        expect(storage.completeProviderResume).not.toHaveBeenCalled();
+        expect(storage.commitProviderAccess).toHaveBeenCalledExactlyOnceWith(
+          { sandboxId: launch.sandboxId, createdAt: nowMs },
+          expect.objectContaining({ ttyd: { url: ttydUrl, token } }),
+          undefined,
+          true
+        );
         expect(sandbox.ttyd_url).toBe(ttydUrl);
       } finally {
         clock.mockRestore();

@@ -23,6 +23,9 @@ export class McpServerValidationError extends Error {
 
 export class McpServerConflictError extends Error {}
 
+/** An update must retain stored credentials that cannot be decrypted. */
+export class McpServerCredentialsUnreadableError extends Error {}
+
 function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -105,7 +108,28 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
   };
 }
 
-function rowToMetadata(row: McpServerRow): McpServerMetadata {
+/**
+ * Credentials to store when an update names the ones to keep. Kept names retain
+ * their stored values and spelling, sent values replace stored ones, and stored
+ * names neither kept nor sent are dropped. Header names compare
+ * case-insensitively; env var names are exact.
+ */
+function mergeKeptCredentials(
+  type: McpServerConfig["type"],
+  stored: Record<string, string>,
+  incoming: Record<string, string>,
+  keep: string[]
+): Record<string, string> {
+  const nameOf = (key: string) => (type === "remote" ? key.toLowerCase() : key);
+  const kept = new Set(keep.map(nameOf));
+  const sent = new Set(Object.keys(incoming).map(nameOf));
+  const retained = Object.entries(stored).filter(
+    ([key]) => kept.has(nameOf(key)) && !sent.has(nameOf(key))
+  );
+  return { ...Object.fromEntries(retained), ...incoming };
+}
+
+function rowToMetadata(row: McpServerRow, credentialKeys?: string[]): McpServerMetadata {
   const type = mcpServerTypeSchema.parse(row.type);
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
@@ -117,9 +141,20 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
     url: type === "remote" ? (row.url ?? undefined) : undefined,
     hasEnv: type === "local" && hasCredentials,
     hasHeaders: type === "remote" && hasCredentials,
+    ...(credentialKeys ? { credentialKeys } : {}),
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
   };
+}
+
+/** How much a metadata read reveals about each server's stored credentials. */
+export interface McpServerMetadataOptions {
+  /**
+   * Name the stored credentials (`credentialKeys`). This decrypts every row
+   * read, so pass it only for callers holding `mcp_servers.manage`; without it,
+   * reads stay decrypt-free.
+   */
+  includeCredentialKeys?: boolean;
 }
 
 export class McpServerStore {
@@ -135,7 +170,8 @@ export class McpServerStore {
     return encryptToken(plain, this.encryptionKey);
   }
 
-  private async decryptEnv(raw: string, rowId: string): Promise<Record<string, string>> {
+  /** Stored credentials, or null when the value is neither decryptable nor pre-encryption plaintext. */
+  private async readEnv(raw: string, rowId: string): Promise<Record<string, string> | null> {
     // The write side stores an empty credential map as plaintext "{}" (see
     // encryptEnv) — recognize the full credential-free sentinel set that
     // rowToMetadata classifies ("", "{}", "null") before attempting a decrypt
@@ -156,8 +192,13 @@ export class McpServerStore {
       log.error("MCP server env decryption failed and raw value is not plaintext JSON", {
         event: "mcp_server.env_decrypt_error",
       });
-      return {};
+      return null;
     }
+  }
+
+  /** Best-effort read for sessions and metadata: unreadable credentials read as none. */
+  private async decryptEnv(raw: string, rowId: string): Promise<Record<string, string>> {
+    return (await this.readEnv(raw, rowId)) ?? {};
   }
 
   private async decryptRow(row: McpServerRow): Promise<McpServerConfig> {
@@ -165,28 +206,49 @@ export class McpServerStore {
     return rowToConfig(row, env);
   }
 
-  async list(repoScope?: string): Promise<McpServerMetadata[]> {
+  /**
+   * Credential names come from decrypting the row, so a pre-encryption or
+   * undecryptable row logs `mcp_server.env_decrypt_*` on each such read. Only
+   * the names leave this method; the values are discarded.
+   */
+  private async toMetadata(
+    row: McpServerRow,
+    options: McpServerMetadataOptions
+  ): Promise<McpServerMetadata> {
+    if (!options.includeCredentialKeys) return rowToMetadata(row);
+    return rowToMetadata(row, Object.keys(await this.decryptEnv(row.env, row.id)));
+  }
+
+  async list(
+    repoScope?: string,
+    options: McpServerMetadataOptions = {}
+  ): Promise<McpServerMetadata[]> {
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers ORDER BY name")
       .all<McpServerRow>();
-    const metadata = results.map(rowToMetadata);
-    if (repoScope === undefined) return metadata;
-    const normalized = repoScope.toLowerCase();
-    return metadata.filter((c) => {
-      if (!c.repoScopes) return true;
-      return c.repoScopes.some((s) => s.toLowerCase() === normalized);
-    });
+    const normalized = repoScope?.toLowerCase();
+    const rows =
+      normalized === undefined
+        ? results
+        : results.filter((row) => {
+            const scopes = parseRepoScopes(row.repo_scope);
+            return !scopes || scopes.some((s) => s.toLowerCase() === normalized);
+          });
+    return Promise.all(rows.map((row) => this.toMetadata(row, options)));
   }
 
-  async get(id: string): Promise<McpServerMetadata | null> {
+  async get(id: string, options: McpServerMetadataOptions = {}): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
-    return row ? rowToMetadata(row) : null;
+    return row ? this.toMetadata(row, options) : null;
   }
 
-  async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
+  async create(
+    config: ValidatedCreateMcpServerInput,
+    options: McpServerMetadataOptions = {}
+  ): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
 
@@ -229,7 +291,7 @@ export class McpServerStore {
       throw err;
     }
 
-    const created = await this.get(id);
+    const created = await this.get(id, options);
     if (!created) {
       throw new Error(`MCP server '${id}' not found after insert — this should not happen`);
     }
@@ -239,7 +301,8 @@ export class McpServerStore {
   async update(
     id: string,
     patch: ValidatedUpdateMcpServerInput,
-    expectedRevision?: number
+    expectedRevision?: number,
+    options: McpServerMetadataOptions = {}
   ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
@@ -250,7 +313,8 @@ export class McpServerStore {
       throw new McpServerConflictError("MCP server changed; reload and try again");
     }
 
-    const mergedType = patch.type ?? mcpServerTypeSchema.parse(row.type);
+    const rowType = mcpServerTypeSchema.parse(row.type);
+    const mergedType = patch.type ?? rowType;
     if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
       throw new McpServerValidationError("Local MCP servers do not support url or headers");
     }
@@ -258,20 +322,29 @@ export class McpServerStore {
       throw new McpServerValidationError("Remote MCP servers do not support command or env");
     }
 
-    const credentialsChanged =
-      patch.env !== undefined || patch.headers !== undefined || patch.type !== undefined;
-
+    const incoming = mergedType === "remote" ? patch.headers : patch.env;
+    let revisionGuard = expectedRevision;
     let encryptedEnv: string;
-    if (credentialsChanged) {
-      const existing = await this.decryptRow(row);
-      const mergedType = patch.type ?? existing.type;
-      const mergedEnv = patch.env !== undefined ? patch.env : existing.env;
-      const mergedHeaders = patch.headers !== undefined ? patch.headers : existing.headers;
-      encryptedEnv = await this.encryptEnv(
-        mergedType === "remote" ? (mergedHeaders ?? {}) : (mergedEnv ?? {})
-      );
+    if (mergedType !== rowType) {
+      // Env vars and headers are not interchangeable, so a type change drops the stored set.
+      encryptedEnv = await this.encryptEnv(incoming ?? {});
+    } else if (patch.keepCredentialKeys === undefined) {
+      // Sent credentials replace the stored set; without any, it stays as stored.
+      encryptedEnv = incoming === undefined ? row.env : await this.encryptEnv(incoming);
     } else {
-      encryptedEnv = row.env;
+      // Retaining values needs them decrypted. Fail closed rather than read an
+      // unreadable set as empty and delete it.
+      const stored = await this.readEnv(row.env, row.id);
+      if (!stored) {
+        throw new McpServerCredentialsUnreadableError(
+          "Saved credentials for this MCP server cannot be decrypted; enter every credential again to replace them"
+        );
+      }
+      encryptedEnv = await this.encryptEnv(
+        mergeKeptCredentials(mergedType, stored, incoming ?? {}, patch.keepCredentialKeys)
+      );
+      // Kept values come from this read, so a concurrent write must not land in between.
+      revisionGuard ??= row.revision;
     }
 
     const mergedCommand =
@@ -308,13 +381,13 @@ export class McpServerStore {
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
           id,
-          expectedRevision ?? null
+          revisionGuard ?? null
         )
         .first<McpServerRow>();
       if (!updated) {
         throw new McpServerConflictError("MCP server changed; reload and try again");
       }
-      return rowToMetadata(updated);
+      return await this.toMetadata(updated, options);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new McpServerValidationError(

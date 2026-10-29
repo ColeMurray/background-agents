@@ -229,6 +229,8 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
   Linear-started sessions.
 - Linear issue titles, descriptions, comments, and agent prompts may be sent to the coding agent. Do
   not include secrets.
+- Linear-started sessions never include personal memories, whatever the request asks; the control
+  plane decides this from the calling service. Repository and environment memories still apply.
 
 ---
 

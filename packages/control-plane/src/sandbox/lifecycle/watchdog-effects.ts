@@ -103,6 +103,8 @@ export async function failConnectTimeout(
       failureMessage: "Provider stop failed after connecting timeout",
     });
   }
+  // The stop may have yielded to a replacement; only the timed-out generation owns this failure.
+  if (!ctx.isCurrentGeneration()) return "sandbox_failed";
   deps.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
   if (held) {
     deps.reportSandboxError("Sandbox failed to connect within the allowed time.");
@@ -120,8 +122,6 @@ export async function failConnectTimeout(
       ? "Sandbox failed to connect within the allowed time and could not be stopped for a retry."
       : "Sandbox failed to connect within the allowed time. Queued prompts will be retried on a fresh sandbox.";
   deps.reportSandboxError(reason);
-  // A launch that replaced this generation during stop owns the queue now.
-  if (!ctx.isCurrentGeneration()) return "sandbox_failed";
   return retriesExhausted || !stopped
     ? { kind: "connect_timeout_unrecoverable", reason }
     : "sandbox_terminated";
@@ -158,11 +158,13 @@ export async function terminateStaleHeartbeat(
   if (!isBooting && deps.snapshotRequiresShutdown()) {
     // A missing runtime cannot drain; the coordinator captures and retires the source.
     const ownership = await deps.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    // Shutdown admission may have yielded to a replacement, which owns its own outcome.
+    if (!ctx.isCurrentGeneration()) return "no_action";
     // Owned: the shutdown failed the prompt as it claimed the source. Held: a
     // save already owns the source and fails nothing, so the watchdog reports
     // the lost runtime itself.
-    if (ownership !== "unmanaged")
-      return ownership === "held" && ctx.isCurrentGeneration() ? heartbeatLost() : "no_action";
+    if (ownership === "held") return heartbeatLost();
+    if (ownership !== "unmanaged") return "no_action";
   }
   deps.storage.updateSandboxStatus("stale");
   if (isBooting) deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
@@ -252,6 +254,7 @@ export async function stopForInactivity(
 ): Promise<SandboxAlarmResult> {
   const ownership = await deps.shutdown.requestShutdown("inactivity_timeout");
   if (ownership !== "unmanaged") return "no_action";
+  if (!ctx.isCurrentGeneration()) return "no_action";
 
   // Block reconnect before retiring access or yielding to capture/stop.
   deps.storage.updateSandboxStatus("stopped");

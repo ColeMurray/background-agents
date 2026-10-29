@@ -86,7 +86,7 @@ describe("sandbox graceful shutdown wiring", () => {
   it("retires access before detaching through the assembled shutdown callback without manager forwarding", async () => {
     const { stub } = await initNamedSession(`shutdown-access-composition-${Date.now()}`);
     await seedSandboxAuth(stub, { authToken: AUTH_TOKEN, sandboxId: SANDBOX_ID, status: "ready" });
-    await seedShutdown(stub, {
+    const generation = await seedShutdown(stub, {
       generationReady: true,
       runtimeReady: true,
       lifecyclePolicy: "confirmed",
@@ -95,10 +95,15 @@ describe("sandbox graceful shutdown wiring", () => {
 
     await runInSessionDO(stub, async (instance) => {
       const { sandboxRepository, lifecycleManager, wsManager } = componentsOf(instance);
-      for (const kind of ["codeServer", "vnc", "ttyd"] as const) {
-        await sandboxRepository.updateSandboxAccess(kind, `https://${kind}.example`, "secret");
-      }
-      sandboxRepository.updateSandboxTunnelUrls({ "8080": "https://port.example" });
+      expect(
+        await sandboxRepository.commitProviderAccess(generation, {
+          providerObjectId: null,
+          codeServer: { url: "https://codeServer.example", password: "secret" },
+          vnc: { url: "https://vnc.example", password: "secret" },
+          ttyd: { url: "https://ttyd.example", token: "secret" },
+          tunnelUrls: { "8080": "https://port.example" },
+        })
+      ).toBe(true);
       const pair = new WebSocketPair();
       wsManager.acceptAndSetSandboxSocket(pair[1], SANDBOX_ID);
       pair[0].accept();

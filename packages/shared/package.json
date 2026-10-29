@@ -54,6 +54,10 @@
       "import": "./dist/http-body.js",
       "types": "./dist/http-body.d.ts"
     },
+    "./admission-settings": {
+      "import": "./dist/admission-settings.js",
+      "types": "./dist/admission-settings.d.ts"
+    },
     "./inline-prompt-flags": {
       "import": "./dist/inline-prompt-flags.js",
       "types": "./dist/inline-prompt-flags.d.ts"

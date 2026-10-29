@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { handleAgentSessionEvent } from "./webhook-handler";
+import { handleAgentSessionEvent, STOP_TIMEOUT_MS } from "./webhook-handler";
 import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt, escapeHtml } from "./prompts";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { MAX_SESSION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/integrations";
@@ -1343,6 +1343,417 @@ describe("handleAgentSessionEvent environment targets", () => {
       expect(store.has("issue:issue-1")).toBe(status !== 200);
     }
   );
+
+  describe("stop deadline", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    function stopFixture() {
+      const { kv, store } = createFakeKV({
+        "oauth:client-credentials:org-1": validToken(),
+        "issue:issue-1": JSON.stringify({
+          sessionId: "session-xyz",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-42",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+        }),
+      });
+      const env = makeLinearBotEnv(kv);
+      const webhook = makeWebhook();
+      webhook.action = "stopped";
+      webhook.agentActivity = { userId: "new-author" };
+      return { env, webhook, store };
+    }
+
+    it.each(["lookup", "deletion"])("bounds a stalled mapping %s", async (operation) => {
+      const { env, webhook, store } = stopFixture();
+      let markStalled!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        markStalled = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (operation === "lookup") {
+        vi.mocked(env.LINEAR_KV.get).mockImplementationOnce(async () => {
+          markStalled();
+          await gate;
+          return JSON.parse(store.get("issue:issue-1")!);
+        });
+      } else {
+        vi.mocked(env.LINEAR_KV.delete).mockImplementationOnce(async (key) => {
+          markStalled();
+          await gate;
+          store.delete(key);
+        });
+      }
+      const request = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+      env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-kv-deadline").then(() => {
+        settled = true;
+      });
+      try {
+        await stalled;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await handling;
+        expect(vi.getTimerCount()).toBe(0);
+        expect(store.has("issue:issue-1")).toBe(true);
+        expect(request).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+        expect(env.LINEAR_KV.delete).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      } finally {
+        release();
+        await handling;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // Late lookup cannot issue a stop; an acknowledged stop's deletion may still finish.
+      expect(request).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      expect(env.LINEAR_KV.delete).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      expect(store.has("issue:issue-1")).toBe(operation === "lookup");
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    type StopOperation =
+      | "initial-stop"
+      | "client-token"
+      | "client-identity"
+      | "enrollment-probe"
+      | "profile"
+      | "enrollment-attestation"
+      | "retry-stop"
+      | "refusal-activity";
+    type StopScenario = "initial-success" | "enrollment-success" | "enrollment-denied";
+    interface StopStallCase {
+      name: string;
+      operation: StopOperation;
+      boundary: "request" | "body";
+      cachedCredentials: boolean;
+      scenario: StopScenario;
+      expectedStopCount: number;
+    }
+    interface StopResponseStep {
+      operation: StopOperation;
+      path: string;
+      response: () => Response;
+    }
+
+    const stopPath = "/sessions/session-xyz/stop";
+    const emailRequired = () => Response.json({ code: "actor_email_required" }, { status: 403 });
+    const controlPlaneScripts: Record<StopScenario, StopResponseStep[]> = {
+      "initial-success": [
+        {
+          operation: "initial-stop",
+          path: stopPath,
+          response: () => new Response(null, { status: 200 }),
+        },
+      ],
+      "enrollment-success": [
+        { operation: "initial-stop", path: stopPath, response: emailRequired },
+        { operation: "enrollment-probe", path: "/actors/me", response: emailRequired },
+        {
+          operation: "enrollment-attestation",
+          path: "/actors/me",
+          response: () => new Response(null, { status: 204 }),
+        },
+        {
+          operation: "retry-stop",
+          path: stopPath,
+          response: () => new Response(null, { status: 200 }),
+        },
+      ],
+      "enrollment-denied": [
+        { operation: "initial-stop", path: stopPath, response: emailRequired },
+        { operation: "enrollment-probe", path: "/actors/me", response: emailRequired },
+        {
+          operation: "enrollment-attestation",
+          path: "/actors/me",
+          response: () => Response.json({ code: "actor_admission_denied" }, { status: 403 }),
+        },
+      ],
+    };
+
+    it.each<StopStallCase>([
+      {
+        name: "initial stop response",
+        operation: "initial-stop",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "initial-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "stop refusal body",
+        operation: "initial-stop",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client token request",
+        operation: "client-token",
+        boundary: "request",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client token body",
+        operation: "client-token",
+        boundary: "body",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "client identity request",
+        operation: "client-identity",
+        boundary: "request",
+        cachedCredentials: false,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment probe",
+        operation: "enrollment-probe",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment refusal body",
+        operation: "enrollment-probe",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "profile request",
+        operation: "profile",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "profile body",
+        operation: "profile",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "enrollment attestation",
+        operation: "enrollment-attestation",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 1,
+      },
+      {
+        name: "retry stop response",
+        operation: "retry-stop",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-success",
+        expectedStopCount: 2,
+      },
+      {
+        name: "refusal activity request",
+        operation: "refusal-activity",
+        boundary: "request",
+        cachedCredentials: true,
+        scenario: "enrollment-denied",
+        expectedStopCount: 1,
+      },
+      {
+        name: "refusal activity body",
+        operation: "refusal-activity",
+        boundary: "body",
+        cachedCredentials: true,
+        scenario: "enrollment-denied",
+        expectedStopCount: 1,
+      },
+    ])("terminates when $name ignores cancellation and retains the mapping", async (testCase) => {
+      const { env, webhook, store } = stopFixture();
+      if (!testCase.cachedCredentials) store.delete("oauth:client-credentials:org-1");
+      let markStalled!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        markStalled = resolve;
+      });
+      let release!: () => void;
+      async function materialize(operation: StopOperation, response: Response): Promise<Response> {
+        if (operation !== testCase.operation) return response;
+        if (testCase.boundary === "request") {
+          return new Promise((resolve) => {
+            release = () => resolve(response);
+            markStalled();
+          });
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const streamingResponse = new Response(
+          new ReadableStream<Uint8Array>({
+            start(streamController) {
+              controller = streamController;
+            },
+          }),
+          { status: response.status, headers: response.headers }
+        );
+        const read = streamingResponse.json.bind(streamingResponse);
+        vi.spyOn(streamingResponse, "json").mockImplementation(() => {
+          release = () => {
+            controller.enqueue(bytes);
+            controller.close();
+          };
+          markStalled();
+          return read();
+        });
+        return streamingResponse;
+      }
+      vi.stubGlobal(
+        "fetch",
+        createLinearFetchMock({
+          clientCredentials: () => materialize("client-token", linearClientCredentialsResponse()),
+          identity: () => materialize("client-identity", linearIdentityResponse()),
+          user: () =>
+            materialize(
+              "profile",
+              Response.json({
+                data: { user: { id: "new-author", name: "Ada", email: "ada@corp.test" } },
+              })
+            ),
+          graphql: () => materialize("refusal-activity", Response.json({ data: {} })),
+        })
+      );
+      const controlPlaneFetch = vi
+        .fn<(url: string, init: RequestInit) => Promise<Response>>()
+        .mockRejectedValue(new Error("Unexpected control-plane request"));
+      for (const step of controlPlaneScripts[testCase.scenario]) {
+        controlPlaneFetch.mockImplementationOnce(async (url) => {
+          expect(new URL(url).pathname).toBe(step.path);
+          return materialize(step.operation, step.response());
+        });
+      }
+      const stopRequests = () =>
+        controlPlaneFetch.mock.calls.filter(([url]) => new URL(url).pathname === stopPath);
+      env.CONTROL_PLANE = { fetch: controlPlaneFetch } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-stop-deadline").then(() => {
+        settled = true;
+      });
+      try {
+        await stalled;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await handling;
+        expect(vi.getTimerCount()).toBe(0);
+        expect(stopRequests()).toHaveLength(testCase.expectedStopCount);
+        expect(store.has("issue:issue-1")).toBe(true);
+        expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
+        const signal = controlPlaneFetch.mock.calls[0][1].signal;
+        expect(signal?.aborted).toBe(true);
+        for (const [, init] of controlPlaneFetch.mock.calls) expect(init.signal).toBe(signal);
+        expect(
+          vi.mocked(console.error).mock.calls.map(([line]) => JSON.parse(String(line)))
+        ).toContainEqual(
+          expect.objectContaining({
+            msg: "agent_session.stop_failed",
+            trace_id: "trace-stop-deadline",
+            session_id: "session-xyz",
+            error_message: "Linear stop deadline exceeded",
+          })
+        );
+      } finally {
+        release();
+        await handling;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      // Late completion cannot restart enrollment/retry or remove an uncertain mapping.
+      expect(stopRequests()).toHaveLength(testCase.expectedStopCount);
+      expect(store.has("issue:issue-1")).toBe(true);
+      expect(env.LINEAR_KV.delete).not.toHaveBeenCalledWith("issue:issue-1");
+    });
+
+    it("shares the original budget across stop, enrollment and retry", async () => {
+      const { env, webhook, store } = stopFixture();
+      let enterStage!: () => void;
+      let entered = new Promise<void>((resolve) => {
+        enterStage = resolve;
+      });
+      let release!: (response: Response) => void;
+      const request = vi.fn(
+        (_url: string, _init: RequestInit) =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+            enterStage();
+          })
+      );
+      env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+      let settled = false;
+      const handling = handleAgentSessionEvent(webhook, env, "trace-shared-budget").then(() => {
+        settled = true;
+      });
+      try {
+        await entered;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 2);
+        entered = new Promise<void>((resolve) => {
+          enterStage = resolve;
+        });
+        release(Response.json({ code: "actor_email_required" }, { status: 403 }));
+        await entered;
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 4);
+        entered = new Promise<void>((resolve) => {
+          enterStage = resolve;
+        });
+        release(new Response(null, { status: 204 }));
+        await entered;
+        expect(request.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+          "/sessions/session-xyz/stop",
+          "/actors/me",
+          "/sessions/session-xyz/stop",
+        ]);
+        await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS / 4 - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        expect(store.has("issue:issue-1")).toBe(true);
+        const signal = request.mock.calls[0][1].signal;
+        for (const [, init] of request.mock.calls) expect(init.signal).toBe(signal);
+        expect(signal?.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        release(new Response(null, { status: 200 }));
+        await handling;
+      }
+      expect(store.has("issue:issue-1")).toBe(true);
+    });
+
+    it.each([200, 403, 503])(
+      "clears its timer after a completed stop response of %s",
+      async (status) => {
+        const { env, webhook, store } = stopFixture();
+        const request = vi
+          .fn()
+          .mockResolvedValue(Response.json({ code: "not_member" }, { status }));
+        env.CONTROL_PLANE = { fetch: request } as unknown as Fetcher;
+        await handleAgentSessionEvent(webhook, env, "trace-completed-stop");
+        expect(vi.getTimerCount()).toBe(0);
+        expect(request.mock.calls[0][1].signal.aborted).toBe(false);
+        expect(store.has("issue:issue-1")).toBe(status !== 200);
+      }
+    );
+  });
 
   it("fails closed and retains the session mapping when a stop author is missing", async () => {
     const { kv, store } = createFakeKV({
