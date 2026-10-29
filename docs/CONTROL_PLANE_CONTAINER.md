@@ -117,8 +117,8 @@ curl -s http://localhost:8787/healthz
 
 Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
 empty managed rules at revision zero; Owners and Administrators can edit them in Settings once the
-backend is running, and its `writes_frozen` column is no longer read. The independently deployed
-frontend may arrive before the backend: missing routes show unavailable.
+backend is running. The independently deployed frontend may arrive before the backend: missing
+routes show unavailable.
 
 Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
 lowercase hexadecimal user ID. The script needs Node.js 24+, a repository checkout, and exactly one

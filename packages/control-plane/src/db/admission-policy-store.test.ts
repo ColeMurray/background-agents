@@ -54,7 +54,13 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
       updatedAt: null,
       updatedByUserId: null,
     });
-    // Migration 0093 seeds writes_frozen = 1; nothing reads it, so the seed is editable.
+    expect(
+      sqlite
+        .prepare(
+          "SELECT name FROM pragma_table_info('workspace_admission_policy') WHERE name = 'writes_frozen'"
+        )
+        .get()
+    ).toBeUndefined();
     expect((await store.replace({ ...input, before: await store.get() })).status).toBe("applied");
     expect(applyMigrations(sqlite, migrations)).toEqual([]);
     expect((await store.get()).revision).toBe(1);

@@ -86,9 +86,8 @@ editor is read-only and the server rejects mutations. To enable secure editing, 
 baseline and disable unsafe mode together, then verify that account's login/role.
 
 Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero. Owners
-and Administrators can edit them as soon as the backend serves the settings routes; the table's
-`writes_frozen` column is no longer read. The frontend may deploy independently first; missing
-backend routes show unavailable.
+and Administrators can edit them as soon as the backend serves the settings routes. The frontend may
+deploy independently first; missing backend routes show unavailable.
 
 ### Policy Safety and Audit
 
@@ -622,8 +621,7 @@ revision, and the deployed union are unchanged. Stop if anything drifted.
 
 Only after those checks should old code serve traffic. Retain the policy table and audit history. A
 frontend-only rollback leaves backend enforcement intact; restore a compatible editor to change
-managed rules. Code that still reads `writes_frozen` shows the editor read-only after a rollback,
-because the column keeps the value migration `0093` seeded.
+managed rules.
 
 For a policy mistake, deploy a known valid recovery email in the baseline with unsafe mode false,
 then verify login and active administrative role. A corrupted/unavailable policy needs database
