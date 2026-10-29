@@ -33,8 +33,6 @@ const defaultRestConfig: DaytonaRestConfig = {
   apiUrl: "https://daytona.test/api",
   apiKey: "test-api-key",
   baseSnapshot: "base-snapshot-v1",
-  autoStopIntervalMinutes: 120,
-  autoArchiveIntervalMinutes: 10080,
 };
 
 function createMockClient(
@@ -82,6 +80,8 @@ function createMockClient(
 const defaultProviderConfig: DaytonaProviderConfig = {
   scmProvider: "github",
   sandboxAccessPasswordSecret: "test-secret-key",
+  autoStopIntervalMinutes: 120,
+  autoArchiveIntervalMinutes: 10080,
 };
 
 const baseCreateConfig: CreateSandboxConfig = {
@@ -188,6 +188,7 @@ describe("DaytonaSandboxProvider", () => {
     it("assembles env vars correctly for GitLab", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, {
+        ...defaultProviderConfig,
         scmProvider: "gitlab",
         gitlabAccessToken: "glpat-test-token",
         sandboxAccessPasswordSecret: "secret",
@@ -207,6 +208,7 @@ describe("DaytonaSandboxProvider", () => {
       // it now resolves the real Bitbucket identity like every provider.
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, {
+        ...defaultProviderConfig,
         scmProvider: "bitbucket",
         sandboxAccessPasswordSecret: "secret",
       });

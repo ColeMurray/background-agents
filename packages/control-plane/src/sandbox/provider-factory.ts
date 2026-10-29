@@ -97,16 +97,6 @@ export function createDaytonaRestClientFromEnv(
     target: env.DAYTONA_TARGET,
     baseSnapshot: env.DAYTONA_BASE_SNAPSHOT,
     toolboxApiUrl: env.DAYTONA_TOOLBOX_API_URL,
-    autoStopIntervalMinutes: parseNumericEnv(
-      "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
-      env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
-      120
-    ),
-    autoArchiveIntervalMinutes: parseNumericEnv(
-      "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES",
-      env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES,
-      10080
-    ),
   });
 }
 
@@ -117,6 +107,16 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
     gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
     sandboxAccessPasswordSecret: client.config.apiKey,
+    autoStopIntervalMinutes: parseNumericEnv(
+      "DAYTONA_AUTO_STOP_INTERVAL_MINUTES",
+      env.DAYTONA_AUTO_STOP_INTERVAL_MINUTES,
+      120
+    ),
+    autoArchiveIntervalMinutes: parseNumericEnv(
+      "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES",
+      env.DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES,
+      10080
+    ),
   });
 }
 

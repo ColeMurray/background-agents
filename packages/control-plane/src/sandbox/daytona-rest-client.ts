@@ -41,10 +41,6 @@ export interface DaytonaRestConfig {
    * record does not name.
    */
   toolboxApiUrl?: string;
-  /** Minutes before auto-stop; omitted by inventory-only clients. */
-  autoStopIntervalMinutes?: number;
-  /** Minutes before auto-archive; omitted by inventory-only clients. */
-  autoArchiveIntervalMinutes?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,8 @@ function createProvider(client: Partial<DaytonaRestClient>): DaytonaSandboxProvi
   return new DaytonaSandboxProvider(client as DaytonaRestClient, {
     scmProvider: "github",
     sandboxAccessPasswordSecret: "test-secret-key",
+    autoStopIntervalMinutes: 120,
+    autoArchiveIntervalMinutes: 10080,
   });
 }
 

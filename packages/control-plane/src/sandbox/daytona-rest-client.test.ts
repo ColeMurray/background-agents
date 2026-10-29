@@ -26,8 +26,6 @@ const defaultConfig: DaytonaRestConfig = {
   apiUrl: "https://daytona.test/api",
   apiKey: "test-api-key",
   baseSnapshot: "base-snapshot-v1",
-  autoStopIntervalMinutes: 120,
-  autoArchiveIntervalMinutes: 10080,
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

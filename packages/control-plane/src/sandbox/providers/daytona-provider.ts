@@ -74,6 +74,10 @@ export interface DaytonaProviderConfig {
   gitlabAccessToken?: string;
   /** Secret used for domain-separated sandbox access password derivation. */
   sandboxAccessPasswordSecret: string;
+  /** Minutes before Daytona auto-stops an idle session sandbox. */
+  autoStopIntervalMinutes: number;
+  /** Minutes before Daytona auto-archives a stopped session sandbox. */
+  autoArchiveIntervalMinutes: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +130,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         snapshot,
         env: envVars,
         labels,
-        autoStopInterval: this.client.config.autoStopIntervalMinutes,
-        autoArchiveInterval: this.client.config.autoArchiveIntervalMinutes,
+        autoStopInterval: this.providerConfig.autoStopIntervalMinutes,
+        autoArchiveInterval: this.providerConfig.autoArchiveIntervalMinutes,
         public: false,
       };
       if (this.client.config.target) {
