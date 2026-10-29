@@ -323,6 +323,7 @@ export class McpServerStore {
     }
 
     const incoming = mergedType === "remote" ? patch.headers : patch.env;
+    let revisionGuard = expectedRevision;
     let encryptedEnv: string;
     if (mergedType !== rowType) {
       // Env vars and headers are not interchangeable, so a type change drops the stored set.
@@ -342,6 +343,8 @@ export class McpServerStore {
       encryptedEnv = await this.encryptEnv(
         mergeKeptCredentials(mergedType, stored, incoming ?? {}, patch.keepCredentialKeys)
       );
+      // Kept values come from this read, so a concurrent write must not land in between.
+      revisionGuard ??= row.revision;
     }
 
     const mergedCommand =
@@ -378,7 +381,7 @@ export class McpServerStore {
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
           id,
-          expectedRevision ?? null
+          revisionGuard ?? null
         )
         .first<McpServerRow>();
       if (!updated) {

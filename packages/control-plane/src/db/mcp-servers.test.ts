@@ -456,6 +456,19 @@ describe("McpServerStore", () => {
       ).toEqual({});
     });
 
+    it("pins a keep update to the revision it read", async () => {
+      const { db, statements } = createFakeD1({ firstResult: remoteRow });
+      const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+      await store.update("def456", { headers: {}, keepCredentialKeys: [] });
+      await store.update("def456", { headers: { Accept: "text/event-stream" } });
+
+      const revisionGuards = statements
+        .filter((s) => s.sql.includes("UPDATE"))
+        .map((s) => s.params.at(-1));
+      expect(revisionGuards).toEqual([remoteRow.revision, null]);
+    });
+
     describe("with credentials it cannot decrypt", () => {
       async function unreadableRemoteRow() {
         return {
