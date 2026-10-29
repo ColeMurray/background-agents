@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import type { BuiltInRoleKey } from "@open-inspect/shared/rbac";
 import { encryptToken, generateEncryptionKey } from "../../src/auth/crypto";
-import { McpServerStore } from "../../src/db/mcp-servers";
+import { McpServerConflictError, McpServerStore } from "../../src/db/mcp-servers";
+import type { SqlDatabase } from "../../src/db/sql-database";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, type ServiceRequestInit } from "./helpers";
 
@@ -365,6 +366,51 @@ describe("MCP Servers API", () => {
         .bind(created.id)
         .first<{ name: string; env: string; revision: number }>();
       expect(row).toEqual({ name: "unreadable-headers", env: foreign, revision: created.revision });
+    });
+
+    it("refuses a keep update that raced a credential change, keeping the newer credentials", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "raced-headers",
+          type: "remote",
+          url: "https://mcp.example.com",
+          headers: { Authorization: "Bearer old", Accept: "text/event-stream" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+      const key = env.REPO_SECRETS_ENCRYPTION_KEY!;
+      // Replace the credentials right after the racing store's initial read.
+      let raced = false;
+      const racingDb = {
+        prepare(sql: string) {
+          const statement = env.DB.prepare(sql);
+          if (!sql.startsWith("SELECT")) return statement;
+          return {
+            bind: (...params: unknown[]) => ({
+              first: async () => {
+                const row = await statement.bind(...params).first();
+                if (!raced) {
+                  raced = true;
+                  await new McpServerStore(env.DB, key).update(created.id, {
+                    headers: { Authorization: "Bearer new" },
+                  });
+                }
+                return row;
+              },
+            }),
+          };
+        },
+      } as unknown as SqlDatabase;
+
+      await expect(
+        new McpServerStore(racingDb, key).update(created.id, {
+          headers: {},
+          keepCredentialKeys: ["Authorization", "Accept"],
+        })
+      ).rejects.toThrow(McpServerConflictError);
+      expect(raced).toBe(true);
+      expect(await storedCredentials(created.id)).toEqual({ Authorization: "Bearer new" });
     });
 
     it("keeps every saved env var when all are kept and none are sent", async () => {

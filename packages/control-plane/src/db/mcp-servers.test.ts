@@ -8,7 +8,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import {
-  McpServerConflictError,
   McpServerCredentialsUnreadableError,
   McpServerStore,
   McpServerValidationError,
@@ -468,23 +467,6 @@ describe("McpServerStore", () => {
         .filter((s) => s.sql.includes("UPDATE"))
         .map((s) => s.params.at(-1));
       expect(revisionGuards).toEqual([remoteRow.revision, null]);
-    });
-
-    it("reports a conflict when a keep update without a revision loses a race", async () => {
-      let reads = 0;
-      const fakeStmt = {
-        bind: () => fakeStmt,
-        // The SELECT finds the row; a concurrent write then makes the pinned UPDATE match nothing.
-        first: async () => (reads++ === 0 ? remoteRow : null),
-      };
-      const db = { prepare: () => fakeStmt } as unknown as D1Database;
-
-      await expect(
-        new McpServerStore(db, TEST_ENCRYPTION_KEY).update("def456", {
-          headers: {},
-          keepCredentialKeys: [],
-        })
-      ).rejects.toThrow(McpServerConflictError);
     });
 
     describe("with credentials it cannot decrypt", () => {
