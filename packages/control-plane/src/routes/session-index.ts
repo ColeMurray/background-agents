@@ -439,7 +439,7 @@ export async function handleMarkSessionInboxRead(
   if (filterOptions instanceof Response) return filterOptions;
 
   const markedCount = await readSessionList(() =>
-    new SessionIndexStore(ctx.db).markInboxRead(filterOptions)
+    new SessionIndexStore(ctx.db).markInboxRead(filterOptions, body.rootSessionId)
   );
   if (markedCount instanceof Response) return markedCount;
 
@@ -450,6 +450,7 @@ export async function handleMarkSessionInboxRead(
     marked_count: markedCount,
     mine: body.mine === true,
     team_count: body.teamIds?.length ?? 0,
+    root_session_id: body.rootSessionId ?? null,
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
   });

@@ -5,7 +5,7 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import type { SentryAutomationEvent, WebhookAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler } from "../../src/scheduler/factory";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 
 function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
@@ -17,6 +17,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     instructions: "Investigate and fix",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
@@ -37,7 +38,7 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 }
 
 function sendEvent(event: SentryAutomationEvent | WebhookAutomationEvent) {
-  return new Scheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
+  return createScheduler(env.DB, createCloudflareEnv(env), { submit() {} }).event(event);
 }
 
 function makeSentryEvent(

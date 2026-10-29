@@ -71,6 +71,7 @@ function createHandler() {
     getProcessingMessageAuthor: vi.fn<() => { author_id: string } | null>(() => ({
       author_id: "participant-1",
     })),
+    getProcessingPromptAccount: vi.fn<() => string | null>(() => null),
     getParticipantById: vi.fn<(id: string) => ParticipantRow | null>(() => createParticipant()),
   };
   const getSession = vi.fn<() => SessionRow | null>();
@@ -132,7 +133,11 @@ describe("ChildSessionsHandler", () => {
       ]);
 
       const response = await handler.parentPrompt(
-        request({ parentSessionId: "parent-1", content: "Continue with the edge cases" })
+        request({
+          parentSessionId: "parent-1",
+          content: "Continue with the edge cases",
+          promptAccountUserId: "canonical-1",
+        })
       );
 
       expect(response.status).toBe(200);
@@ -145,6 +150,7 @@ describe("ChildSessionsHandler", () => {
         content: "Continue with the edge cases",
         authorId: "owner-1",
         canonicalUserId: "canonical-1",
+        promptAccountUserId: "canonical-1",
         source: "agent",
         scmEnrichment: {
           userId: null,
@@ -153,6 +159,26 @@ describe("ChildSessionsHandler", () => {
           email: null,
         },
       });
+    });
+
+    it("counts a follow-up as no one's when its parent prompt had no account", async () => {
+      const { handler, getSession, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+
+      // The author maps to an account now, but the parent's prompt was queued under none.
+      for (const promptAccountUserId of [null, undefined]) {
+        await handler.parentPrompt(
+          request({ parentSessionId: "parent-1", content: "Keep going", promptAccountUserId })
+        );
+      }
+
+      expect(enqueuePrompt).toHaveBeenCalledTimes(2);
+      for (const call of [1, 2]) {
+        expect(enqueuePrompt).toHaveBeenNthCalledWith(
+          call,
+          expect.objectContaining({ canonicalUserId: "canonical-1", promptAccountUserId: null })
+        );
+      }
     });
 
     it("returns distinct validation reasons for blank and oversized prompts", async () => {
@@ -347,6 +373,9 @@ describe("ChildSessionsHandler", () => {
       })
     );
 
+    // Queued before the author was linked to an account.
+    repository.getProcessingPromptAccount.mockReturnValue(null);
+
     const response = handler.getActivePromptAuthor();
 
     expect(response.status).toBe(200);
@@ -356,6 +385,7 @@ describe("ChildSessionsHandler", () => {
       canonicalUserId: "canonical-2",
       scmUserId: "222",
       scmLogin: "second-user",
+      promptAccountUserId: null,
     });
     expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
     expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
@@ -401,7 +431,24 @@ describe("ChildSessionsHandler", () => {
         scmName: "The Octocat",
         scmEmail: "octocat@example.com",
       },
+      promptAccountUserId: null,
     });
+  });
+
+  it("carries the account the spawning prompt was queued under, not its author's current one", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getParticipantById.mockReturnValue(
+      createParticipant({ user_id: "github:7", canonical_user_id: "canonical-2" })
+    );
+    // An Autofix turn: its reviewer maps to an account, but the turn was queued under none.
+    repository.getProcessingPromptAccount.mockReturnValue(null);
+
+    const response = handler.getSpawnContext();
+
+    const body = await response.json<Record<string, unknown>>();
+    expect(body.promptAuthor).toMatchObject({ canonicalUserId: "canonical-2" });
+    expect(body.promptAccountUserId).toBeNull();
   });
 
   it("maps repo-less spawn context from session and processing prompt author", async () => {

@@ -6,7 +6,7 @@ const TOKEN_FIELDS = [
   ["outputTokens", "Output"],
   ["cacheReadTokens", "Cache read"],
   ["cacheWriteTokens", "Cache write"],
-  ["reasoningTokens", "Reasoning (OpenCode only)"],
+  ["reasoningTokens", "Reasoning (OpenCode and Codex)"],
 ] as const;
 
 export function AnalyticsTokenTotals({ totals }: { totals: AnalyticsTokenTotals }) {

@@ -7,6 +7,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import { WorkspaceSettings } from "./workspace-settings";
 
 expect.extend(matchers);
@@ -17,6 +18,9 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("@/hooks/use-workspace-administration", () => ({
   useWorkspaceAdministration: vi.fn(),
 }));
+vi.mock("./sign-in-allowlist-section", () => ({
+  SignInAllowlistSection: () => <div data-testid="sign-in-allowlist">Sign-in allowlist</div>,
+}));
 
 afterEach(() => {
   cleanup();
@@ -24,6 +28,85 @@ afterEach(() => {
 });
 
 describe("WorkspaceSettings", () => {
+  it.each([
+    ["owner", true, null, true],
+    ["administrator", true, null, true],
+    ["owner", false, null, false],
+    ["owner", true, 1, false],
+    ["member", true, null, false],
+    ["viewer", true, null, false],
+    [null, true, null, false],
+  ] as const)(
+    "gates the allowlist mount on role %s, permission %s, suspension %s",
+    (key, permission, suspendedAt, visible) => {
+      const authorization: EffectiveAuthorization = {
+        userId: "11111111111111111111111111111111",
+        role: { id: key ? `role_builtin_${key}` : "role_custom", key, name: "Owner" },
+        suspendedAt,
+        permissions: permission ? ["workspace.members.manage"] : [],
+      };
+      vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+        authorization,
+        loading: false,
+        error: null,
+        hasPermission: (id) =>
+          id === "workspace.members.read" || (permission && id === "workspace.members.manage"),
+      });
+      vi.mocked(useWorkspaceAdministration).mockReturnValue({
+        members: [],
+        roles: [],
+        loading: false,
+        error: undefined,
+        refreshError: undefined,
+        updateMember: vi.fn(),
+        previewMerge: vi.fn(),
+        mergeMembers: vi.fn(),
+      });
+      render(<WorkspaceSettings />);
+      expect(screen.queryAllByTestId("sign-in-allowlist")).toHaveLength(visible ? 1 : 0);
+      expect(screen.getByRole("heading", { name: "Members" })).toBeInTheDocument();
+    }
+  );
+
+  it("offers account merging only with the merge permission", () => {
+    const administration = {
+      members: ["11111111111111111111111111111111", "22222222222222222222222222222222"].map(
+        (userId) => ({
+          userId,
+          displayName: null,
+          email: null,
+          suspendedAt: null,
+          role: { id: "role_builtin_member", key: "member" as const, name: "Member" },
+        })
+      ),
+      roles: [],
+      loading: false,
+      error: undefined,
+      refreshError: undefined,
+      updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
+    };
+    vi.mocked(useWorkspaceAdministration).mockReturnValue(administration);
+    for (const canMerge of [false, true]) {
+      vi.mocked(useCurrentUserAuthorization).mockReturnValue({
+        authorization: null,
+        loading: false,
+        error: null,
+        hasPermission: (permission) =>
+          permission === "workspace.members.read" ||
+          (canMerge && permission === "workspace.members.merge"),
+      });
+
+      render(<WorkspaceSettings />);
+
+      expect(screen.queryAllByRole("button", { name: "Merge accounts" })).toHaveLength(
+        canMerge ? 1 : 0
+      );
+      cleanup();
+    }
+  });
+
   it("shows assigned role names to members-only readers", () => {
     vi.mocked(useCurrentUserAuthorization).mockReturnValue({
       authorization: null,
@@ -44,7 +127,10 @@ describe("WorkspaceSettings", () => {
       roles: [],
       loading: false,
       error: undefined,
+      refreshError: undefined,
       updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -86,7 +172,10 @@ describe("WorkspaceSettings", () => {
       ],
       loading: false,
       error: undefined,
+      refreshError: undefined,
       updateMember: vi.fn(),
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -117,7 +206,10 @@ describe("WorkspaceSettings", () => {
       roles: [],
       loading: false,
       error: undefined,
+      refreshError: undefined,
       updateMember,
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);
@@ -170,7 +262,10 @@ describe("WorkspaceSettings", () => {
       ],
       loading: false,
       error: undefined,
+      refreshError: undefined,
       updateMember,
+      previewMerge: vi.fn(),
+      mergeMembers: vi.fn(),
     });
 
     render(<WorkspaceSettings />);

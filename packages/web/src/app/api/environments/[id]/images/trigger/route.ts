@@ -1,22 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
+import { rejectUnsupportedRepoImages } from "@/lib/repo-images-unsupported";
 
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  if (!supportsRepoImages()) {
-    return NextResponse.json({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE }, { status: 501 });
-  }
-
-  const { id } = await params;
-
   try {
+    const rejection = await rejectUnsupportedRepoImages();
+    if (rejection) return rejection;
+
+    const { id } = await params;
     const response = await controlPlaneUserFetch(
       `/image-builds/trigger/environment/${encodeURIComponent(id)}`,
       { method: "POST" }

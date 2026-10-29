@@ -18,6 +18,14 @@
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
     },
+    "./actor-enrollment": {
+      "import": "./dist/actor-enrollment.js",
+      "types": "./dist/actor-enrollment.d.ts"
+    },
+    "./abortable": {
+      "import": "./dist/abortable.js",
+      "types": "./dist/abortable.d.ts"
+    },
     "./models": {
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
@@ -45,6 +53,10 @@
     "./http-body": {
       "import": "./dist/http-body.js",
       "types": "./dist/http-body.d.ts"
+    },
+    "./admission-settings": {
+      "import": "./dist/admission-settings.js",
+      "types": "./dist/admission-settings.d.ts"
     },
     "./inline-prompt-flags": {
       "import": "./dist/inline-prompt-flags.js",
@@ -109,6 +121,10 @@
     "./sign-in-provider": {
       "import": "./dist/sign-in-provider.js",
       "types": "./dist/sign-in-provider.d.ts"
+    },
+    "./sign-in-failure": {
+      "import": "./dist/sign-in-failure.js",
+      "types": "./dist/sign-in-failure.d.ts"
     },
     "./git": {
       "import": "./dist/git.js",
@@ -226,6 +242,10 @@
       "import": "./dist/types/memories.js",
       "types": "./dist/types/memories.d.ts"
     },
+    "./types/actors": {
+      "import": "./dist/types/actors.js",
+      "types": "./dist/types/actors.d.ts"
+    },
     "./memory-tools": {
       "import": "./dist/memory-tools.js",
       "types": "./dist/memory-tools.d.ts"
@@ -233,6 +253,10 @@
     "./generated-files": {
       "import": "./dist/generated-files.js",
       "types": "./dist/generated-files.d.ts"
+    },
+    "./child-status-tool": {
+      "import": "./dist/child-status-tool.js",
+      "types": "./dist/child-status-tool.d.ts"
     }
   },
   "scripts": {
@@ -246,13 +270,13 @@
     "generate:memory-contract": "UPDATE_MEMORY_CONTRACT=1 vitest run src/memory-tools.test.ts"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",
-    "cron-parser": "^5.5.0",
-    "zod": "^4.4.3"
+    "cron-parser": "^5.10.2",
+    "zod": "^4.6.7"
   }
 }

@@ -206,7 +206,9 @@ function AboutThisData() {
             PR counts reflect pull requests created through the platform&apos;s built-in flow,
             including automation-created ones.
           </li>
-          <li>Sessions billed to a connected subscription report $0 cost.</li>
+          <li>
+            Sessions billed to a connected subscription report model-price equivalents, not charges.
+          </li>
         </ul>
       </PopoverContent>
     </Popover>

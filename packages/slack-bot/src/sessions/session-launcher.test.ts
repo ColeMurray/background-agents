@@ -93,6 +93,18 @@ describe("startSessionAndSendPrompt team boundaries", () => {
   });
 
   it.each([
+    ["D0123ABC", true],
+    ["C123", false],
+    ["G123", false],
+  ])("creates a session from conversation %s as a direct message: %s", async (channel, direct) => {
+    await startSessionAndSendPrompt(makeEnv(), { ...options, channel });
+    expect(createSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ directMessage: direct })
+    );
+  });
+
+  it.each([
     [
       { status: 403, code: "session_action_denied", reasonCode: "not_member" },
       "you are not a member of this channel's team",

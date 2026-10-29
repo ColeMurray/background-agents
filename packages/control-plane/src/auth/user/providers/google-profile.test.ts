@@ -26,24 +26,23 @@ describe("GoogleSignInProfileResolver", () => {
       token: "signed-google-id-token",
       audience: "google-client-id",
     });
-    expect(requireAdmission).toHaveBeenCalledWith({
-      identity: {
-        provider: "google",
-        issuer: "https://accounts.google.com",
-        subject: "google-subject",
-        displayName: "Person Example",
-        avatarUrl: "https://example.com/avatar.png",
-        verifiedEmails: ["person@example.com"],
-        primaryEmail: "person@example.com",
-      },
+    expect(result.data).toEqual({
+      provider: "google",
+      issuer: "https://accounts.google.com",
+      subject: "google-subject",
+      displayName: "Person Example",
+      avatarUrl: "https://example.com/avatar.png",
+      verifiedEmails: ["person@example.com"],
+      primaryEmail: "person@example.com",
     });
+    expect(requireAdmission).toHaveBeenCalledWith({ identity: result.data });
     expect(result.user).toEqual({
-      id: "google-subject",
       name: "Person Example",
       email: "person@example.com",
       image: "https://example.com/avatar.png",
       emailVerified: true,
     });
+    expect(result.user).not.toHaveProperty("id");
   });
 
   it("rejects an unverifiable ID token before admission", async () => {

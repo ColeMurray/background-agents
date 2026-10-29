@@ -142,6 +142,13 @@ function hasReviewContent(
   return Boolean(feedback.body.trim() || feedback.comments.some((comment) => comment.body.trim()));
 }
 
+/** An approval's summary is its verdict; only the inline threads it opens ask for changes. */
+function opensInlineThread(
+  feedback: Extract<GitHubPullRequestFeedback, { kind: "review" }>
+): boolean {
+  return feedback.comments.some((comment) => comment.inReplyToId === null && comment.body.trim());
+}
+
 function buildStructuredFeedback(feedback: GitHubPullRequestFeedback): GitHubAutofixFeedback {
   if (feedback.kind === "review" && feedback.comments.length > MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS) {
     throw new SourceControlProviderError(
@@ -481,6 +488,9 @@ export class AutofixService {
 
     if (feedback.kind === "pr_comment") {
       return feedback.body.trim() ? null : "empty_feedback";
+    }
+    if (feedback.state === "APPROVED") {
+      return opensInlineThread(feedback) ? null : "review_state_not_actionable";
     }
     if (feedback.state !== "COMMENTED" && feedback.state !== "CHANGES_REQUESTED") {
       return "review_state_not_actionable";

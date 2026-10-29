@@ -1,5 +1,7 @@
 # Background Agents: Open-Inspect
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 An open-source background agents coding system inspired by
 [Ramp's Inspect](https://builders.ramp.com/post/why-we-built-our-background-agent).
 
@@ -131,19 +133,19 @@ ownership, bots, and member suspension.
 
 ## Packages
 
-| Package                                           | Description                                 |
-| ------------------------------------------------- | ------------------------------------------- |
-| [control-plane](packages/control-plane)           | Cloudflare Workers + Durable Objects        |
-| [web](packages/web)                               | Next.js web client                          |
-| [sandbox-runtime](packages/sandbox-runtime)       | Shared in-sandbox agent runtime             |
-| [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
-| [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
-| [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
-| [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
-| [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
-| [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
-| [linear-bot](packages/linear-bot)                 | Linear integration (issue → coding session) |
-| [shared](packages/shared)                         | Shared types and utilities                  |
+| Package                                     | Description                                 |
+| ------------------------------------------- | ------------------------------------------- |
+| [control-plane](packages/control-plane)     | Cloudflare Workers + Durable Objects        |
+| [web](packages/web)                         | Next.js web client                          |
+| [sandbox-runtime](packages/sandbox-runtime) | Shared in-sandbox agent runtime             |
+| [modal-infra](packages/modal-infra)         | Modal sandbox infrastructure                |
+| [daytona-infra](packages/daytona-infra)     | Daytona snapshot infrastructure             |
+| [e2b-infra](packages/e2b-infra)             | E2B sandbox template infrastructure         |
+| [boat-infra](packages/boat-infra)           | Boat sandbox snapshot infrastructure        |
+| [slack-bot](packages/slack-bot)             | Slack integration (sessions from messages)  |
+| [github-bot](packages/github-bot)           | GitHub integration (auto-review, @mention)  |
+| [linear-bot](packages/linear-bot)           | Linear integration (issue → coding session) |
+| [shared](packages/shared)                   | Shared types and utilities                  |
 
 ## Getting Started
 
@@ -314,8 +316,15 @@ docker compose up -d postgres redis
   rather than collected or shown. Image builds report neither, having no session to report to. See
   [How Open-Inspect Works](docs/HOW_IT_WORKS.md#fresh-start-no-snapshot)
 - Both hooks receive `OPENINSPECT_BOOT_MODE` (`build`, `fresh`, `repo_image`, `snapshot_restore`)
-- Git operations in hooks can authenticate to other private repos on the configured SCM host when
-  the shared installation has access
+- GitHub session credentials used by hooks are limited to the session's persisted repository set,
+  intersected with current owning-team grants for team-owned sessions. Private submodules,
+  Git-backed dependencies, and sibling clones must be included in that set; App installation access
+  alone does not expand it
+- GitHub image-build credentials cover only the build repositories, with owning-team grants applied
+  for team-owned environment builds. GitLab uses a deployment-wide PAT without per-session
+  narrowing. See
+  [Repository and Credential Boundaries](docs/AUTH.md#repository-and-credential-boundaries) for
+  details, including credential caching and grant revocation
 
 ## License
 
@@ -329,8 +338,8 @@ built with:
 - [Modal](https://modal.com) - Cloud sandbox infrastructure
 - [Daytona](https://www.daytona.io) - Cloud development sandboxes
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
-- [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
 - [E2B](https://e2b.dev) - Cloud sandbox infrastructure
+- [Boat](https://boat.dev) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime (built-in harness)
 - [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk) - Coding agent runtime (Claude

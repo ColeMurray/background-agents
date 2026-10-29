@@ -46,12 +46,7 @@ export function ModelsSettings() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-        Loading model preferences...
-      </div>
-    );
+    return <ModelsSettingsSkeleton />;
   }
 
   if (error) {
@@ -122,6 +117,44 @@ export function ModelsSettings() {
       <p role="status" className="mt-6 text-sm text-muted-foreground">
         {saving ? "Saving..." : ""}
       </p>
+    </div>
+  );
+}
+
+/** Mirrors the loaded list; the model catalog is static, so every group and row is known. */
+function ModelsSettingsSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading model preferences"
+      className="animate-pulse motion-reduce:animate-none"
+    >
+      <div className="h-5 w-40 bg-muted rounded mt-1 mb-2" />
+      <div className="mb-6 py-0.5">
+        <div className="h-4 w-11/12 bg-muted rounded" />
+      </div>
+
+      <div className="space-y-6">
+        {MODEL_OPTIONS.map((group) => (
+          <div key={group.category}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="h-4 w-28 bg-muted rounded" />
+              <div className="h-6 w-16 bg-muted rounded" />
+            </div>
+            <div className="space-y-2">
+              {group.models.map((model) => (
+                <div
+                  key={model.id}
+                  className="flex items-center justify-between px-4 py-3 border border-border"
+                >
+                  <div className="h-4 w-64 max-w-[70%] bg-muted rounded my-1" />
+                  <div className="h-5 w-9 shrink-0 bg-muted rounded-full" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

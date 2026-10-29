@@ -1,6 +1,7 @@
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { Logger } from "../../logger";
+import { interruptionMessage } from "../../session/interruption-messages";
 import type { SandboxRow } from "../../session/types";
 import type { StopConfig } from "../provider";
 import type { SandboxAlarmResult, SandboxGeneration } from "./ports";
@@ -36,9 +37,8 @@ export interface WatchdogEffectsDependencies {
   canStopProviderSandbox: () => boolean;
   usesProviderManagedStop: () => boolean;
   snapshotRequiresShutdown: () => boolean;
-  recordSpawnFailure: (now: number, attemptStartedAt: number) => void;
-  /** Whether the circuit breaker would refuse a launch at `now`. */
-  isCircuitBreakerOpen: (now: number) => boolean;
+  /** Count a failed attempt; returns whether the circuit breaker is now open. */
+  recordSpawnFailure: (now: number, attemptStartedAt: number) => boolean;
   reportSandboxError: (reason: string) => void;
   triggerSnapshot: (reason: string) => Promise<void>;
   stopProviderSandboxSafely: (options: {
@@ -70,7 +70,6 @@ export async function failConnectTimeout(
     | "access"
     | "canStopProviderSandbox"
     | "recordSpawnFailure"
-    | "isCircuitBreakerOpen"
     | "reportSandboxError"
     | "stopProviderSandboxSafely"
     | "getLogger"
@@ -85,8 +84,7 @@ export async function failConnectTimeout(
     timeout_ms: timeoutMs,
   });
   deps.storage.updateSandboxStatus("failed");
-  deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
-  const retriesExhausted = deps.isCircuitBreakerOpen(ctx.now);
+  const retriesExhausted = deps.recordSpawnFailure(ctx.now, ctx.sandbox.created_at);
   deps.access.clearAccess();
   const held = deps.shutdown.holdFailedRetainedBoot(
     "Sandbox failed to connect within the allowed time",
@@ -105,6 +103,8 @@ export async function failConnectTimeout(
       failureMessage: "Provider stop failed after connecting timeout",
     });
   }
+  // The stop may have yielded to a replacement; only the timed-out generation owns this failure.
+  if (!ctx.isCurrentGeneration()) return "sandbox_failed";
   deps.broadcaster.broadcast({ type: "sandbox_status", status: "failed" });
   if (held) {
     deps.reportSandboxError("Sandbox failed to connect within the allowed time.");
@@ -122,8 +122,6 @@ export async function failConnectTimeout(
       ? "Sandbox failed to connect within the allowed time and could not be stopped for a retry."
       : "Sandbox failed to connect within the allowed time. Queued prompts will be retried on a fresh sandbox.";
   deps.reportSandboxError(reason);
-  // A launch that replaced this generation during stop owns the queue now.
-  if (!ctx.isCurrentGeneration()) return "sandbox_failed";
   return retriesExhausted || !stopped
     ? { kind: "connect_timeout_unrecoverable", reason }
     : "sandbox_terminated";
@@ -160,6 +158,12 @@ export async function terminateStaleHeartbeat(
   if (!isBooting && deps.snapshotRequiresShutdown()) {
     // A missing runtime cannot drain; the coordinator captures and retires the source.
     const ownership = await deps.shutdown.requestShutdown("heartbeat_timeout", "emergency");
+    // Shutdown admission may have yielded to a replacement, which owns its own outcome.
+    if (!ctx.isCurrentGeneration()) return "no_action";
+    // Owned: the shutdown failed the prompt as it claimed the source. Held: a
+    // save already owns the source and fails nothing, so the watchdog reports
+    // the lost runtime itself.
+    if (ownership === "held") return heartbeatLost();
     if (ownership !== "unmanaged") return "no_action";
   }
   deps.storage.updateSandboxStatus("stale");
@@ -180,14 +184,20 @@ export async function terminateStaleHeartbeat(
       });
     }
   } else {
-    if ((await snapshotAndStopStaleSandbox(deps, ctx)) === "abandoned") return "no_action";
-    if (!ctx.isCurrentGeneration()) return "no_action";
+    const outcome = await snapshotAndStopStaleSandbox(deps, ctx);
+    if (outcome === "held") return heartbeatLost();
+    if (outcome === "superseded" || !ctx.isCurrentGeneration()) return "no_action";
     deps.sockets.sendToSandbox({ type: "shutdown" });
   }
 
   if (!ctx.isCurrentGeneration()) return "no_action";
   deps.sockets.detachSandboxWebSocket(1000, "Heartbeat stale");
   return "sandbox_terminated";
+}
+
+/** The runtime is gone, but its save holds the source: no termination will fail its prompt. */
+function heartbeatLost(): SandboxAlarmResult {
+  return { kind: "heartbeat_lost", reason: interruptionMessage("heartbeat_timeout") };
 }
 
 /** Await capture before explicit stop; otherwise leave capture detached as before. */
@@ -201,7 +211,7 @@ export async function snapshotAndStopStaleSandbox(
     | "getLogger"
   >,
   ctx: WatchdogContext
-): Promise<"stopped" | "abandoned"> {
+): Promise<"stopped" | "held" | "superseded"> {
   if (!deps.canStopProviderSandbox()) {
     deps.triggerSnapshot("heartbeat_timeout").catch((e) =>
       deps.getLogger().error("Heartbeat snapshot failed", {
@@ -212,8 +222,9 @@ export async function snapshotAndStopStaleSandbox(
   }
 
   await deps.triggerSnapshot("heartbeat_timeout");
-  if (deps.shutdown.isHolding()) return "abandoned";
-  if (!ctx.isCurrentGeneration()) return "abandoned";
+  if (!ctx.isCurrentGeneration()) return "superseded";
+  // An unconfirmed save keeps the source for recovery; nothing may stop it.
+  if (deps.shutdown.isHolding()) return "held";
   await deps.stopProviderSandboxSafely({
     reason: "heartbeat_timeout",
     intent: "destroy",
@@ -239,17 +250,12 @@ export async function stopForInactivity(
     | "stopProviderSandboxSafely"
     | "getLogger"
   >,
-  timeoutMs: number,
   ctx: WatchdogContext
 ): Promise<SandboxAlarmResult> {
   const ownership = await deps.shutdown.requestShutdown("inactivity_timeout");
   if (ownership !== "unmanaged") return "no_action";
+  if (!ctx.isCurrentGeneration()) return "no_action";
 
-  deps.getLogger().info("Inactivity timeout", {
-    event: "sandbox.timeout",
-    last_activity: ctx.sandbox.last_activity,
-    timeout_ms: timeoutMs,
-  });
   // Block reconnect before retiring access or yielding to capture/stop.
   deps.storage.updateSandboxStatus("stopped");
   deps.access.clearAccess();

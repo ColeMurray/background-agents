@@ -30,6 +30,7 @@ from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
 from .mcp_packages import McpPackageInstaller
 from .memories import MemoryMaterializer, SessionMemoryClient, memory_path
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
+from .model_catalog import configure_model_catalog
 from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
@@ -136,6 +137,7 @@ def _build_memory(
 def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
     """Consume process secrets and compose the production runtime."""
     apply_image_environment()
+    configure_model_catalog(os.environ)
     config = RuntimeConfig.from_env(os.environ)
     vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
     if vnc_password:
@@ -151,7 +153,13 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         config.repository_config(),
         log,
         warnings,
-        TunnelEnvironment(config.sandbox_id, log),
+        TunnelEnvironment(
+            config.sandbox_id,
+            log,
+            control_plane_url=config.control_plane_url,
+            session_id=config.session_id,
+            sandbox_token=config.sandbox_token,
+        ),
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
     )

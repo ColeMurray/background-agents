@@ -10,6 +10,7 @@ import type {
   LinearGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import type { ModelCategory } from "@open-inspect/shared/models";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { LinearIntegrationSettings } from "./linear-integration-settings";
 
@@ -56,6 +57,7 @@ const repoKey = "/api/integration-settings/linear/repos";
 function setupSWR(opts: {
   settings?: LinearGlobalConfig | null;
   overrides?: { repo: string; settings: LinearBotSettings }[];
+  availableRepos?: EnrichedRepository[];
 }) {
   useSWRMock.mockImplementation((key: string) => {
     if (key === globalKey) {
@@ -67,7 +69,7 @@ function setupSWR(opts: {
     if (key === repoKey) {
       return { data: { repos: opts.overrides ?? [] }, isLoading: false };
     }
-    return { data: { repos: [] }, isLoading: false };
+    return { data: { repos: opts.availableRepos ?? [] }, isLoading: false };
   });
 }
 
@@ -76,6 +78,87 @@ beforeEach(() => {
   authorization.canManageGlobal = true;
 });
 afterEach(cleanup);
+
+describe("LinearIntegrationSettings repository overrides", () => {
+  it("retains a failed repository addition for retry and clears it after success", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      availableRepos: [
+        {
+          id: 1,
+          owner: "Group/Subgroup",
+          name: "Repository",
+          fullName: "Group/Subgroup/Repository",
+          description: null,
+          private: false,
+          archived: false,
+          defaultBranch: "main",
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch)
+      .mockRejectedValueOnce(new Error("Offline"))
+      .mockResolvedValueOnce(new Response("{}"));
+    render(<LinearIntegrationSettings />);
+
+    const picker = screen.getByRole("combobox", { name: "Select a repository" });
+    const add = screen.getByRole("button", { name: "Add Override" });
+    expect(add).toBeDisabled();
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: "Group/Subgroup/Repository" }));
+    await user.click(add);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Failed to add override"));
+    expect(browserApiFetch).toHaveBeenCalledWith(
+      `${repoKey}/group%2Fsubgroup/repository`,
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ settings: {} }) })
+    );
+    expect(picker).toHaveTextContent("Group/Subgroup/Repository");
+    expect(add).toBeEnabled();
+    expect(mutateMock).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+
+    await user.click(add);
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Override added."));
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(mutateMock).toHaveBeenCalledWith(repoKey);
+    expect(picker).toHaveTextContent("Select a repository...");
+    expect(add).toBeDisabled();
+  });
+});
+
+describe("LinearIntegrationSettings repository scope", () => {
+  it("saves the selected repository allowlist", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      availableRepos: [
+        {
+          id: 1,
+          owner: "Group/Subgroup",
+          name: "Repository",
+          fullName: "Group/Subgroup/Repository",
+          description: null,
+          private: false,
+          archived: false,
+          defaultBranch: "main",
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+
+    render(<LinearIntegrationSettings />);
+
+    await user.click(screen.getByRole("radio", { name: /Selected repositories/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Group/Subgroup/Repository" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings.enabledRepos).toEqual(["group/subgroup/repository"]);
+  });
+});
 
 describe("LinearIntegrationSettings unbound policy", () => {
   it("closes the open policy menu when permission is revoked without changing the value", async () => {

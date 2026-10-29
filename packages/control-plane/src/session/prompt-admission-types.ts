@@ -13,6 +13,8 @@ export interface PromptMessageData {
 
 export interface EnqueuePromptCoreData {
   participant: ParticipantRow;
+  /** Recorded as the prompt's account in place of the participant's when set, null included. */
+  promptAccountUserId?: string | null;
   userId: string;
   content: string;
   source: MessageSource;

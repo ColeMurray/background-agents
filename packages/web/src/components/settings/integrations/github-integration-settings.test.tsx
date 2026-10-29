@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
@@ -157,6 +157,39 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("retains a failed repository addition for retry and clears it after success", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null, availableRepos: [repo("Group/Subgroup/Repository")] });
+    fetchMock
+      .mockResolvedValueOnce({ ok: false, json: async () => ({ error: "Try again" }) })
+      .mockResolvedValueOnce(okJson({}));
+    render(<GitHubIntegrationSettings />);
+
+    const picker = screen.getByRole("combobox", { name: "Select a repository" });
+    const add = screen.getByRole("button", { name: "Add Override" });
+    expect(add).toBeDisabled();
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: "Group/Subgroup/Repository" }));
+    await user.click(add);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Try again"));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github/repos/group%2Fsubgroup/repository",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ settings: {} }) })
+    );
+    expect(picker).toHaveTextContent("Group/Subgroup/Repository");
+    expect(add).toBeEnabled();
+    expect(mutateMock).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+
+    await user.click(add);
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Override added."));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/github/repos");
+    expect(picker).toHaveTextContent("Select a repository...");
+    expect(add).toBeDisabled();
+  });
+
   it("marks global auto-review deprecated with an accessible team-owned template replacement", () => {
     setupSWR({ global: null });
 
@@ -237,6 +270,31 @@ describe("GitHubIntegrationSettings", () => {
 
     expect(screen.getByRole("heading", { name: "GitHub Bot", level: 2 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Connection", level: 3 })).toBeInTheDocument();
+  });
+
+  it("saves the selected repository allowlist", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null, availableRepos: [repo("Group/Subgroup/Repository")] });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("radio", { name: /Selected repositories/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Group/Subgroup/Repository" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { autoReviewOnOpen: true },
+            enabledRepos: ["group/subgroup/repository"],
+          },
+        }),
+      })
+    );
   });
 
   it("renders the default-off Autofix block and persists one complete global policy", async () => {

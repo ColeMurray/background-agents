@@ -34,6 +34,7 @@ const sampleRow: AutomationRow = {
   instructions: "Run daily sync tasks",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
+  schedule_once_at: null,
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   harness: "opencode",

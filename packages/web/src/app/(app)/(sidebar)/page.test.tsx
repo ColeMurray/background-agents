@@ -495,6 +495,26 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /docs/i });
   });
 
+  it("requests the skill preview for the stored target before showing its count", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "open-inspect/background-agents");
+    mocks.reposValue = [];
+    mocks.loadingReposValue = true;
+    const { rerender } = render(<Home />);
+
+    expect(mocks.skillResolutionPreview).toHaveBeenLastCalledWith(
+      { repoOwner: "open-inspect", repoName: "background-agents" },
+      { mode: "all" }
+    );
+    expect(screen.getByRole("button", { name: /all skills/i })).not.toHaveTextContent("(1)");
+
+    mocks.reposValue = [repo];
+    mocks.loadingReposValue = false;
+    rerender(<Home />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /all skills/i })).toHaveTextContent("(1)")
+    );
+  });
+
   it("surfaces the error and stays put when the initial prompt fails", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);

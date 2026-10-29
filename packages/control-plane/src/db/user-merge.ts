@@ -6,9 +6,16 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  * person (e.g. a Slack-attributed email beside a GitHub-subject row —
  * `auth.subject_email_collision` enumerates the live cases).
  *
- * Deliberately a library + operator script, not an HTTP endpoint: a merge
- * primitive on an authenticated surface adds authz/abuse surface for no
- * safety gain.
+ * Callers: the operator CLI (`scripts/merge-split-users.ts`) and the
+ * administrator merge flow (`authorization/member-merge.ts`). An
+ * administrator merge passes a `user` actor whose authorization guard is
+ * re-evaluated inside the atomic batch.
+ *
+ * The execute batch opens with an audit insert that records a typed decision
+ * (`applied`, or why the write-time preconditions failed), and every later
+ * write is gated on that row being `applied`. A refused merge therefore
+ * changes nothing but its own audited refusal, and the caller learns exactly
+ * which precondition failed at write time.
  *
  * Guarantees:
  * - Dry-run by default in the CLI wrapper; `mergeUsers` itself takes an
@@ -28,7 +35,10 @@ import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
  *   canonical user.
  * - Verification never transfers to an unproven address: the loser's email
  *   (and its `email_verified` flag) backfills the survivor only when the
- *   survivor has no email of its own.
+ *   survivor has no email of its own, and only if both still match the
+ *   preflight snapshot at write time.
+ * - A merge never leaves a user with two GitHub identities: session
+ *   attribution and the GitHub credential authority both reject that state.
  */
 
 /**
@@ -42,20 +52,70 @@ function normalizeEmail(email: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+/** Reasons the in-batch decision can refuse a merge at write time. */
+type UserMergeWriteRefusal =
+  "actor_authorization_changed" | "preconditions_changed" | "source_changed" | "identity_conflict";
+
+const WRITE_REFUSAL_MESSAGES: Record<UserMergeWriteRefusal, string> = {
+  actor_authorization_changed: "The acting user's authorization changed; nothing was merged",
+  preconditions_changed: "User roles or suspension changed; nothing was merged",
+  source_changed: "The merged-in user's email changed; nothing was merged",
+  identity_conflict: "Both users have a GitHub identity; nothing was merged",
+};
+
+/** Stable reasons a merge was refused, at preflight or by the in-batch decision. */
+export type UserMergeErrorCode =
+  | "self_merge"
+  | "survivor_not_found"
+  | "role_assignment_missing"
+  | "role_conflict"
+  | "suspension_conflict"
+  | "owner_suspended"
+  | UserMergeWriteRefusal;
+
 export class UserMergeError extends Error {
-  constructor(message: string) {
+  // A declared field, not a parameter property: the operator CLI loads this
+  // module under Node's type-stripping loader, which rejects the latter.
+  readonly code: UserMergeErrorCode;
+
+  constructor(code: UserMergeErrorCode, message: string) {
     super(message);
     this.name = "UserMergeError";
+    this.code = code;
   }
 }
+
+/** A parameterized SQL predicate evaluated inside the merge batch. */
+export interface UserMergeGuard {
+  readonly sql: string;
+  readonly values: readonly unknown[];
+}
+
+/**
+ * Who performs an executed merge. A `user` actor is recorded on the audit
+ * event, and its `guard` must still hold when the batch runs.
+ */
+export type UserMergeActor =
+  | { readonly kind: "operator" }
+  | {
+      readonly kind: "user";
+      readonly userId: string;
+      readonly requestId: string;
+      readonly guard: UserMergeGuard;
+    };
 
 export interface UserMergeOptions {
   readonly survivorId: string;
   readonly loserId: string;
   readonly dryRun?: boolean;
+  /** Defaults to the operator CLI. */
+  readonly actor?: UserMergeActor;
 }
 
-const USER_MERGE_COUNT_KEYS = [
+const OPERATOR_ACTOR: UserMergeActor = { kind: "operator" };
+
+/** Every count a merge reports. Mirrored by `USER_MERGE_COUNT_KEYS` in `@open-inspect/shared/rbac`. */
+export const USER_MERGE_COUNT_KEYS = [
   "memoriesOwnedRepointed",
   "memoryAuthorsRepointed",
   "memoryRevisionAuthorsRepointed",
@@ -68,6 +128,7 @@ const USER_MERGE_COUNT_KEYS = [
   "identitiesRepointed",
   "readStatesDeduped",
   "readStatesRepointed",
+  "teamLeadRolesPromoted",
   "teamMembershipsDeduped",
   "teamMembershipsRepointed",
   "sessionCollaboratorsDeduped",
@@ -100,7 +161,8 @@ const USER_MERGE_COUNT_KEYS = [
 ] as const;
 
 type UserMergeCountKey = (typeof USER_MERGE_COUNT_KEYS)[number];
-type UserMergeCounts = Record<UserMergeCountKey, number>;
+/** Per-record counts a merge changed, or a dry run would change. */
+export type UserMergeCounts = Record<UserMergeCountKey, number>;
 
 const RESULT_CHANGE_DIVISORS: Partial<Record<UserMergeCountKey, number>> = {
   // The assignment UPDATE trigger also advances skills_catalog_state once per
@@ -108,9 +170,20 @@ const RESULT_CHANGE_DIVISORS: Partial<Record<UserMergeCountKey, number>> = {
   skillAssignmentsCreatedRepointed: 2,
 };
 
+/** Holds only when the batch's decision row recorded `applied`. */
+interface WriteGate {
+  readonly sql: string;
+  readonly values: readonly unknown[];
+}
+
 interface MergeOperation {
   readonly key: UserMergeCountKey;
-  readonly execute: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
+  readonly execute: (
+    db: SqlDatabase,
+    survivorId: string,
+    loserId: string,
+    gate: WriteGate
+  ) => SqlStatement;
   readonly preview: (db: SqlDatabase, survivorId: string, loserId: string) => SqlStatement;
   readonly subtract?: UserMergeCountKey;
 }
@@ -118,8 +191,10 @@ interface MergeOperation {
 function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
   return {
     key,
-    execute: (db, survivorId, loserId) =>
-      db.prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ?`).bind(survivorId, loserId),
+    execute: (db, survivorId, loserId, gate) =>
+      db
+        .prepare(`UPDATE ${table} SET ${column} = ? WHERE ${column} = ? AND ${gate.sql}`)
+        .bind(survivorId, loserId, ...gate.values),
     preview: (db, _survivorId, loserId) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
   };
@@ -128,8 +203,10 @@ function regularRepoint(key: UserMergeCountKey, table: string, column = "user_id
 function regularDelete(key: UserMergeCountKey, table: string, column = "user_id"): MergeOperation {
   return {
     key,
-    execute: (db, _survivorId, loserId) =>
-      db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).bind(loserId),
+    execute: (db, _survivorId, loserId, gate) =>
+      db
+        .prepare(`DELETE FROM ${table} WHERE ${column} = ? AND ${gate.sql}`)
+        .bind(loserId, ...gate.values),
     preview: (db, _survivorId, loserId) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`).bind(loserId),
   };
@@ -144,10 +221,13 @@ function dedupeThenRepoint(options: {
   return [
     {
       key: options.dedupeKey,
-      execute: (db, survivorId, loserId) =>
+      execute: (db, survivorId, loserId, gate) =>
         db
-          .prepare(`DELETE FROM ${options.table} WHERE user_id = ? AND ${options.collision}`)
-          .bind(loserId, survivorId),
+          .prepare(
+            `DELETE FROM ${options.table}
+             WHERE user_id = ? AND ${options.collision} AND ${gate.sql}`
+          )
+          .bind(loserId, survivorId, ...gate.values),
       preview: (db, survivorId, loserId) =>
         db
           .prepare(
@@ -224,14 +304,15 @@ const SKILL_PROFILE_OPERATIONS = dedupeThenRepoint({
 
 const SKILL_CATALOG_GENERATION_OPERATION: MergeOperation = {
   key: "skillCatalogGenerationsAdvanced",
-  execute: (db, _survivorId, loserId) =>
+  execute: (db, _survivorId, loserId, gate) =>
     db
       .prepare(
         `UPDATE skills_catalog_state SET generation = generation + 1
          WHERE singleton = 1
-           AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)`
+           AND EXISTS (SELECT 1 FROM skill_profiles WHERE user_id = ?)
+           AND ${gate.sql}`
       )
-      .bind(loserId),
+      .bind(loserId, ...gate.values),
   preview: (db, _survivorId, loserId) =>
     db
       .prepare(
@@ -304,6 +385,35 @@ export interface UserMergeResult {
 }
 
 /**
+ * Whether an applied merge already folded `loserId` into `survivorId`, per the
+ * audit provenance every executed merge records. Lets callers treat a replay of
+ * the exact pair as completed rather than as a missing user.
+ */
+export async function hasCompletedUserMerge(
+  db: SqlDatabase,
+  survivorId: string,
+  loserId: string
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS merged FROM authorization_audit_events
+       WHERE action = 'workspace.user_merged' AND operation_result = 'applied'
+         AND resource_id = ? AND target_user_id_snapshot = ?
+       LIMIT 1`
+    )
+    .bind(survivorId, loserId)
+    .first<{ merged: number }>();
+  return row !== null;
+}
+
+/** SQL that holds when merging would leave the survivor with two GitHub identities. */
+const GITHUB_IDENTITY_CONFLICT_SQL = `EXISTS (
+    SELECT 1 FROM user_identities WHERE user_id = ? AND provider = 'github'
+  ) AND EXISTS (
+    SELECT 1 FROM user_identities WHERE user_id = ? AND provider = 'github'
+  )`;
+
+/**
  * Merge a canonical user into a survivor after validating their RBAC assignments.
  */
 export async function mergeUsers(
@@ -312,7 +422,7 @@ export async function mergeUsers(
 ): Promise<UserMergeResult> {
   const { survivorId, loserId } = options;
   if (survivorId === loserId) {
-    throw new UserMergeError("Survivor and loser must be different users");
+    throw new UserMergeError("self_merge", "Survivor and loser must be different users");
   }
   const survivor = await db
     .prepare(`SELECT id, email, suspended_at FROM users WHERE id = ?`)
@@ -323,7 +433,7 @@ export async function mergeUsers(
       suspended_at: number | null;
     }>();
   if (!survivor) {
-    throw new UserMergeError(`Survivor user ${survivorId} not found`);
+    throw new UserMergeError("survivor_not_found", `Survivor user ${survivorId} not found`);
   }
   // A missing loser row is not an error: re-running a completed merge must
   // be a no-op after an already-completed atomic merge.
@@ -337,7 +447,7 @@ export async function mergeUsers(
       suspended_at: number | null;
     }>();
   if (!loser) {
-    return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyCounts() };
+    return { survivorId, loserId, dryRun: options.dryRun === true, counts: emptyUserMergeCounts() };
   }
 
   const survivorEmail = normalizeEmail(survivor.email);
@@ -362,16 +472,32 @@ export async function mergeUsers(
   const survivorRole = survivorAssignment.results[0];
   const loserRole = loserAssignment.results[0];
   if (!survivorRole || !loserRole) {
-    throw new UserMergeError("Both users must have explicit role assignments before merging");
+    throw new UserMergeError(
+      "role_assignment_missing",
+      "Both users must have explicit role assignments before merging"
+    );
   }
   if (survivorRole && loserRole && survivorRole.role_id !== loserRole.role_id) {
-    throw new UserMergeError("Resolve conflicting user roles before merging");
+    throw new UserMergeError("role_conflict", "Resolve conflicting user roles before merging");
   }
   if ((survivor.suspended_at === null) !== (loser.suspended_at === null)) {
-    throw new UserMergeError("Resolve conflicting user suspension states before merging");
+    throw new UserMergeError(
+      "suspension_conflict",
+      "Resolve conflicting user suspension states before merging"
+    );
   }
   if (loserRole?.role_key === "owner" && survivor.suspended_at !== null) {
-    throw new UserMergeError("The surviving Owner must be active before merging");
+    throw new UserMergeError(
+      "owner_suspended",
+      "The surviving Owner must be active before merging"
+    );
+  }
+  const identityConflict = await db
+    .prepare(`SELECT (${GITHUB_IDENTITY_CONFLICT_SQL}) AS conflict`)
+    .bind(survivorId, loserId)
+    .first<{ conflict: number }>();
+  if (identityConflict?.conflict) {
+    throw new UserMergeError("identity_conflict", WRITE_REFUSAL_MESSAGES.identity_conflict);
   }
   // The loser's email backfills an email-less survivor after the loser row's
   // deletion frees the unique slot; its verification state carries with it.
@@ -387,6 +513,35 @@ export async function mergeUsers(
     };
   }
 
+  const auditId = crypto.randomUUID();
+  const occurredAt = Date.now();
+  const actor = options.actor ?? OPERATOR_ACTOR;
+  const principal =
+    actor.kind === "user"
+      ? {
+          requestId: actor.requestId,
+          kind: "user",
+          actorUserId: actor.userId,
+          actorService: null,
+          reasonCode: "member_merge",
+          guard: actor.guard,
+        }
+      : {
+          requestId: `operator-cli:${auditId}`,
+          kind: "service",
+          actorUserId: null,
+          actorService: "operator-cli",
+          reasonCode: "operator_merge",
+          guard: { sql: "1", values: [] },
+        };
+  const gate: WriteGate = {
+    sql: `EXISTS (
+      SELECT 1 FROM authorization_audit_events
+      WHERE id = ? AND operation_result = 'applied'
+    )`,
+    values: [auditId],
+  };
+
   const statements: SqlStatement[] = [];
   const track: Partial<Record<UserMergeCountKey, number>> = {};
   const add = (key: UserMergeCountKey, statement: SqlStatement) => {
@@ -395,85 +550,128 @@ export async function mergeUsers(
   };
   const addOperations = (operations: readonly MergeOperation[]) => {
     for (const operation of operations) {
-      add(operation.key, operation.execute(db, survivorId, loserId));
+      add(operation.key, operation.execute(db, survivorId, loserId, gate));
     }
   };
 
-  const auditId = crypto.randomUUID();
-  const occurredAt = Date.now();
-  // The NOT NULL occurred_at column turns a failed revalidation into a batch
-  // error, rolling back every merge write. This closes the preflight/write
-  // window for role, suspension, and last-active-Owner invariants.
+  // The decision re-checks every preflight invariant against write-time state
+  // and is recorded, applied or refused, on the audit row. Each later
+  // statement is gated on that row, so a refusal writes nothing else.
+  const decisionIndex = statements.length;
   add(
     "auditEventsCreated",
     db
       .prepare(
-        `INSERT INTO authorization_audit_events
-            (id, occurred_at, request_id, principal_kind,
+        `WITH decision(status) AS (
+           SELECT CASE
+             WHEN NOT (${principal.guard.sql}) THEN 'actor_authorization_changed'
+             WHEN NOT EXISTS (
+               SELECT 1
+               FROM users survivor
+               JOIN user_role_assignments survivor_assignment
+                 ON survivor_assignment.user_id = survivor.id
+               JOIN users loser ON loser.id = ?
+               JOIN user_role_assignments loser_assignment
+                 ON loser_assignment.user_id = loser.id
+               JOIN roles role ON role.id = loser_assignment.role_id
+               WHERE survivor.id = ?
+                 AND survivor_assignment.role_id = loser_assignment.role_id
+                 AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
+                 AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
+             ) THEN 'preconditions_changed'
+             WHEN NOT EXISTS (
+               SELECT 1 FROM users WHERE id = ? AND email IS ? AND email_verified = ?
+             ) THEN 'source_changed'
+             WHEN ${GITHUB_IDENTITY_CONFLICT_SQL} THEN 'identity_conflict'
+             ELSE 'applied'
+           END
+         )
+         INSERT INTO authorization_audit_events
+            (id, occurred_at, request_id, principal_kind, actor_user_id_snapshot,
              actor_service_snapshot, action, resource_type, resource_id,
              target_user_id_snapshot, reason_code, operation_result, metadata_json)
-         VALUES (
-           ?,
-           CASE WHEN EXISTS (
-             SELECT 1
-             FROM users survivor
-             JOIN user_role_assignments survivor_assignment
-               ON survivor_assignment.user_id = survivor.id
-             JOIN users loser ON loser.id = ?
-             JOIN user_role_assignments loser_assignment
-               ON loser_assignment.user_id = loser.id
-             JOIN roles role ON role.id = loser_assignment.role_id
-             WHERE survivor.id = ?
-               AND survivor_assignment.role_id = loser_assignment.role_id
-               AND (survivor.suspended_at IS NULL) = (loser.suspended_at IS NULL)
-               AND (role.key IS NULL OR role.key <> 'owner' OR survivor.suspended_at IS NULL)
-           ) THEN ? ELSE NULL END,
-            'operator-cli:' || ?, 'service', 'operator-cli',
-            'workspace.user_merged', 'user', ?, ?, 'operator_merge', 'applied',
-            json_object(
-              'before', json_object(
-                'survivor', json_object(
-                  'userId', ?,
-                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
-                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
-                ),
-                'loser', json_object(
-                  'userId', ?,
-                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
-                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
-                )
-              ),
-              'requested', json_object('survivorUserId', ?, 'loserUserId', ?),
-              'after', json_object(
-                'survivor', json_object(
-                  'userId', ?,
-                  'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
-                  'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
-                ),
-                'loser', NULL
-              )
-            )
-          )`
+         SELECT ?, ?, ?, ?, ?, ?, 'workspace.user_merged', 'user', ?, ?,
+           CASE status WHEN 'applied' THEN ? ELSE status END,
+           CASE status
+             WHEN 'applied' THEN 'applied'
+             WHEN 'actor_authorization_changed' THEN 'denied'
+             ELSE 'rejected'
+           END,
+           json_object(
+             'before', json_object(
+               'survivor', json_object(
+                 'userId', ?,
+                 'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                 'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+               ),
+               'loser', json_object(
+                 'userId', ?,
+                 'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                 'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+               )
+             ),
+             'requested', json_object('survivorUserId', ?, 'loserUserId', ?),
+             'after', json(CASE status
+               WHEN 'applied' THEN json_object(
+                 'survivor', json_object(
+                   'userId', ?,
+                   'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                   'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                 ),
+                 'loser', NULL
+               )
+               ELSE json_object(
+                 'survivor', json_object(
+                   'userId', ?,
+                   'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                   'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                 ),
+                 'loser', json_object(
+                   'userId', ?,
+                   'roleId', (SELECT role_id FROM user_role_assignments WHERE user_id = ?),
+                   'suspendedAt', (SELECT suspended_at FROM users WHERE id = ?)
+                 )
+               )
+             END)
+           )
+         FROM decision
+         RETURNING operation_result, reason_code`
       )
       .bind(
-        auditId,
+        ...principal.guard.values,
         loserId,
         survivorId,
+        loserId,
+        loser.email,
+        loser.email_verified,
+        survivorId,
+        loserId,
+        auditId,
         occurredAt,
-        auditId,
+        principal.requestId,
+        principal.kind,
+        principal.actorUserId,
+        principal.actorService,
+        survivorId,
+        loserId,
+        principal.reasonCode,
+        survivorId,
+        survivorId,
+        survivorId,
+        loserId,
+        loserId,
+        loserId,
         survivorId,
         loserId,
         survivorId,
         survivorId,
         survivorId,
-        loserId,
-        loserId,
-        loserId,
-        survivorId,
-        loserId,
         survivorId,
         survivorId,
-        survivorId
+        survivorId,
+        loserId,
+        loserId,
+        loserId
       )
   );
 
@@ -481,7 +679,8 @@ export async function mergeUsers(
   // already occupies (identities under idx_user_identities_provider; read
   // states routinely, where both split rows read the same session). Keep the
   // stronger lead role before deleting a colliding loser membership.
-  statements.push(
+  add(
+    "teamLeadRolesPromoted",
     db
       .prepare(
         `UPDATE team_memberships SET role = 'lead'
@@ -490,9 +689,10 @@ export async function mergeUsers(
              SELECT 1 FROM team_memberships AS loser_membership
              WHERE loser_membership.team_id = team_memberships.team_id
                AND loser_membership.user_id = ? AND loser_membership.role = 'lead'
-           )`
+           )
+           AND ${gate.sql}`
       )
-      .bind(survivorId, loserId)
+      .bind(survivorId, loserId, ...gate.values)
   );
   addOperations(BEFORE_SKILL_PROFILE_OPERATIONS);
 
@@ -500,7 +700,7 @@ export async function mergeUsers(
   // it before any profile membership or ownership rows are changed.
   add(
     SKILL_CATALOG_GENERATION_OPERATION.key,
-    SKILL_CATALOG_GENERATION_OPERATION.execute(db, survivorId, loserId)
+    SKILL_CATALOG_GENERATION_OPERATION.execute(db, survivorId, loserId, gate)
   );
 
   // Merge items before deleting colliding skill profiles.
@@ -514,21 +714,26 @@ export async function mergeUsers(
          JOIN skill_profiles survivor_profile
            ON survivor_profile.user_id = ? AND survivor_profile.name = loser_profile.name
          JOIN skill_profile_items loser_item ON loser_item.profile_id = loser_profile.id
-         WHERE loser_profile.user_id = ?
+         WHERE loser_profile.user_id = ? AND ${gate.sql}
          ON CONFLICT DO NOTHING`
       )
-      .bind(survivorId, loserId)
+      .bind(survivorId, loserId, ...gate.values)
   );
   addOperations(SKILL_PROFILE_OPERATIONS);
 
   // Preserve the survivor's RBAC assignment before deleting the loser.
   add(
     "roleAssignmentsRemoved",
-    db.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(loserId)
+    db
+      .prepare(`DELETE FROM user_role_assignments WHERE user_id = ? AND ${gate.sql}`)
+      .bind(loserId, ...gate.values)
   );
   addOperations(FINAL_REPOINT_OPERATIONS);
 
-  add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
+  add(
+    "usersDeleted",
+    db.prepare(`DELETE FROM users WHERE id = ? AND ${gate.sql}`).bind(loserId, ...gate.values)
+  );
   if (backfillEmail) {
     // A blank-or-NULL-email survivor acquires the email freed by the loser's
     // deletion, guarded against any other owner. Verification carries only
@@ -543,15 +748,30 @@ export async function mergeUsers(
              AND NOT EXISTS (
                SELECT 1 FROM users AS other
                WHERE other.id <> users.id AND lower(trim(other.email)) = ?
-             )`
+             )
+             AND ${gate.sql}`
         )
-        .bind(backfillEmail, backfillVerified, Date.now(), survivorId, backfillEmail)
+        .bind(
+          backfillEmail,
+          backfillVerified,
+          Date.now(),
+          survivorId,
+          backfillEmail,
+          ...gate.values
+        )
     );
   }
 
   const results: SqlResult[] = await db.batch(statements);
+  const decision = results[decisionIndex]?.results[0] as
+    { operation_result: string; reason_code: string } | undefined;
+  if (!decision) throw new Error("User merge decision was not recorded");
+  if (decision.operation_result !== "applied") {
+    const refusal = decision.reason_code as UserMergeWriteRefusal;
+    throw new UserMergeError(refusal, WRITE_REFUSAL_MESSAGES[refusal]);
+  }
 
-  const counts = emptyCounts();
+  const counts = emptyUserMergeCounts();
   for (const [key, index] of Object.entries(track) as [UserMergeCountKey, number][]) {
     counts[key] = (results[index]?.meta.changes ?? 0) / (RESULT_CHANGE_DIVISORS[key] ?? 1);
   }
@@ -563,7 +783,8 @@ export async function mergeUsers(
   return { survivorId, loserId, dryRun: false, counts };
 }
 
-function emptyCounts(): UserMergeCounts {
+/** All-zero counts, as reported by a merge that had nothing left to do. */
+export function emptyUserMergeCounts(): UserMergeCounts {
   return Object.fromEntries(USER_MERGE_COUNT_KEYS.map((key) => [key, 0])) as UserMergeCounts;
 }
 
@@ -576,14 +797,25 @@ async function previewCounts(
   const operationResults = await db.batch<{ count: number }>(
     TABLE_OPERATIONS.map((operation) => operation.preview(db, survivorId, loserId))
   );
-  const operationCounts = emptyCounts();
+  const operationCounts = emptyUserMergeCounts();
   for (const [index, operation] of TABLE_OPERATIONS.entries()) {
     const total = operationResults[index]?.results[0]?.count ?? 0;
     operationCounts[operation.key] =
       total - (operation.subtract ? operationCounts[operation.subtract] : 0);
   }
 
-  const [skillProfileItemsMerged, roleAssignments, users] = await db.batch<{ count: number }>([
+  const [teamLeadRolesPromoted, skillProfileItemsMerged, roleAssignments, users] = await db.batch<{
+    count: number;
+  }>([
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM team_memberships survivor_membership
+         JOIN team_memberships loser_membership
+           ON loser_membership.team_id = survivor_membership.team_id
+         WHERE survivor_membership.user_id = ? AND survivor_membership.role = 'member'
+           AND loser_membership.user_id = ? AND loser_membership.role = 'lead'`
+      )
+      .bind(survivorId, loserId),
     db
       .prepare(
         `SELECT COUNT(*) AS count FROM skill_profile_items loser_item
@@ -622,6 +854,7 @@ async function previewCounts(
 
   return {
     ...operationCounts,
+    teamLeadRolesPromoted: count(teamLeadRolesPromoted),
     skillProfileItemsMerged: count(skillProfileItemsMerged),
     roleAssignmentsRemoved: count(roleAssignments),
     // mergeUsers returns before previewing when the loser is absent, so an

@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { commitSigningMetadataSchema } from "@open-inspect/shared/types/commit-signing";
 
 import { controlPlaneUserFetch } from "@/lib/control-plane";
@@ -11,17 +10,10 @@ function response(data: unknown, status = 200): NextResponse {
   return NextResponse.json(data, { status, headers: NO_STORE_HEADERS });
 }
 
-async function authorized(): Promise<boolean> {
-  const session = await getServerAuthSession();
-  return Boolean(session?.user);
-}
-
 async function proxy(
   method: "GET" | "PUT" | "DELETE",
   request?: NextRequest
 ): Promise<NextResponse> {
-  if (!(await authorized())) return response({ error: "Unauthorized" }, 401);
-
   let body: unknown;
   if (method === "PUT") {
     try {

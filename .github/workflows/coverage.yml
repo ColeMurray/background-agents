@@ -67,7 +67,6 @@ jobs:
           }
           detect control-plane "${gate[@]}" "${typescript[@]}" \
             packages/control-plane \
-            packages/opencomputer-infra \
             packages/sandbox-images \
             packages/vercel-infra \
             packages/sandbox-runtime/src/sandbox_runtime/runtime_manifest.json \

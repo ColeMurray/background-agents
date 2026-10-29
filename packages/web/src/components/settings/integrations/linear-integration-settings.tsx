@@ -37,7 +37,6 @@ import { SettingsCardSection } from "../settings-card-section";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioCard } from "@/components/ui/form-controls";
 import {
   Select,
   SelectContent,
@@ -60,6 +59,8 @@ import {
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
 import { HarnessSelect } from "./harness-select";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { AddRepositoryOverride } from "../add-repository-override";
+import { RepositoryScopeSelector } from "./repository-scope-selector";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/linear";
 const REPO_SETTINGS_KEY = "/api/integration-settings/linear/repos";
@@ -472,69 +473,21 @@ function GlobalSettingsSection({
           />
         </div>
 
-        <div className="mb-4">
-          <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
-          <div className="grid sm:grid-cols-2 gap-2 mb-3">
-            <RadioCard
-              name="linear-repo-scope"
-              checked={repoScopeMode === "all"}
-              onChange={() => {
-                setRepoScopeMode("all");
-                setDirty(true);
-                setError("");
-              }}
-              label="All repositories"
-              description="Linear events can run against every accessible repository."
-            />
-            <RadioCard
-              name="linear-repo-scope"
-              checked={repoScopeMode === "selected"}
-              onChange={() => {
-                setRepoScopeMode("selected");
-                setDirty(true);
-                setError("");
-              }}
-              label="Selected repositories"
-              description="Linear events run only for repositories in the allowlist."
-            />
-          </div>
-
-          {repoScopeMode === "selected" && (
-            <>
-              {availableRepos.length === 0 ? (
-                <p className="text-sm text-muted-foreground px-4 py-3 border border-border rounded-sm">
-                  Repository filtering is unavailable because no repositories are accessible.
-                </p>
-              ) : (
-                <div className="border border-border max-h-56 overflow-y-auto rounded-sm">
-                  {availableRepos.map((repo) => {
-                    const fullName = repo.fullName.toLowerCase();
-                    const isChecked = enabledRepos.includes(fullName);
-
-                    return (
-                      <label
-                        key={repo.fullName}
-                        className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
-                      >
-                        <Checkbox
-                          checked={isChecked}
-                          onCheckedChange={() => toggleRepo(repo.fullName)}
-                        />
-                        <span className="text-foreground">{repo.fullName}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-
-              {enabledRepos.length === 0 && availableRepos.length > 0 && (
-                <p className="text-xs text-warning mt-1">
-                  No repositories selected. The Linear integration will ignore all issues.
-                </p>
-              )}
-            </>
-          )}
-        </div>
+        <RepositoryScopeSelector
+          name="linear-repo-scope"
+          mode={repoScopeMode}
+          onModeChange={(mode) => {
+            setRepoScopeMode(mode);
+            setDirty(true);
+            setError("");
+          }}
+          availableRepos={availableRepos}
+          enabledRepos={enabledRepos}
+          onToggleRepo={toggleRepo}
+          allRepositoriesDescription="Linear events can run against every accessible repository."
+          selectedRepositoriesDescription="Linear events run only for repositories in the allowlist."
+          emptySelectionWarning="No repositories selected. The Linear integration will ignore all issues."
+        />
 
         <div className="flex items-center gap-2">
           <Button onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
@@ -637,23 +590,12 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <AddRepositoryOverride
+        repositories={availableForOverride}
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        onAdd={handleAdd}
+      />
     </div>
   );
 }

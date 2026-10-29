@@ -3,12 +3,13 @@
  */
 
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
+import type { ClassificationEnv } from "@open-inspect/shared/classification";
 import { z } from "zod";
 
 /**
  * Cloudflare Worker environment bindings.
  */
-export interface Env {
+export interface Env extends ClassificationEnv {
   // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
@@ -32,16 +33,6 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  /**
-   * Classifier provider credentials. The deployment binds exactly the one
-   * `CLASSIFICATION_MODEL` selects, so each is optional on its own and the
-   * classifier guards the branch it needs.
-   */
-  ANTHROPIC_API_KEY?: string;
-  CLASSIFICATION_MODEL?: string; // Optional override; defaults to DEFAULT_CLASSIFICATION_MODEL
-  CLASSIFICATION_REASONING_EFFORT?: string; // OpenAI classifiers only; unset keeps the model default
-  OPENAI_API_KEY?: string;
-  BEDROCK_API_KEY?: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }
@@ -218,40 +209,52 @@ export const linearUserResponseSchema = z.object({
 
 // ─── Webhook Payload Types ──────────────────────────────────────────────────
 
-export interface AgentSessionWebhookIssue {
-  id: string;
-  identifier: string;
-  title: string;
-  description?: string;
-  url: string;
-  priority: number;
-  priorityLabel: string;
-  team: { id: string; key: string; name: string };
-  teamId?: string;
-  labels?: Array<{ id: string; name: string }>;
-  assignee?: { id: string; name: string };
-  project?: { id: string; name: string };
-}
+const optionalNullable = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
 
-export interface AgentSessionWebhook {
-  type: string;
-  action: string;
-  organizationId: string;
-  webhookId: string;
-  appUserId: string;
-  promptContext?: string;
-  agentSession: {
-    id: string;
-    creatorId?: string | null;
-    issue?: AgentSessionWebhookIssue;
-    comment?: { body: string; userId?: string };
-  };
-  agentActivity?: {
-    userId?: string;
-    signal?: string;
-    content?: {
-      type?: string;
-      body?: string;
-    };
-  };
-}
+const agentSessionWebhookNameSchema = z.object({ id: z.string(), name: z.string() });
+
+export const agentSessionWebhookIssueSchema = z.object({
+  id: z.string(),
+  identifier: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  url: z.string(),
+  priority: z.number().optional(),
+  priorityLabel: z.string().optional(),
+  team: z.object({ id: z.string(), key: z.string(), name: z.string() }),
+  teamId: z.string().optional(),
+  labels: optionalNullable(z.array(agentSessionWebhookNameSchema)),
+  assignee: optionalNullable(agentSessionWebhookNameSchema),
+  project: optionalNullable(agentSessionWebhookNameSchema),
+});
+
+export type AgentSessionWebhookIssue = z.infer<typeof agentSessionWebhookIssueSchema>;
+
+export const agentSessionWebhookSchema = z.object({
+  type: z.string(),
+  action: z.string(),
+  organizationId: z.string(),
+  webhookId: z.string(),
+  appUserId: z.string(),
+  promptContext: optionalNullable(z.string()),
+  agentSession: z.object({
+    id: z.string(),
+    creatorId: z.string().nullable().optional(),
+    issue: optionalNullable(agentSessionWebhookIssueSchema),
+    comment: optionalNullable(z.object({ body: z.string(), userId: optionalNullable(z.string()) })),
+  }),
+  agentActivity: optionalNullable(
+    z.object({
+      userId: optionalNullable(z.string()),
+      signal: optionalNullable(z.string()),
+      content: optionalNullable(
+        z.object({
+          type: optionalNullable(z.string()),
+          body: optionalNullable(z.string()),
+        })
+      ),
+    })
+  ),
+});
+
+export type AgentSessionWebhook = z.infer<typeof agentSessionWebhookSchema>;

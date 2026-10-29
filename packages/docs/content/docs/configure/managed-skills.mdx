@@ -4,13 +4,14 @@ description: Create, import, assign, and select reusable agent instructions that
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/MANAGED_SKILLS.md
   - packages/shared/src/types/skills.ts
   - packages/web/src/components/settings/skills-settings/index.tsx
   - docs/HOW_IT_WORKS.md
   - docs/CLAUDE_AGENT.md
+  - packages/sandbox-runtime/src/sandbox_runtime/codex_stager.py
   - packages/shared/src/rbac.ts
 ---
 
@@ -232,8 +233,9 @@ Skills are pinned when the session is created. Restarting or restoring the sessi
 | ------------ | -------------------------------------------------------------------------------------------------------------------- |
 | OpenCode     | Installed into the session workspace during the "Installing skills" boot phase, alongside the bundled skills.        |
 | Claude Agent | Staged under the per-sandbox Claude config directory (`~/.openinspect/claude/skills`), alongside the bundled skills. |
+| Codex        | Staged under the per-sandbox Codex directory (`~/.openinspect/codex/skills`), alongside the bundled skills.          |
 
-See [agent harnesses](/models/agent-harnesses) for the differences between the two.
+See [agent harnesses](/models/agent-harnesses) for the differences between them.
 
 ## Limits and file rules
 

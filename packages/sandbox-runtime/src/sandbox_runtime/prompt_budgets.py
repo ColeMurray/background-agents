@@ -27,8 +27,9 @@ if TYPE_CHECKING:
 
 SSE_INACTIVITY_TIMEOUT_ENV_VAR = "BRIDGE_SSE_INACTIVITY_TIMEOUT"
 # Liveness check for a harness that stopped talking, not a budget for how long
-# the model may think. Stays under the control plane's own inactivity watchdog
-# (SANDBOX_INACTIVITY_TIMEOUT_MS) so the bridge owns the outcome.
+# the model may think. Runtime heartbeats renew control-plane activity while a
+# prompt is processing, so this silence budget may safely exceed the regular
+# or unattended sandbox inactivity timeout; the bridge still owns the outcome.
 #
 # What counts as talking is the harness's, so the budget is too. OpenCode
 # merges a periodic ``server.heartbeat`` into the same SSE stream and the

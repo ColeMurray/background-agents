@@ -53,6 +53,19 @@ export class SandboxPushService {
         error: "Sandbox must be started before pushing; retry once ready",
       };
     }
+    const resolverKey = this.pushResolverKey(
+      pushSpec.repoOwner,
+      pushSpec.repoName,
+      pushSpec.targetBranch
+    );
+    // Terminal events carry no request id, so same-key pushes cannot be distinguished.
+    if (this.pendingPushResolvers.has(resolverKey)) {
+      return {
+        success: false,
+        error: `Push already in flight for ${pushSpec.repoOwner}/${pushSpec.repoName} on branch ${pushSpec.targetBranch}; retry once it completes`,
+      };
+    }
+
     // The ready socket, not the attached one: a bridge attached ahead of its
     // boot would otherwise be handed a push it cannot run, and the caller
     // would wait out PUSH_TIMEOUT_MS for an answer that never comes. Nor is
@@ -78,11 +91,6 @@ export class SandboxPushService {
     }
 
     const sandboxWs = target.socket;
-    const resolverKey = this.pushResolverKey(
-      pushSpec.repoOwner,
-      pushSpec.repoName,
-      pushSpec.targetBranch
-    );
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const pushPromise = new Promise<void>((resolve, reject) => {

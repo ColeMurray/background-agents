@@ -114,6 +114,52 @@ describe("mark session inbox read", () => {
     expect(await attentionRootIds()).toEqual(["beta-mine"]);
   });
 
+  it("limits marking to one hierarchy and its descendants", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await createUnread(store, session("parent", { updatedAt: 2_000 }));
+    await createUnread(
+      store,
+      session("child", { parentSessionId: "parent", spawnDepth: 1, updatedAt: 2_100 })
+    );
+    await createUnread(
+      store,
+      session("grandchild", { parentSessionId: "child", spawnDepth: 2, updatedAt: 2_200 })
+    );
+    await createUnread(store, session("other-root", { updatedAt: 1_000 }));
+
+    expect(await (await markRead({ rootSessionId: "child" })).json()).toEqual({
+      markedCount: 2,
+    });
+    expect(await readSessionIds()).toEqual(["child", "grandchild"]);
+    expect(await attentionRootIds()).toEqual(["parent", "other-root"]);
+
+    expect(await (await markRead({ rootSessionId: "parent" })).json()).toEqual({
+      markedCount: 1,
+    });
+    expect(await readSessionIds()).toEqual(["child", "grandchild", "parent"]);
+    expect(await attentionRootIds()).toEqual(["other-root"]);
+  });
+
+  it("marks a hierarchy rerooted by filters without its hidden ancestor", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await createUnread(store, session("their-parent", { userId: OTHER_USER_ID }));
+    await createUnread(
+      store,
+      session("my-child", { parentSessionId: "their-parent", spawnDepth: 1 })
+    );
+    await createUnread(
+      store,
+      session("my-grandchild", { parentSessionId: "my-child", spawnDepth: 2 })
+    );
+    expect(await attentionRootIds("&mine=true")).toEqual(["my-child"]);
+
+    expect(await (await markRead({ mine: true, rootSessionId: "my-child" })).json()).toEqual({
+      markedCount: 2,
+    });
+    expect(await readSessionIds()).toEqual(["my-child", "my-grandchild"]);
+    expect(await attentionRootIds()).toEqual(["their-parent"]);
+  });
+
   it("never marks sessions the viewer cannot see", async () => {
     const store = new SessionIndexStore(env.DB);
     await createUnread(store, session("visible"));

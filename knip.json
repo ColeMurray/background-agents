@@ -45,9 +45,6 @@
     "packages/slack-bot": {
       "project": ["src/**/*.ts"]
     },
-    "packages/opencomputer-infra": {
-      "project": ["src/**/*.ts"]
-    },
     "packages/vercel-infra": {
       "project": ["src/**/*.ts"]
     },

@@ -47,6 +47,29 @@ describe("POST /sessions/:id/prompt", () => {
     });
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it.each(["automation", "agent"])(
+    "rejects a caller-asserted %s source without dispatching to the runtime",
+    async (source) => {
+      const caller = { userId: "a".repeat(32), role: "member" } as const;
+      const sessionName = `public-prompt-source-${crypto.randomUUID()}`;
+      const url = `https://cp.test/sessions/${sessionName}/prompt`;
+      const body = JSON.stringify({ content: "Fix the bug", source });
+      const headers = await serviceRequestHeaders(url, { method: "POST", body, as: caller });
+      await initSession({ sessionName, userId: caller.userId });
+      const platform = createCloudflareEnv(env);
+      const dispatch = vi.spyOn(platform, "SESSION");
+
+      const response = await handleControlPlaneHttp(
+        new Request(url, { method: "POST", headers, body }),
+        platform,
+        createExecutionContext()
+      );
+
+      expect(response.status).toBe(400);
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("POST /internal/prompt", () => {

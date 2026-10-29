@@ -1,6 +1,7 @@
 """Native dynamic tools adapt the vendor-neutral registry and results."""
 
 import builtins
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -67,9 +68,13 @@ async def test_native_tool_uses_existing_authenticated_handler(tmp_path, monkeyp
         names = {tool["name"] for tool in tools.specs()[0]["tools"]}
         assert {"get-child-status", "spawn-child", "memory_search"} <= names
         result = await tools.call({"namespace": "oi", "tool": "get-child-status", "arguments": {}})
-        assert result == {
-            "success": True,
-            "contentItems": [{"type": "inputText", "text": "No child sessions found."}],
+        assert result["success"] is True
+        assert result["contentItems"][0]["type"] == "inputText"
+        assert json.loads(result["contentItems"][0]["text"]) == {
+            "version": 1,
+            "kind": "list",
+            "children": [],
+            "agentMessage": "No child sessions found.",
         }
         assert len(requests) == 1
         assert str(requests[0].url) == "https://cp.example/sessions/session/children"

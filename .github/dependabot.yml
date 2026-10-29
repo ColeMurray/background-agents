@@ -42,16 +42,35 @@ updates:
         patterns:
           - "*"
 
-  # Python. sandbox-runtime and sandbox-images/locks/python-tools are excluded:
-  # their uv.lock feeds hash-checked exports (locks/runtime.txt,
-  # locks/python-tools.txt) that `sandbox:images lock` must regenerate, and
-  # python-tools' pyproject.toml is generated from toolchain.json. e2b-infra and
-  # daytona-infra are excluded until PR CI installs and tests their locked SDKs;
-  # Terraform consumes those lockfiles during apply.
+  # Python. sandbox-images/locks/python-tools is excluded: its uv.lock feeds the
+  # hash-checked locks/python-tools.txt export that `sandbox:images lock` must
+  # regenerate, and its pyproject.toml is generated from toolchain.json.
+  # sandbox-runtime is not listed yet. Its requirements are exported from its
+  # uv.lock at pack time, so a uv.lock-only bump no longer fails
+  # `sandbox:images lock --check`; enabling it is a separate change. e2b-infra
+  # and daytona-infra are excluded until PR CI installs and tests their locked
+  # SDKs; Terraform consumes those lockfiles during apply.
   - package-ecosystem: uv
     directories:
       - /packages/modal-infra
       - /packages/sandbox-images
+    # Scanning /packages/sandbox-images also finds locks/*.txt, and Dependabot
+    # edits those exports as plain requirements files without their uv.lock.
+    # exclude-paths covers version updates only: a security update can still
+    # edit them, which `sandbox:images lock --check` fails in CI. Fix such PRs
+    # by upgrading the source uv.lock and running `sandbox:images lock`.
+    exclude-paths:
+      - "locks/**"
+    ignore:
+      # Newer Modal releases remove the endpoint introspection modal-infra
+      # tests use (Function.get_raw_f, .spec, .get_build_def). Bump it manually.
+      # update-types applies to version updates only, so Modal security
+      # updates still open PRs.
+      - dependency-name: modal
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
     schedule:
       interval: cron
       cronjob: "0 9 1,15 * *"

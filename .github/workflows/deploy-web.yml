@@ -59,6 +59,11 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         run: npm run build -w @open-inspect/shared
 
+      - name: Build isolated diagram renderer
+        if: steps.check-secrets.outputs.configured == 'true'
+        # Generate even when the remote project still has the old `next build` command.
+        run: npm run build:mermaid -w @open-inspect/web
+
       - name: Install Vercel CLI 58.4.0
         if: steps.check-secrets.outputs.configured == 'true'
         run: npm install -g vercel@58.4.0

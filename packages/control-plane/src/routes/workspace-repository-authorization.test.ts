@@ -9,6 +9,7 @@ import type { RequestContext } from "./shared";
 import {
   authorizeTeamRepositories,
   authorizeWorkspaceRepositories,
+  RepositoryGrantAuthorizer,
 } from "./workspace-repository-authorization";
 
 const repository = { owner: "acme", name: "repo", repoId: 123 };
@@ -238,6 +239,87 @@ describe("workspace repository grants", () => {
     expect(
       (await authorizeWorkspaceRepositories(ctx, { repositories: [repository] }))?.status
     ).toBe(503);
+  });
+
+  it("reuses bulk metadata for canonical read and lead decisions, including inactive owners", async () => {
+    const ctx = context();
+    const authorization = ctx.authorization!;
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([
+        ["active-member", "member"],
+        ["archived-lead", "lead"],
+        ["active-lead", "lead"],
+      ])
+    );
+    const grants = {
+      listTeamsForRepository: vi.fn(async () => [] as string[]),
+      listOwnersForRepositories: vi.fn(
+        async () =>
+          new Map([
+            [1, []],
+            [2, [{ teamId: "other", active: true }]],
+            [
+              3,
+              [
+                { teamId: "active-member", active: true },
+                { teamId: "archived-lead", active: false },
+              ],
+            ],
+            [4, [{ teamId: "archived-lead", active: false }]],
+            [5, [{ teamId: "active-lead", active: true }]],
+          ])
+      ),
+    };
+    const teams = { isActive: vi.fn(async () => true) };
+    const authorizer = new RepositoryGrantAuthorizer(ctx, grants, teams);
+    const targets = [1, 2, 3, 4, 5].map((repoId) => ({ repoId }));
+    await authorizer.preload(authorization, targets);
+    await authorizer.preload(authorization, targets);
+    for (const [index, readable, manageable] of [
+      [0, true, true],
+      [1, false, false],
+      [2, true, false],
+      [3, false, false],
+      [4, true, true],
+    ] as const) {
+      const target = targets[index];
+      expect(await authorizer.ungrantedRepository(authorization, [target])).toEqual(
+        readable ? null : target
+      );
+      expect(
+        await authorizer.ungrantedRepository(authorization, [target], { requireLead: true })
+      ).toEqual(manageable ? null : target);
+    }
+    expect(grants.listOwnersForRepositories).toHaveBeenCalledTimes(1);
+    expect(grants.listTeamsForRepository).not.toHaveBeenCalled();
+    expect(teams.isActive).not.toHaveBeenCalled();
+    expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledTimes(1);
+    for (const repoId of [null, 0, -1, Number.NaN, 1.5]) {
+      const target = { repoId };
+      expect(await authorizer.ungrantedRepository(authorization, [target])).toBe(target);
+    }
+    // Preloaded ownership is principal-independent; memberships must not be reused for another user.
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(new Map());
+    expect(
+      await authorizer.ungrantedRepository({ ...authorization, userId: "other-user" }, [targets[4]])
+    ).toEqual(targets[4]);
+  });
+
+  it("does not preload or consult grants for workspace administrators", async () => {
+    const ctx = context();
+    const authorization = ctx.authorization!;
+    authorization.role = { ...BUILT_IN_ROLE_REGISTRY.administrator, name: "Administrator" };
+    const grants = {
+      listTeamsForRepository: vi.fn(async () => [] as string[]),
+      listOwnersForRepositories: vi.fn(async () => new Map()),
+    };
+    const teams = { isActive: vi.fn(async () => false) };
+    const authorizer = new RepositoryGrantAuthorizer(ctx, grants, teams);
+    await authorizer.preload(authorization, [repository]);
+    expect(await authorizer.ungrantedRepository(authorization, [repository])).toBeNull();
+    expect(grants.listOwnersForRepositories).not.toHaveBeenCalled();
+    expect(grants.listTeamsForRepository).not.toHaveBeenCalled();
+    expect(teams.isActive).not.toHaveBeenCalled();
   });
 });
 

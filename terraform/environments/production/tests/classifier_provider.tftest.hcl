@@ -128,10 +128,6 @@ run "dedicated_classifier_key_stays_out_of_sandboxes" {
   variables {
     classification_anthropic_api_key = "test-classifier-key"
     anthropic_api_key                = ""
-    sandbox_provider                 = "opencomputer"
-    opencomputer_api_url             = "https://api.opencomputer.example"
-    opencomputer_api_key             = "test-opencomputer-key"
-    opencomputer_template            = "test-template"
   }
 
   assert {
@@ -149,11 +145,8 @@ run "dedicated_classifier_key_stays_out_of_sandboxes" {
   }
 
   assert {
-    condition = (
-      contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
-      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
-    )
-    error_message = "The dedicated classifier key must not reach OpenComputer sandboxes."
+    condition     = !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
+    error_message = "The dedicated classifier key must not reach the control plane."
   }
 }
 

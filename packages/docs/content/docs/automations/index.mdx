@@ -4,7 +4,7 @@ description: Run coding agents on a schedule or in response to webhooks, Sentry 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-27"
 relatedCode:
   - packages/control-plane/src/routes/automation-crud.ts
   - packages/web/src/hooks/use-can-create-automation.ts
@@ -32,7 +32,7 @@ An automation stores a repository selection, a model, and a set of instructions 
 
 ## What an automation does
 
-An authorized, admitted firing starts an ordinary session. The session clones the configured repository, runs your instructions on the OpenCode or Claude Agent harness you chose, and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
+An authorized, admitted firing starts an ordinary session. The session clones the configured repository, runs your instructions on the harness you chose (OpenCode, Claude Agent, or Codex), and can open a pull request like any other session. Sessions started by an automation are titled `[Auto] <automation name>` and appear in the sessions list alongside interactive sessions.
 
 Authorized firings follow the path below. Repeated failures pause the automation; scheduled execution authorization denial pauses it immediately instead:
 
@@ -137,7 +137,7 @@ Automations can be workspace-owned or team-owned. Ownership is separate from the
 | Manage or manually trigger  | The corresponding feature permission. Members can act as the executor or owning-team lead on an eligible automation; Administrators and Owners have workspace-wide management and trigger permissions.                      |
 | Reassign executor           | Automation management access plus owning-team lead or workspace Administrator/Owner authority. Executor status alone is insufficient.                                                                                       |
 
-Scheduled and event-driven runs use the configured executor. **Trigger Now** uses the requester, including their identity and linked source-control credentials. At run time, that execution user must still be active and allowed to create sessions and use the targets. For team automations, they must also remain a member of the active owning team, even if they are an Administrator or Owner. Repository grants and environment ownership/access are rechecked for the selected targets before launch.
+Scheduled and event-driven runs use the configured executor. **Trigger Now** uses the requester, including their identity and linked source-control credentials. Neither brings personal context: automation runs never load anyone's personal memories or personal skill profiles, whoever triggers them. Repository and environment memories apply as in any session. At run time, that execution user must still be active and allowed to create sessions and use the targets. For team automations, they must also remain a member of the active owning team, even if they are an Administrator or Owner. Repository grants and environment ownership/access are rechecked for the selected targets before launch.
 
 Generated sessions inherit the automation's owning team and the team's current default visibility; workspace-owned automations produce Workspace-visible sessions. Requiring a team for new definitions does not itself disable existing workspace-owned automation runs.
 
@@ -174,6 +174,7 @@ Each recorded invocation appears as one row in the automation's **Run History**.
 | --------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Starting        | A session is being created for this run.                                                                            |
 | Running         | At least one session is executing.                                                                                  |
+| Retrying        | A scheduled run failed to start and is waiting to launch again. See [Retries](/automations/schedules#retries).      |
 | Completed       | Every session finished successfully.                                                                                |
 | Failed          | Every session failed. The failure reason is shown on the row.                                                       |
 | Partial failure | A multi-repository firing where some repositories completed and some failed.                                        |
@@ -190,7 +191,7 @@ Scheduled and manual triggers allow one active run per automation: a schedule sl
 
 Scheduled execution authorization denial is separate from the failure threshold: it records a **Skipped** invocation, pauses the automation immediately, and clears the next run time without adding a failure strike. Restore the required executor/team/target access or [reassign the executor](#reassigning-an-executor), then click **Resume**. Restoring access or reassigning alone does not resume the schedule. Generic event execution-authorization denial increments the event response's `skipped` count without pausing the automation or recording a run-history invocation. GitHub's pre-admission repository-grant denial instead records **Unauthorized** as described above; it also counts as skipped in the event response and neither adds a failure strike nor resets existing failures.
 
-An automation that fails three consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way.
+An automation that fails three consecutive times is paused automatically. Scheduled and manual runs both count. Runs that outlive their execution budget count as failures too. Skipped firings count neither way. A scheduled run waiting to [retry](/automations/schedules#retries) counts only once it finishes: as a success if a retry succeeds, or as one failure if its retries run out.
 
 Click **Resume** to re-enable the automation. Resuming resets the failure counter and, for schedules, computes the next run from the current moment. A successful **Trigger Now** while paused also resets the counter without resuming.
 
@@ -210,6 +211,7 @@ Each run's session has an execution budget: the sandbox timeout in effect for th
 | Sentry webhook payload                       | 256 KB                                                                                                        |
 | Concurrent runs per automation               | 1 for scheduled and manual triggers                                                                           |
 | Consecutive failures before auto-pause       | 3                                                                                                             |
+| Launch retries per scheduled run             | Up to 5 (none by default)                                                                                     |
 | Run execution timeout                        | The session's execution budget (2 hours by default), plus a 100-minute sweep grace before `execution_timeout` |
 
 ## Next steps
