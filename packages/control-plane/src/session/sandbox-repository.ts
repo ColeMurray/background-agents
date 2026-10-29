@@ -537,16 +537,6 @@ export class SandboxRepository {
     );
   }
 
-  /** Set one access artifact's URL and encrypted secret. */
-  async updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): Promise<void> {
-    const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
-    this.sql.exec(
-      `UPDATE sandbox SET ${urlColumn} = ?, ${secretColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url,
-      await this.encrypt(secret)
-    );
-  }
-
   /** Read and decrypt one access artifact's stored secret. */
   async getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null> {
     const { secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
@@ -571,13 +561,6 @@ export class SandboxRepository {
     const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-    );
-  }
-
-  updateSandboxTunnelUrls(urls: Record<string, string>): void {
-    this.sql.exec(
-      `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      JSON.stringify(urls)
     );
   }
 
