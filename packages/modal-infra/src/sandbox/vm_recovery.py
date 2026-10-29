@@ -1,5 +1,6 @@
 """Lookup-only recovery of named VM allocations and their provider-owned access metadata."""
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -9,7 +10,7 @@ import modal
 from sandbox_runtime.constants import VNC_PASSWORD_ENV_VAR
 
 from ..app_config import APP_NAME
-from .launch_policy import ALLOCATION_GENERATION_CREATED_AT_MS_TAG
+from .launch_policy import ALLOCATION_GENERATION_CREATED_AT_MS_TAG, ALLOCATION_SANDBOX_TAG
 from .tunnels import SandboxTunnels
 
 VM_LAUNCH_TAG = "openinspect_vm_launch"
@@ -19,6 +20,7 @@ _METADATA_TAGS = {VM_LAUNCH_TAG, VM_PORTS_TAG, ALLOCATION_GENERATION_CREATED_AT_
 type VMAllocationDetail = Literal[
     "not_visible", "other_generation", "window_closed", "race_pending"
 ]
+type VMAllocationHolder = Literal["absent", "current", "older", "not_older", "foreign"]
 
 
 class VMAllocationOutcome(RuntimeError):
@@ -62,6 +64,54 @@ def owned_vm_tags_match(actual: dict[str, str], expected: dict[str, str]) -> boo
     return all(actual.get(key) == value for key, value in expected.items()) and (
         actual.keys() <= expected.keys() | _METADATA_TAGS
     )
+
+
+def parse_generation_created_at_ms(value: str) -> int | None:
+    return int(value) if re.fullmatch(r"[1-9][0-9]{0,15}", value) else None
+
+
+def classify_vm_allocation_holder(
+    holder_tags: dict[str, str] | None,
+    expected_tags: dict[str, str],
+    *,
+    generation_created_at_ms: int | None,
+    predecessor_generation: str | None,
+) -> VMAllocationHolder:
+    """Classify the VM holding a launch's allocation name; authorizes nothing by itself.
+
+    - ``absent``: no VM holds the name (``holder_tags`` is None).
+    - ``current``: the launching generation's own VM.
+    - ``older``: a same-session generation proven older than the launch, either by a strictly
+      lower generation order tag or, for untagged legacy VMs, by being the named predecessor.
+    - ``not_older``: a same-session generation not proven older (equal, newer, malformed, or
+      incomparable order, or an untagged VM that is not the named predecessor).
+    - ``foreign``: anything not provably this session's allocation of this kind and backend.
+    """
+    if holder_tags is None:
+        return "absent"
+    generation = holder_tags.get(ALLOCATION_SANDBOX_TAG)
+    if (
+        not generation
+        or not re.fullmatch(r"[0-9a-f]{48}", generation)
+        or not owned_vm_tags_match(
+            holder_tags, {**expected_tags, ALLOCATION_SANDBOX_TAG: generation}
+        )
+    ):
+        return "foreign"
+    if generation == expected_tags[ALLOCATION_SANDBOX_TAG]:
+        return "current"
+    holder_order = holder_tags.get(ALLOCATION_GENERATION_CREATED_AT_MS_TAG)
+    if holder_order is None:
+        # Legacy allocations have no ordering metadata; only the explicit predecessor is safe.
+        older = generation == predecessor_generation
+    else:
+        holder_created_at_ms = parse_generation_created_at_ms(holder_order)
+        older = (
+            holder_created_at_ms is not None
+            and generation_created_at_ms is not None
+            and holder_created_at_ms < generation_created_at_ms
+        )
+    return "older" if older else "not_older"
 
 
 def parse_vm_service_launch(tags: dict[str, str]) -> VMServiceLaunch | None:

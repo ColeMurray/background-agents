@@ -12,7 +12,11 @@ from sandbox_runtime.constants import VNC_PASSWORD_ENV_VAR
 from src.sandbox.launch import ACCESS_PASSWORD_READ_TIMEOUT_SECONDS, SandboxLauncher
 from src.sandbox.launch_policy import docker_allocation_name, docker_allocation_tags
 from src.sandbox.tunnels import SandboxTunnels
-from src.sandbox.vm_recovery import VMAllocationOutcome, VMServiceLaunch
+from src.sandbox.vm_recovery import (
+    VMAllocationOutcome,
+    VMServiceLaunch,
+    classify_vm_allocation_holder,
+)
 from tests.modal_sdk_contract import sandbox_exec_request
 from tests.sandbox_launch_helpers import (
     DOCKER_SETTINGS,
@@ -20,6 +24,136 @@ from tests.sandbox_launch_helpers import (
     _docker_manager,
     _not_found,
 )
+
+LAUNCH_ID = "sandbox-acme-repo-1700000000000"
+OLDER_ID = "sandbox-acme-repo-1699999999999"
+LEGACY_ID = "legacy-generation"
+
+
+def _generation(sandbox_id: str) -> str:
+    return docker_allocation_tags("session-1", sandbox_id)["openinspect_sandbox_id"]
+
+
+def _holder(sandbox_id: str, order: str | None = None, **overrides: str | None) -> dict[str, str]:
+    tags: dict[str, str | None] = {**docker_allocation_tags("session-1", sandbox_id)}
+    if order is not None:
+        tags["openinspect_generation_created_at_ms"] = order
+    tags.update(overrides)
+    return {key: value for key, value in tags.items() if value is not None}
+
+
+@pytest.mark.parametrize(
+    "holder_tags, launch_order, predecessor_id, expected",
+    [
+        (None, 1700000000000, None, "absent"),
+        (_holder(LAUNCH_ID), 1700000000000, None, "current"),
+        (
+            {
+                **_holder(LAUNCH_ID, "1700000000000"),
+                **VMServiceLaunch(True, True, True, 8080, 6080, 7680, [3000]).tags(),
+            },
+            None,
+            None,
+            "current",
+        ),
+        (_holder(OLDER_ID, "1699999999999"), 1700000000000, None, "older"),
+        (_holder(OLDER_ID, "1"), 1700000000000, LEGACY_ID, "older"),
+        (_holder(LEGACY_ID), 1700000000000, LEGACY_ID, "older"),
+        (_holder(LEGACY_ID), None, LEGACY_ID, "older"),
+        (_holder(LEGACY_ID), 1700000000000, None, "not_older"),
+        (_holder(LEGACY_ID), 1700000000000, OLDER_ID, "not_older"),
+        (_holder(OLDER_ID, "1700000000000"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "1700000000001"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "1699999999999"), None, OLDER_ID, "not_older"),
+        (_holder(OLDER_ID, "invalid"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, ""), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "0"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "-1"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "01"), 1700000000000, None, "not_older"),
+        (_holder(OLDER_ID, "1" * 17), 1700000000000, None, "not_older"),
+        ({}, 1700000000000, None, "foreign"),
+        (
+            {**docker_allocation_tags("session-2", OLDER_ID)},
+            1700000000000,
+            OLDER_ID,
+            "foreign",
+        ),
+        (_holder(OLDER_ID, "1", openinspect_kind="other"), 1700000000000, None, "foreign"),
+        (_holder(OLDER_ID, "1", openinspect_backend="modal"), 1700000000000, None, "foreign"),
+        (_holder(OLDER_ID, "1", openinspect_session_id=None), 1700000000000, None, "foreign"),
+        (_holder(OLDER_ID, "1", openinspect_sandbox_id=None), 1700000000000, None, "foreign"),
+        (_holder(OLDER_ID, "1", openinspect_sandbox_id="A" * 48), 1700000000000, None, "foreign"),
+        (_holder(OLDER_ID, "1", unexpected_tag="foreign"), 1700000000000, None, "foreign"),
+    ],
+    ids=[
+        "absent",
+        "current-legacy",
+        "current-with-launch-metadata",
+        "older-order",
+        "ordered-holder-ignores-predecessor",
+        "legacy-named-predecessor",
+        "legacy-named-predecessor-unordered-launch",
+        "legacy-without-predecessor",
+        "legacy-other-predecessor",
+        "equal-order",
+        "newer-order",
+        "ordered-predecessor-unordered-launch",
+        "malformed-order",
+        "empty-order",
+        "zero-order",
+        "negative-order",
+        "leading-zero-order",
+        "overlong-order",
+        "no-tags",
+        "another-session",
+        "another-kind",
+        "another-backend",
+        "missing-session",
+        "missing-generation",
+        "uppercase-generation",
+        "unexpected-tag",
+    ],
+)
+def test_classify_vm_allocation_holder(holder_tags, launch_order, predecessor_id, expected):
+    snapshot = dict(holder_tags) if holder_tags is not None else None
+
+    holder = classify_vm_allocation_holder(
+        holder_tags,
+        docker_allocation_tags("session-1", LAUNCH_ID),
+        generation_created_at_ms=launch_order,
+        predecessor_generation=_generation(predecessor_id) if predecessor_id else None,
+    )
+
+    assert holder == expected
+    assert holder_tags == snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "holder_tags, expected",
+    [(_holder(OLDER_ID, "1699999999999"), "older"), ({}, "foreign")],
+    ids=["older", "foreign"],
+)
+async def test_docker_allocation_holder_lookup_never_terminates(monkeypatch, holder_tags, expected):
+    sandbox = SimpleNamespace(
+        object_id="holder",
+        get_tags=SimpleNamespace(aio=AsyncMock(return_value=holder_tags)),
+        terminate=SimpleNamespace(aio=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        "src.sandbox.launch.modal.Sandbox.from_name",
+        SimpleNamespace(aio=AsyncMock(return_value=sandbox)),
+    )
+
+    found = await SandboxLauncher._find_docker_allocation_holder(
+        docker_allocation_name("session-1"),
+        docker_allocation_tags("session-1", LAUNCH_ID),
+        generation_created_at_ms=1700000000000,
+        predecessor_generation=None,
+    )
+
+    assert found == (expected, sandbox)
+    sandbox.terminate.aio.assert_not_awaited()
 
 
 @pytest.mark.asyncio

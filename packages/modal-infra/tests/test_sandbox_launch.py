@@ -635,7 +635,7 @@ async def test_invalid_wire_resources_neither_retire_nor_allocate(
 ):
     manager, captured, _ = _docker_manager(monkeypatch)
     retire = AsyncMock()
-    monkeypatch.setattr("src.sandbox.launch.terminate_and_wait", retire)
+    monkeypatch.setattr("src.sandbox.launch.SandboxLauncher._retire_docker_allocation", retire)
     if image_source == "base":
         launch = manager.create_sandbox(
             _docker_config(settings=settings, retire_sandbox_id="prior")
