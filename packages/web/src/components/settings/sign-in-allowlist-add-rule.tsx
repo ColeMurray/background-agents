@@ -85,7 +85,7 @@ export function SignInAllowlistAddRule({
               event.preventDefault();
               const step = event.key === "ArrowDown" ? 1 : -1;
               setActive((highlighted + step + candidates.length) % candidates.length);
-            } else if (event.key === "Enter") {
+            } else if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
               choose(highlighted);
             } else if (event.key === "Escape" && value) {

@@ -183,6 +183,16 @@ describe("SignInAllowlistSection", () => {
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores Enter that confirms an IME composition", async () => {
+    await renderPolicy();
+    const input = typeRule("new@example.com");
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(input).toHaveValue("new@example.com");
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeInTheDocument();
+  });
+
   it("clears typed input with Escape", async () => {
     await renderPolicy();
     const input = typeRule("octocat");

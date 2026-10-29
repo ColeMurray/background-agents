@@ -44,6 +44,10 @@ describe("detectRuleTypes", () => {
         { type: "allowedGitHubOrganizations", value: "My-Org" },
       ],
     ],
+    [
+      "https://github.com/orgs/Acme-Inc/",
+      [{ type: "allowedGitHubOrganizations", value: "Acme-Inc" }],
+    ],
   ])("interprets %j", (input, expected) => {
     expect(detectRuleTypes(input)).toEqual(expected);
   });
@@ -66,6 +70,7 @@ describe("detectRuleTypes with admissionRulesSchema", () => {
     [" NEW@Example.com ", { allowedEmails: ["new@example.com"] }],
     [" @EXAMPLE.com ", { allowedEmailDomains: ["example.com"] }],
     ["https://github.com/My-Org/", { allowedGitHubUsers: ["my-org"] }],
+    ["github.com/orgs/Acme-Inc", { allowedGitHubOrganizations: ["acme-inc"] }],
   ])("saves %j as the schema normalizes it", (input, expected) => {
     expect(save(input)).toEqual(expected);
   });
