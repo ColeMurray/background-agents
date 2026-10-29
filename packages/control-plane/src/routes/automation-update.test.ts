@@ -169,6 +169,90 @@ describe("automation read, update, and delete routes", () => {
     });
   });
 
+  describe("one-shot schedule updates", () => {
+    it("moves an enabled one-shot to its new future slot", async () => {
+      const at = Date.now() + 3_600_000;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: at,
+      });
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { scheduleOnceAt: at + 60_000 },
+      });
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ schedule_once_at: at + 60_000 })
+      );
+      expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
+    });
+
+    it("accepts launch retries on an existing one-shot", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: Date.now() + 3_600_000,
+      });
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { maxRetries: 2 },
+      });
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ max_retries: 2 })
+      );
+    });
+
+    it("does not re-arm a settled one-shot when the form re-sends its timestamp", async () => {
+      const at = Date.now() - 60_000;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: at,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { name: "Updated", scheduleOnceAt: at, scheduleTz: "UTC" },
+      });
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
+    });
+
+    it("keeps a paused one-shot paused when rescheduled", async () => {
+      const at = Date.now() + 3_600_000;
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: at,
+        enabled: 0,
+        next_run_at: null,
+      });
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { scheduleOnceAt: at + 60_000 },
+      });
+      expect(response.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ schedule_once_at: at + 60_000 })
+      );
+      expect(mockStore.bindAutomationUpdate.mock.calls[0][1]).not.toHaveProperty("next_run_at");
+    });
+
+    it("rejects moving a one-shot into the past or setting cron", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        schedule_cron: null,
+        schedule_once_at: Date.now() + 3_600_000,
+      });
+      for (const body of [{ scheduleOnceAt: Date.now() - 1 }, { scheduleCron: "0 9 * * *" }]) {
+        expect((await callRoute("PUT", "/automations/auto-1", { body })).status).toBe(400);
+      }
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
+    });
+  });
+
   describe("PUT /automations/:id (update)", () => {
     it("refuses target edits the current executor could not launch", async () => {
       mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: "executor-1" });
@@ -488,6 +572,35 @@ describe("automation read, update, and delete routes", () => {
       expect(mockBatch).toHaveBeenCalledWith(
         expect.arrayContaining([{ sql: "update-automation" }])
       );
+    });
+
+    it("updates the launch retry limit of a scheduled automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("PUT", "/automations/auto-1", { body: { maxRetries: 0 } });
+
+      expect(res.status).toBe(200);
+      expect(mockStore.bindAutomationUpdate).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({ max_retries: 0 })
+      );
+    });
+
+    it("rejects a launch retry limit on a non-schedule automation", async () => {
+      mockStore.getById.mockResolvedValue({
+        ...sampleRow,
+        trigger_type: "webhook",
+        schedule_cron: null,
+        trigger_config: JSON.stringify({ conditions: [] }),
+      });
+
+      const res = await callRoute("PUT", "/automations/auto-1", { body: { maxRetries: 2 } });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "maxRetries above 0 is only valid for schedule triggers",
+      });
+      expect(mockStore.bindAutomationUpdate).not.toHaveBeenCalled();
     });
 
     it("rejects a replacement pin the automation's harness cannot use", async () => {

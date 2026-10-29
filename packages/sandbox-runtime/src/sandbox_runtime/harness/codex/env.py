@@ -12,7 +12,11 @@ from urllib.parse import urlsplit
 from ..base import HarnessStartError
 
 CODEX_VERSION = "0.163.0"
-CODEX_BINARY = "/usr/local/bin/codex"
+# The image's pinned install, never a /usr/local/bin link: a substrate may
+# re-link its own coding agents there at boot (Boat does).
+CODEX_BINARY = "/opt/openinspect/codex/bin/codex"
+# The parent thread plus three concurrent sub-agents.
+MAX_AGENT_THREADS = 4
 
 
 def clean_codex_env(parent: Mapping[str, str], state_dir: Path) -> dict[str, str]:
@@ -98,7 +102,16 @@ def launch_arguments(state_dir: Path) -> tuple[str, ...]:
         "chatgpt_base_url": '"https://chatgpt.com/backend-api"',
         "mcp_servers": "{}",
         "hooks": "{}",
+        # Sub-agents are the model-declared v2 ``collaboration`` tools, which
+        # this flag does not gate; it keeps the v1 tools, whose activity the
+        # harness does not project, unavailable.
         "features.multi_agent": "false",
+        # Counts the parent thread: at most this many threads run at once.
+        "features.multi_agent_v2.max_concurrent_threads_per_session": str(MAX_AGENT_THREADS),
+        # Removes send_message and followup_task, which can re-task a sub-agent
+        # with no signal of whether a turn will follow. A sub-agent then runs
+        # only the turn its spawn starts, which settles with its prompt.
+        "features.multi_agent_v2.disable_direct_message": "true",
         "features.memories": "false",
         "features.apps": "false",
         "features.hooks": "false",

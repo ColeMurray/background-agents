@@ -148,6 +148,26 @@ describe("applyMigrations", () => {
     expect(recordedIds).toEqual(expectedIds);
   });
 
+  it("rejects malformed applied migration rows before running migrations", () => {
+    mock.setData("SELECT id FROM _schema_migrations", [{ id: "1" }]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid schema migration metadata at row 0");
+
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO _schema_migrations"))).toBe(
+      false
+    );
+  });
+
+  it("rejects partial applied migration rows before running migrations", () => {
+    mock.setData("SELECT id FROM _schema_migrations", [{}]);
+
+    expect(() => applyMigrations(mock.sql)).toThrow("Invalid schema migration metadata at row 0");
+
+    expect(mock.calls.some(({ query }) => query.includes("INSERT INTO _schema_migrations"))).toBe(
+      false
+    );
+  });
+
   it("validates PRAGMA rows in the earliest column-aware migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 7);
     if (!migration || typeof migration.run !== "function") {
@@ -335,14 +355,14 @@ describe("applyMigrations", () => {
   it("adds sandbox.active_socket_attached_at for fresh and migrated DOs", () => {
     expect(SCHEMA_SQL).toContain("active_socket_attached_at INTEGER");
 
-    const migration = MIGRATIONS.find((entry) => entry.id === 57);
+    const migration = MIGRATIONS.find((entry) => entry.id === 58);
     expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN active_socket_attached_at INTEGER");
   });
 
   it("adds sandbox.instance_reserved_at for fresh and migrated DOs", () => {
     expect(SCHEMA_SQL).toContain("instance_reserved_at INTEGER");
 
-    const migration = MIGRATIONS.find((entry) => entry.id === 58);
+    const migration = MIGRATIONS.find((entry) => entry.id === 59);
     expect(migration?.run).toBe("ALTER TABLE sandbox ADD COLUMN instance_reserved_at INTEGER");
   });
 

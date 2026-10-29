@@ -83,6 +83,126 @@ SERVICE_AUTH_SECRET=<the SERVICE_AUTH_SECRET_WEB value from .env>
 Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be the web app's origin
 (`http://localhost:3000` by default), because browser sign-in is origin-bound.
 
+## Sign-in allowlist operations
+
+Browser sign-in and new bot-account admission combine the deployment's `ALLOWED_*` baseline with
+rules stored in `global.db`. Active built-in Owners/Administrators manage the latter in **Settings >
+Workspace access > Sign-in allowlist**. The UI cannot narrow deployment grants; changing `.env` or
+AWS SSM configuration cannot subtract managed grants. Keep a provider-compatible recovery baseline,
+preferably an exact verified administrator email in `ALLOWED_EMAILS`, with unsafe mode disabled.
+Google needs an email/domain baseline; GitHub also accepts usernames/organizations. SQL rules cannot
+rescue an empty/incompatible baseline.
+
+`UNSAFE_ALLOW_ALL_USERS=true` only admits any otherwise valid identity when both sources' effective
+lists are empty. Nonempty lists still apply, and the editor is read-only whenever the flag is true.
+Managed input is limited to 50 rules total, including 10 organizations, with 64-KiB requests. Fresh
+Slack/Linear accounts need an attested email matching the effective email/domain union, unless
+unsafe allow-all is effective; an attested email is still required in unsafe mode. Known actors and
+attested-email links to existing accounts do not repeat admission and preserve role/suspension.
+GitHub bot profile emails are not verified evidence and cannot link an unknown actor by email;
+GitHub bot actors must already be known unless unsafe allow-all is effective. Bots cannot prove
+GitHub username/org rules. Missing or unreadable managed policy fails new-account admission closed.
+Removing rules does not revoke ordinary existing browser sessions or existing bot accounts; use
+member suspension instead. General bot invocation restrictions and resource authorization still
+apply. See [authentication](AUTH.md#sign-in-allowlist) for policy, authorization, and audit details.
+
+### Start and bootstrap
+
+After configuring OAuth, the recovery baseline, and secrets in `.env`, start the stack:
+
+```bash
+docker compose up -d --build
+curl -s http://localhost:8787/healthz
+```
+
+Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
+empty managed rules at revision zero; Owners and Administrators can edit them in Settings once the
+backend is running. The independently deployed frontend may arrive before the backend: missing
+routes show unavailable.
+
+Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
+lowercase hexadecimal user ID. The script needs Node.js 24+, a repository checkout, and exactly one
+of `--sqlite <existing-path>` or `--database <D1-name>`. SQLite opens an existing file only; do not
+point at a backup or a new empty file. The runtime app image does not ship the source scripts, so do
+not assume `docker compose exec app node scripts/...` works.
+
+For local Compose, this helper runs the checkout's scripts in a Node container on the **actual app
+volume**. Run it from the repository root with the app running, and confirm the selected container
+belongs to the intended deployment. Re-select it after a container replacement. The helper uses the
+same `node` user as the app so SQLite sidecar files retain the correct ownership; the checkout must
+be readable by that user.
+
+```bash
+# This also works on a Docker-only host; no host Node.js installation is required.
+APP_CONTAINER_ID="$(docker compose ps -q app)"
+operator_sql() {
+  docker run --rm --user node --volumes-from "$APP_CONTAINER_ID" \
+    -v "$PWD:/workspace:ro" -w /workspace node:24 node "$@"
+}
+
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id>
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id> --execute
+operator_sql scripts/bootstrap-workspace-owner.ts --sqlite /data/global.db --user <canonical-user-id>
+```
+
+Review the first dry run before executing; the final dry run should report `no-op`. Bootstrap
+requires an existing unsuspended user and refuses when another active Owner exists. It is not a
+general recovery bypass for suspended accounts. On AWS, use an operator checkout with access to the
+actual volume and select the app from the AWS Compose invocation, or use `node scripts/... --sqlite`
+with the existing database's host path. Do not modify a copied database expecting to affect the app.
+
+### Roll back
+
+Older code ignores managed rules, so rolling back to it drops every managed grant. Stop concurrent
+deployments/configuration edits and Settings policy edits, and disable or control automated rollback
+first; nothing locks deployment configuration or the editor for you.
+
+While still on current code, reload Settings, discard any unsaved draft, and copy the managed rules;
+treat the copy as sensitive data. If Settings is unavailable, a signed-in Owner or Administrator can
+open `/api/settings/admission-policy` on the web app for the same snapshot, or you can read the
+rules from the actual volume with the `operator_sql` helper above:
+
+```bash
+operator_sql -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync("/data/global.db", { readOnly: true }); console.log(JSON.stringify(db.prepare("SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1").get()))'
+```
+
+Both direct reads report the policy `revision`; record it with the copy. The copy contains managed
+rules only, not the deployment baseline. Separately read the serving container's admission
+configuration, normalize and union each baseline list with the managed list, and put that union in
+`.env` (or the AWS SSM source). Set unsafe mode false. Apply the reviewed configuration on current
+code; local Compose recreates the app with:
+
+```bash
+docker compose up -d --build app
+```
+
+On AWS, use its normal SSM/deployment workflow and Compose overlay rather than relying on a local
+`.env` edit that a later deployment would replace. Verify the **deployed** union and intended login
+eligibility. Immediately before moving to old code, reload Settings (or repeat the direct read) and
+confirm the managed rules, any recorded revision, and the deployed union still match what you
+reviewed. If anything changed, stop and repeat the review. Only then deploy the approved old
+image/source version with that union intact. Keep `global.db`, the policy row, and audit history; do
+not drop policy data. A frontend-only rollback does not stop the new backend from enforcing managed
+rules.
+
+### Recover
+
+For a valid but mistaken policy, add a known valid recovery email to the deployment baseline with
+unsafe mode false, deploy it on current code, and verify login and the account's active role. For
+missing/corrupt policy state, repair or restore the database first: even a baseline match fails
+closed when the managed policy cannot be read. Do not delete the singleton or enable unsafe
+allow-all to work around it.
+
+Baseline copies added for rollback remain until a separate reviewed deployment removes them.
+
+The Next.js callback proxy allows 240 seconds, with `maxDuration = 300` on the auth route, because
+verified-email pagination can consume roughly 200 seconds before org checks/token/persistence work.
+Organization checks use at most four concurrent requests and one total 10-second deadline; ordinary
+resource/non-callback transport remains 15 seconds. Hosting and ingress caps still apply. Provider
+token exchange has no explicit auth-library timeout; the app proxy bounds its own wait, not assured
+upstream cancellation. Validate live providers and deployment limits separately; these documented
+budgets are not real-provider test results.
+
 ## Reaching the container from a sandbox
 
 A sandbox connects back to the control plane over a WebSocket at `WORKER_URL`, so that URL has to be

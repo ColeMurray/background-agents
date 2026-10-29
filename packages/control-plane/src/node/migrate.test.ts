@@ -50,6 +50,23 @@ describe("applyMigrations", () => {
     expect(applyMigrations(db, MIGRATIONS_DIR)).toEqual([]);
   });
 
+  it("rejects malformed recorded migration rows", () => {
+    writeFileSync(join(dir, "0001_init.sql"), "CREATE TABLE sample (id TEXT);");
+    db.exec(`
+      CREATE TABLE _schema_migrations (
+        version TEXT PRIMARY KEY,
+        name INTEGER NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO _schema_migrations (version, name) VALUES ('0001', 123);
+    `);
+
+    expect(() => applyMigrations(db, dir)).toThrow("Invalid migration ledger row for version 0001");
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'sample'").get()
+    ).toBeUndefined();
+  });
+
   it("leaves existing resources workspace-owned without creating teams or memberships", () => {
     for (const name of readdirSync(MIGRATIONS_DIR).filter(
       (file) => file.endsWith(".sql") && file < "0083"

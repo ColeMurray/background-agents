@@ -31,9 +31,10 @@ vi.mock("@open-inspect/shared/slack", async () => {
 
 import app from "./index";
 import { clearLocalCache } from "./classifier/repos";
-import { clearBotUserIdCache } from "./bot-identity";
+import { clearBotIdentityCache } from "./bot-identity";
 
 const BOT_USER_ID = "UBOT123";
+const BOT_ID = "BSELF";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -150,9 +151,9 @@ describe("channel-message automation triggers (POST /events)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLocalCache();
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     mockVerifySlackSignature.mockResolvedValue(true);
-    mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID });
+    mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID, bot_id: BOT_ID });
     mockGetChannelInfo.mockResolvedValue({ ok: true, channel: { id: "C123", name: "ops" } });
     mockGetPermalink.mockResolvedValue({
       ok: true,
@@ -250,5 +251,136 @@ describe("channel-message automation triggers (POST /events)", () => {
       env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
     );
     expect(forwarded).toHaveLength(0);
+  });
+  describe("bot-authored messages", () => {
+    function forwardedFrom(env: Env) {
+      return forwardedSlackEvents(
+        env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+      );
+    }
+
+    it("forwards another app bot's message identified by its bot id alone", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: "UALERTS", bot_id: "BALERTS", text: "Cost anomaly" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const forwarded = forwardedFrom(env);
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0]).toMatchObject({ botId: "BALERTS" });
+      // A control plane that predates botId requires actorUserId, so it rejects
+      // this event instead of admitting the bot as a person.
+      expect(forwarded[0]).not.toHaveProperty("actorUserId");
+      expect(String(forwarded[0].contextBlock)).toContain("by bot BALERTS.");
+    });
+
+    it("forwards a legacy bot_message without a user, identified by its bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: "BHOOK",
+          text: "Build failed",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const [forwarded] = forwardedFrom(env);
+      expect(forwarded).toMatchObject({ botId: "BHOOK" });
+      expect(forwarded).not.toHaveProperty("actorUserId");
+    });
+
+    it("never forwards the bot's own posts", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: BOT_USER_ID, bot_id: BOT_ID, text: "Done: opened a PR" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("never forwards the bot's own post that carries only its bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({
+          subtype: "bot_message",
+          user: undefined,
+          bot_id: BOT_ID,
+          text: "Done: opened a PR",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("drops bot messages when the bot's own bot_id cannot be resolved", async () => {
+      mockAuthTest.mockResolvedValue({ ok: true, user_id: BOT_USER_ID });
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ user: "UALERTS", bot_id: "BALERTS", text: "Cost anomaly" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
+
+    it("leaves botId unset for a person's message", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(channelMessageRequest({}), env, ctx);
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)[0]).not.toHaveProperty("botId");
+    });
+
+    it("does not hand a bot's DM to the interactive DM flow", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(
+        channelMessageRequest({ channel_type: "im", channel: "D123", bot_id: "BALERTS" }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const fetchMock = env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>;
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("drops a bot_message subtype that carries no bot_id", async () => {
+      const env = makeEnv({ watched: ["C123"] });
+      const ctx = makeCtx();
+
+      await app.fetch(channelMessageRequest({ subtype: "bot_message" }), env, ctx);
+      await flushWaitUntil(ctx);
+
+      expect(forwardedFrom(env)).toHaveLength(0);
+    });
   });
 });

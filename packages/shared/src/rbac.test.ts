@@ -7,6 +7,7 @@ import {
   effectiveAuthorizationSchema,
   hasScopedPermission,
   isCustomRolePermission,
+  memberMergeInputSchema,
   permissionsForBuiltInRole,
   resolveScopedPermission,
   replaceMemberRoleInputSchema,
@@ -62,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(46);
+    expect(PERMISSION_IDS).toHaveLength(47);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -100,6 +101,25 @@ describe("RBAC registry", () => {
         role === "owner"
       );
     }
+  });
+
+  it("grants member merges to Owner, Administrator, and eligible custom roles", () => {
+    expect(permissionsForBuiltInRole("owner")).toContain("workspace.members.merge");
+    expect(permissionsForBuiltInRole("administrator")).toContain("workspace.members.merge");
+    expect(permissionsForBuiltInRole("member")).not.toContain("workspace.members.merge");
+    expect(permissionsForBuiltInRole("viewer")).not.toContain("workspace.members.merge");
+    expect(isCustomRolePermission("workspace.members.merge")).toBe(true);
+  });
+
+  it("rejects a member merge into the same user", () => {
+    const userId = "a".repeat(32);
+    expect(
+      memberMergeInputSchema.safeParse({ sourceUserId: userId, targetUserId: userId }).success
+    ).toBe(false);
+    expect(
+      memberMergeInputSchema.safeParse({ sourceUserId: userId, targetUserId: "b".repeat(32) })
+        .success
+    ).toBe(true);
   });
 
   it("grants Members workspace-wide session operations", () => {

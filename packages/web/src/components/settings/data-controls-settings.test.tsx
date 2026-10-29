@@ -171,6 +171,29 @@ afterEach(async () => {
   authorizationMock.permissions = null;
 });
 
+describe("DataControlsSettings — loading state", () => {
+  it("shows a skeleton until the first page of archived sessions arrives", async () => {
+    let resolveList!: (response: Response) => void;
+    installFetch({
+      onArchivedList: () => new Promise<Response>((resolve) => (resolveList = resolve)),
+    });
+    renderComponent();
+
+    expect(
+      await screen.findByRole("status", { name: "Loading archived sessions" })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    resolveList(jsonResponse({ sessions: [createArchivedSession(1)], hasMore: false }));
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.getByText("1 archived session")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("status", { name: "Loading archived sessions" })
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("DataControlsSettings — unarchive flow", () => {
   it("keeps archived sessions readable without exposing unarchive to read-only roles", async () => {
     authorizationMock.permissions = new Set(["sessions.read"]);

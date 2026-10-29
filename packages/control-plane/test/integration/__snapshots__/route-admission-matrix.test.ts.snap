@@ -42,11 +42,11 @@ exports[`route admission matrix > admits only the named bot on every exact-servi
 exports[`route admission matrix > admits the workspace owner through every browser-reachable route 1`] = `
 [
   "POST /api/auth/sign-in/social owner=403",
-  "GET /api/auth/callback/github owner=401",
-  "GET /api/auth/callback/google owner=401",
+  "GET /api/auth/callback/github owner=302",
+  "GET /api/auth/callback/google owner=302",
   "GET /api/auth/get-session owner=200",
   "POST /api/auth/sign-out owner=403",
-  "GET /api/auth/error owner=200",
+  "GET /api/auth/error owner=302",
   "GET /internal/auth/sign-in-providers owner=200",
   "GET /teams/:id/channel-bindings owner=200",
   "PUT /teams/:id/channel-bindings/:provider/:externalId owner=400",
@@ -233,6 +233,7 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "POST /memories/preview owner=200",
   "GET /memories owner=200",
   "POST /memories owner=400",
+  "POST /memories/bulk owner=400",
   "GET /memories/:id owner=404",
   "PATCH /memories/:id owner=428",
   "GET /memories/:id/revisions owner=404",
@@ -246,9 +247,14 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "GET /members owner=200",
   "PUT /members/:id/role owner=400",
   "PUT /members/:id/status owner=400",
+  "POST /members/merge/preview owner=400",
+  "POST /members/merge owner=400",
   "GET /teams/:id/secrets owner=200",
   "PUT /teams/:id/secrets owner=400",
   "DELETE /teams/:id/secrets/:key owner=404",
+  "POST /actors/me owner=204",
+  "GET /settings/admission-policy owner=200",
+  "PUT /settings/admission-policy owner=428",
 ]
 `;
 
@@ -465,6 +471,7 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /memories/preview anonymous=401",
   "GET /memories anonymous=401",
   "POST /memories anonymous=401",
+  "POST /memories/bulk anonymous=401",
   "GET /memories/:id anonymous=401",
   "PATCH /memories/:id anonymous=401",
   "GET /memories/:id/revisions anonymous=401",
@@ -478,6 +485,8 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "GET /members anonymous=401",
   "PUT /members/:id/role anonymous=401",
   "PUT /members/:id/status anonymous=401",
+  "POST /members/merge/preview anonymous=401",
+  "POST /members/merge anonymous=401",
   "GET /teams/:id/secrets anonymous=401",
   "PUT /teams/:id/secrets anonymous=401",
   "DELETE /teams/:id/secrets/:key anonymous=401",
@@ -487,6 +496,9 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /internal/github-event anonymous=401",
   "POST /internal/slack-event anonymous=401",
   "GET /github/route anonymous=401",
+  "POST /actors/me anonymous=401",
+  "GET /settings/admission-policy anonymous=401",
+  "PUT /settings/admission-policy anonymous=401",
 ]
 `;
 

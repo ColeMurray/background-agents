@@ -15,6 +15,7 @@ import { resolveManagedSkills } from "./session/skill-resolution";
 import { resolveSessionProviderAuth } from "./session/provider-account-resolution";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "./repos/resolve";
 import { TeamStore } from "./db/teams";
+import { SANDBOX_PROVIDER_NAMES } from "@open-inspect/shared/types/integrations";
 
 const { getAccessToken } = vi.hoisted(() => ({
   getAccessToken: vi.fn(async () => ({
@@ -31,7 +32,12 @@ vi.mock("./auth/user/runtime", () => ({
       listUserAccounts: vi.fn(async () => []),
       getAccessToken,
       accountInfo: vi.fn(async () => ({
-        user: { id: "2002" },
+        account: {
+          id: "github-account-2002",
+          providerId: "github",
+          accountId: "2002",
+        },
+        user: { name: "Trusted Ada" },
         data: {
           provider: "github",
           issuer: "https://github.com",
@@ -220,7 +226,7 @@ describe("Codex public session creation", () => {
     };
   }
 
-  it("persists Codex canonical model and native max without rollout configuration", async () => {
+  it.each(SANDBOX_PROVIDER_NAMES)("admits Codex on the %s sandbox provider", async (provider) => {
     vi.spyOn(ModelPreferencesStore.prototype, "getEnabledModels").mockResolvedValue([
       "openai/gpt-5.6-sol",
     ]);
@@ -229,12 +235,15 @@ describe("Codex public session creation", () => {
       return { create } as never;
     });
     const initFetch = vi.fn(async (_request: Request) => Response.json({ status: "created" }));
-    const response = await createSessionRequestWithBody(createEnv(initFetch), {
-      harness: "codex",
-      model: "gpt-5.6-sol",
-      reasoningEffort: "max",
-      providerSelections: { openai: { mode: "api_key" } },
-    });
+    const response = await createSessionRequestWithBody(
+      { ...createEnv(initFetch), SANDBOX_PROVIDER: provider },
+      {
+        harness: "codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "max",
+        providerSelections: { openai: { mode: "api_key" } },
+      }
+    );
     expect(response.status).toBe(201);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({

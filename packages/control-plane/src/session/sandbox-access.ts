@@ -9,6 +9,7 @@
 
 import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { decryptToken, hashToken } from "../auth/crypto";
+import { buildBoatSandboxDashboardUrl } from "../sandbox/boat-lifecycle";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import type { Logger } from "../logger";
@@ -65,7 +66,7 @@ export async function decryptStoredAccessValue(
   }
 }
 
-/** The configured sandbox backend plus the Modal coordinates its dashboard link needs. */
+/** The configured sandbox backend plus the Modal coordinates a Modal dashboard link needs. */
 export interface SandboxDashboardSettings {
   sandboxProvider: string | undefined;
   modalWorkspace: string | undefined;
@@ -74,17 +75,23 @@ export interface SandboxDashboardSettings {
 
 /**
  * The provider dashboard link for a sandbox, or null when the deployment runs a
- * backend with no such link (only Modal has one).
+ * backend with no such link (only Modal and Boat have one).
  */
 export function resolveSandboxDashboardUrl(
   settings: SandboxDashboardSettings,
   providerObjectId: string | null | undefined
 ): string | null {
-  const backend = resolveSandboxBackendName(settings.sandboxProvider);
-  if (backend !== "modal" && backend !== "modal-vm") return null;
-  return buildModalSandboxDashboardUrl({
-    workspace: settings.modalWorkspace,
-    modalEnvironment: settings.modalEnvironment,
-    providerObjectId,
-  });
+  switch (resolveSandboxBackendName(settings.sandboxProvider)) {
+    case "modal":
+    case "modal-vm":
+      return buildModalSandboxDashboardUrl({
+        workspace: settings.modalWorkspace,
+        modalEnvironment: settings.modalEnvironment,
+        providerObjectId,
+      });
+    case "boat":
+      return buildBoatSandboxDashboardUrl(providerObjectId);
+    default:
+      return null;
+  }
 }

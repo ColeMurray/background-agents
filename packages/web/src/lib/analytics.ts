@@ -370,7 +370,7 @@ export function getSessionsBySource(
     .sort((a, b) => b.sessions - a.sessions || a.source.localeCompare(b.source));
 }
 
-/** Share of sessions billed through a connected subscription; those report $0 cost. */
+/** Share of sessions billed through a connected subscription; their costs are model-price equivalents. */
 export function getSubscriptionShare(
   providerEntries: readonly AnalyticsBreakdownEntry[]
 ): number | null {

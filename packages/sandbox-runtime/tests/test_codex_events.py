@@ -3,6 +3,27 @@ import json
 import pytest
 
 from sandbox_runtime.harness.codex.events import CodexRateLimits, CodexTurnEvents
+from sandbox_runtime.model_prices import ModelPrice
+
+# gpt-6.1-sol in the models.dev catalog: USD per million tokens.
+PRICE = ModelPrice.parse(
+    {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "tiers": [
+            {
+                "input": 4,
+                "output": 15,
+                "cache_read": 0.2,
+                "cache_write": 5,
+                "tier": {"type": "context", "size": 272000},
+            }
+        ],
+        "context_over_200k": {"input": 4, "output": 15, "cache_read": 0.2, "cache_write": 5},
+    }
+)
 
 
 @pytest.mark.parametrize("method", ["item/started", "item/completed"])
@@ -153,7 +174,7 @@ def test_usage_charges_only_this_turn_and_counts_cache_and_reasoning_once():
         "totalTokens": 1100,
     }
     state = CodexTurnEvents(
-        "m2", "thread", "turn2", "gpt-6.1-sol", prior, rate_limits=CodexRateLimits()
+        "m2", "thread", "turn2", "gpt-6.1-sol", prior, price=PRICE, rate_limits=CodexRateLimits()
     )
     total = {
         "inputTokens": 2000,
@@ -171,22 +192,26 @@ def test_usage_charges_only_this_turn_and_counts_cache_and_reasoning_once():
     assert projected["tokens"]["input"] == 500
     assert projected["tokens"]["output"] == 50
     assert projected["tokens"]["reasoning"] == 50
-    assert projected["messageCostUsd"] == 0
+    assert projected["tokens"]["cache"]["read"] == 500
+    # 500 input at $2/M, 50 output and 50 reasoning at $10/M, 500 cache reads at $0.1/M.
+    assert projected["cost"] == projected["messageCostUsd"] == 0.00205
+    # A repeated total adds no usage and no cost.
     state.accept(frame)
-    assert state.finish()["cost"] == 0
+    assert state.finish()["cost"] == state.finish()["messageCostUsd"] == 0.00205
 
 
-def usage(state, total):
+def usage(state, total, last=None):
+    token_usage = {"total": total, **({"last": last} if last is not None else {})}
     return state.accept(
         {
             "method": "thread/tokenUsage/updated",
             "params": {
                 "threadId": state.thread_id,
                 "turnId": state.turn_id,
-                "tokenUsage": {"total": total},
+                "tokenUsage": token_usage,
             },
         }
-    )[0]
+    )[-1]
 
 
 def counts(input_tokens):
@@ -207,23 +232,164 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
         "gpt-6.1-sol",
         counts(100),
         baseline_known=False,
+        price=PRICE,
         rate_limits=CodexRateLimits(),
     )
     # The native history includes 50 previously unobserved tokens, then this turn's 10.
     projected = usage(state, counts(160))
-    assert projected["cost"] == 0
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0
     assert "costAvailability" not in projected
     assert "tokens" not in projected
-    assert state.has_usage
-    assert state.total["inputTokens"] == 160
+    assert state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 160
 
     following = CodexTurnEvents(
-        "m3", "thread", "turn3", "gpt-6.1-sol", state.total, rate_limits=CodexRateLimits()
+        "m3",
+        "thread",
+        "turn3",
+        "gpt-6.1-sol",
+        state.usage.total,
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
     )
     projected = usage(following, counts(170))
     assert projected["tokens"]["input"] == 10
-    assert projected["cost"] == 0
-    assert following.has_usage
+    assert projected["cost"] == projected["messageCostUsd"] == 0.00002
+    assert following.usage.has_usage
+
+
+def test_unknown_baseline_attributes_each_request_from_its_own_usage():
+    state = CodexTurnEvents(
+        "m2",
+        "thread",
+        "turn2",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
+    )
+    # 50 unobserved tokens of earlier native history, then this turn's two requests.
+    usage(state, counts(160), last=counts(10))
+    # A repeated total is not a new request.
+    usage(state, counts(160), last=counts(10))
+    projected = usage(state, counts(190), last=counts(30))
+    assert projected["tokens"]["input"] == 40
+    assert projected["cost"] == projected["messageCostUsd"] == 0.00008
+    assert state.usage.attribution_complete
+
+
+def test_untrusted_checkpoint_is_settled_by_the_first_observed_total():
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
+    )
+    assert usage(state, counts(110), last=counts(10))["cost"] == 0.00002
+    # Later advances are this turn's own usage, with or without `last`.
+    usage(state, counts(170))
+    projected = usage(state, counts(180), last=counts(10))
+    assert projected["tokens"]["input"] == 80
+    assert projected["cost"] == projected["messageCostUsd"] == 0.00016
+
+
+@pytest.mark.parametrize("last", [None, counts(61), {"inputTokens": True}])
+def test_unattributable_first_request_leaves_later_requests_counted(last):
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        baseline_known=False,
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
+    )
+    # 60 tokens, some of which may be earlier native history.
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "tokenUsage": {"total": counts(160), "last": last},
+            },
+        }
+    )
+    [warning] = [event for event in events if event["type"] == "warning"]
+    assert warning["message"].startswith("Some of this turn's Codex usage")
+    assert "tokens" not in events[-1]
+    usage(state, counts(170), last=counts(10))
+    projected = usage(state, counts(180))
+    assert not state.usage.attribution_complete
+    # Usage the turn could attribute still counts; the gap keeps `cost` absent.
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.00004
+    assert projected["tokens"]["input"] == 20
+
+
+@pytest.mark.parametrize(
+    ("last", "exact"),
+    [(None, True), (counts(100), True), ({"inputTokens": True}, False), ("bad", False)],
+)
+def test_malformed_request_report_makes_the_cost_an_estimate(last, exact):
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    total = {"total": counts(100), **({"last": last} if last is not None else {})}
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {"threadId": "thread", "turnId": "turn", "tokenUsage": total},
+        }
+    )
+    # Absent and matching reports price exactly; a supplied but malformed one
+    # cannot show the advance is a single request.
+    assert ("cost" in events[-1]) is exact
+    assert events[-1]["messageCostUsd"] == 0.0002
+    assert state.usage.requests_separable is exact
+    assert any(event["type"] == "warning" for event in events) is not exact
+
+
+@pytest.mark.parametrize(("to_model", "exact"), [("gpt-6.1-mini", False), ("gpt-6.1-sol", True)])
+def test_rerouted_turn_cost_is_an_estimate_at_the_requested_model_prices(to_model, exact):
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    events = state.accept(
+        _frame("model/rerouted", fromModel="gpt-6.1-sol", toModel=to_model, reason="other")
+    )
+    estimate = [e for e in events if e["message"].startswith("Codex switched models")]
+    assert len(estimate) == (0 if exact else 1)
+    projected = usage(state, counts(100), last=counts(100))
+    assert ("cost" in projected) is exact
+    assert projected["messageCostUsd"] == 0.0002
+
+
+def test_replayed_report_is_a_no_op():
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    first = usage(state, counts(100), last=counts(100))
+    events = state.accept(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "tokenUsage": {"total": counts(100), "last": counts(100)},
+            },
+        }
+    )
+    assert [event["type"] for event in events] == ["step_finish"]
+    assert first["cost"] == events[-1]["cost"] == 0.0002
+    assert state.usage.requests_separable
 
 
 @pytest.mark.parametrize(
@@ -245,25 +411,52 @@ def test_unknown_cancelled_baseline_does_not_attribute_previous_turn_tokens():
     ],
 )
 def test_malformed_usage_does_not_invent_tokens(invalid):
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
-    assert usage(state, counts(50))["cost"] == 0
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    assert usage(state, counts(50))["cost"] == 0.0001
     projected = usage(state, invalid)
-    assert projected["cost"] == 0
+    # The turn is no longer fully priced; what was priced before still counts.
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.0001
     assert "costAvailability" not in projected
     assert "tokens" not in projected
-    assert not state.has_usage
-    assert state.total["inputTokens"] == 50
+    assert not state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 50
     # A later clean frame cannot retroactively make this malformed series trustworthy.
-    assert usage(state, counts(200))["cost"] == 0
-    assert not state.has_usage
+    projected = usage(state, counts(200))
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.0001
+    assert not state.usage.has_usage
 
 
 def test_absolute_valid_but_overlapping_delta_cannot_be_attributed():
     state = CodexTurnEvents(
-        "m", "thread", "turn", "gpt-6.1-sol", counts(100), rate_limits=CodexRateLimits()
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100),
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
     )
-    assert usage(state, {**counts(100), "cachedInputTokens": 1})["cost"] == 0
-    assert not state.has_usage
+    projected = usage(state, {**counts(100), "cachedInputTokens": 1})
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0
+    assert not state.usage.has_usage
+
+
+def test_request_delta_that_breaks_token_invariants_is_not_priced():
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    assert usage(state, counts(100))["cost"] == 0.0002
+    # Both totals are valid, and so is the turn's, but this request's 150 cached
+    # tokens exceed its 100 input tokens.
+    projected = usage(state, {**counts(200), "cachedInputTokens": 150})
+    assert not state.usage.valid
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0.0002
 
 
 def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
@@ -274,19 +467,26 @@ def test_unknown_baseline_tracks_valid_totals_without_using_unsafe_deltas():
         "gpt-6.1-sol",
         counts(100),
         baseline_known=False,
+        price=PRICE,
         rate_limits=CodexRateLimits(),
     )
-    assert usage(state, {**counts(160), "cachedInputTokens": 150})["cost"] == 0
-    assert state.has_usage
-    assert state.total["cachedInputTokens"] == 150
+    projected = usage(state, {**counts(160), "cachedInputTokens": 150})
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0
+    assert state.usage.has_usage
+    assert state.usage.total["cachedInputTokens"] == 150
 
 
 def test_no_usage_and_nonmonotonic_series_cannot_establish_a_safe_baseline():
-    state = CodexTurnEvents("m", "thread", "turn", "gpt-6.1-sol", {}, rate_limits=CodexRateLimits())
-    assert not state.has_usage
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    assert not state.usage.has_usage
+    # Nothing reported yet is nothing spent.
+    assert state.finish()["cost"] == 0
     usage(state, counts(100))
-    assert usage(state, counts(99))["cost"] == 0
-    assert not state.has_usage
+    assert "cost" not in usage(state, counts(99))
+    assert not state.usage.has_usage
 
 
 @pytest.mark.parametrize("envelope", [None, [], "invalid"])
@@ -299,27 +499,106 @@ def test_malformed_usage_envelope_does_not_throw(envelope):
         }
     )[0]
     assert "costAvailability" not in projected
-    assert not state.has_usage
+    assert not state.usage.has_usage
 
 
-def test_zero_usage_is_authoritative_and_cost_is_zero_for_unknown_models():
+def test_zero_usage_is_authoritative_and_unpriced_models_omit_cost():
     state = CodexTurnEvents(
         "m", "thread", "turn", "unknown-model", {}, rate_limits=CodexRateLimits()
     )
     projected = usage(state, counts(0))
-    assert state.has_usage
+    assert state.usage.has_usage
     assert projected["tokens"]["total"] == 0
-    assert projected["cost"] == 0
+    assert "cost" not in projected
+    assert projected["messageCostUsd"] == 0
     assert "costAvailability" not in projected
 
 
 def test_invalid_restored_baseline_can_recover_authoritative_totals():
     state = CodexTurnEvents(
-        "m", "thread", "turn", "gpt-6.1-sol", {"inputTokens": True}, rate_limits=CodexRateLimits()
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        {"inputTokens": True},
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
     )
-    assert usage(state, counts(10))["cost"] == 0
-    assert state.has_usage
-    assert state.total["inputTokens"] == 10
+    # The totals recover; a turn with no trusted baseline is still not billed.
+    assert "cost" not in usage(state, counts(10))
+    assert state.usage.has_usage
+    assert state.usage.total["inputTokens"] == 10
+
+
+def breakdown(input_tokens, cached, write, output, reasoning):
+    return {
+        "inputTokens": input_tokens,
+        "cachedInputTokens": cached,
+        "cacheWriteInputTokens": write,
+        "outputTokens": output,
+        "reasoningOutputTokens": reasoning,
+        "totalTokens": input_tokens + output,
+    }
+
+
+def add(left, right):
+    return {key: left[key] + right[key] for key in left}
+
+
+def test_each_request_is_priced_at_the_rate_for_its_own_context():
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    requests = [
+        breakdown(48_000, 40_000, 6_000, 1_200, 800),
+        breakdown(52_000, 46_000, 0, 2_500, 1_500),
+        # Over 200k but below the published 272k tier: still base rates.
+        breakdown(230_000, 50_000, 0, 800, 300),
+    ]
+    total = breakdown(0, 0, 0, 0, 0)
+    reported = []
+    for request in requests:
+        total = add(total, request)
+        reported.append(usage(state, total, last=request)["messageCostUsd"])
+    # $0.035 + $0.0416 + $0.373. Pricing the summed 330k input at the tier
+    # rate instead would report $0.8767.
+    assert reported == [0.035, 0.0766, 0.4496]
+    assert state.finish()["cost"] == 0.4496
+    assert state.usage.tokens == {
+        "input": 188_000,
+        "output": 1_900,
+        "reasoning": 2_600,
+        "cache": {"read": 136_000, "write": 6_000},
+        "total": 334_500,
+    }
+
+
+def test_request_without_last_usage_selects_its_rate_from_the_delta():
+    state = CodexTurnEvents(
+        "m",
+        "thread",
+        "turn",
+        "gpt-6.1-sol",
+        counts(100_000),
+        price=PRICE,
+        rate_limits=CodexRateLimits(),
+    )
+    # The delta (172,001 input) stays at base rates, although the thread total exceeds 272k.
+    assert usage(state, counts(272_001))["cost"] == 0.344002
+
+
+@pytest.mark.parametrize(("input_tokens", "expected_cost"), [(220_000, 0.44), (300_000, 1.2)])
+def test_usage_for_several_requests_in_one_update_is_an_estimate(input_tokens, expected_cost):
+    state = CodexTurnEvents(
+        "m", "thread", "turn", "gpt-6.1-sol", {}, price=PRICE, rate_limits=CodexRateLimits()
+    )
+    # Earlier requests were not reported on their own; only the last 10k is known.
+    projected = usage(state, counts(input_tokens), last=counts(10_000))
+    assert not state.usage.requests_separable
+    assert "cost" not in projected
+    # The estimate selects the aggregate's tier, not the last 10k request's.
+    assert projected["messageCostUsd"] == expected_cost
+    assert projected["tokens"]["input"] == input_tokens
 
 
 def _turn():

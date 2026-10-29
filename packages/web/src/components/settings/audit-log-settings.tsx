@@ -63,6 +63,7 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "memory.approved": "Memory approved",
   "memory.rejected": "Memory rejected",
   "memory.superseded": "Memory superseded",
+  "memory.personal_read": "Personal memory read by an agent",
   "session.private_break_glass": "Private session break-glass read",
   "session.visibility_changed": "Session visibility changed",
   "session.moved": "Session moved",
@@ -74,6 +75,8 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "workspace.default_role_assigned": "Default role assigned",
   "workspace.owner_bootstrapped": "Owner bootstrapped",
   "workspace.user_merged": "Users merged",
+  "workspace.admission_policy_updated": "Sign-in allowlist updated",
+  "workspace.admission_policy_maintenance": "Sign-in allowlist maintenance",
   "team.created": "Team created",
   "team.updated": "Team updated",
   "team.archived": "Team archived",
@@ -213,6 +216,43 @@ export function AuditEventCard({ event }: { event: AuditEvent }) {
   );
 }
 
+const SKELETON_EVENT_COUNT = 3;
+const SKELETON_FIELD_COUNT = 4;
+
+/** Mirrors AuditEventCard: heading and timestamp beside a badge, then the field grid. */
+function AuditEventsSkeleton() {
+  return (
+    // role="status" is an implicit polite live region, so the sr-only text is announced.
+    <div
+      role="status"
+      aria-label="Loading audit events"
+      className="min-w-0 divide-y divide-border-muted rounded-md border border-border-muted animate-pulse motion-reduce:animate-none"
+    >
+      <span className="sr-only">Loading audit events...</span>
+      {Array.from({ length: SKELETON_EVENT_COUNT }, (_, index) => (
+        <div key={index} className="px-4 py-4 sm:px-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="my-0.5 h-4 w-48 max-w-full rounded bg-muted" />
+              <div className="mt-1.5 mb-0.5 h-3 w-64 max-w-full rounded bg-muted" />
+            </div>
+            <div className="h-5 w-16 shrink-0 rounded-sm bg-muted" />
+          </div>
+          <div className="mt-3 grid gap-x-5 gap-y-2 sm:grid-cols-2">
+            {Array.from({ length: SKELETON_FIELD_COUNT }, (_, field) => (
+              <div key={field}>
+                <div className="my-0.5 h-3 w-14 rounded bg-muted" />
+                <div className="mt-1 mb-0.5 h-3 w-40 max-w-full rounded bg-muted" />
+              </div>
+            ))}
+          </div>
+          <div className="mt-3.5 mb-0.5 h-3 w-28 rounded bg-muted" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Read-only, cursor-paginated view of durable workspace audit events. */
 export function AuditLogSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
@@ -306,13 +346,7 @@ export function AuditLogSettings() {
       )}
 
       {audit.loading ? (
-        <div className="rounded-md border border-border-muted py-12 text-center" aria-live="polite">
-          <div
-            className="mx-auto size-6 animate-spin rounded-full border-2 border-current border-t-transparent text-muted-foreground"
-            aria-hidden="true"
-          />
-          <p className="mt-3 text-sm text-muted-foreground">Loading audit events...</p>
-        </div>
+        <AuditEventsSkeleton />
       ) : audit.error && audit.events.length === 0 ? (
         <div role="alert" className="rounded-md border border-destructive-border p-5">
           <p className="text-sm font-medium text-destructive">Unable to load the audit log.</p>

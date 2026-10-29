@@ -266,14 +266,26 @@ export class VercelSandboxProvider implements SandboxProvider {
         };
       }
 
-      if (snapshot.session.status !== "stopped") {
+      // Vercel answers while it is still shutting the source down, so a
+      // session that is snapshotting or stopping can no longer diverge from the
+      // snapshot. One that is still running could, so its save is not trusted.
+      const sessionStatus = snapshot.session.status;
+      if (
+        sessionStatus !== "snapshotting" &&
+        sessionStatus !== "stopping" &&
+        sessionStatus !== "stopped"
+      ) {
         return {
           success: false,
-          error: `Source session status was ${snapshot.session.status} after snapshot`,
+          error: `Source session status was ${sessionStatus} after snapshot`,
         };
       }
 
-      return { success: true, imageId: snapshot.snapshot.id, sourceStopped: true };
+      return {
+        success: true,
+        imageId: snapshot.snapshot.id,
+        sourceStopped: sessionStatus === "stopped",
+      };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to snapshot Vercel sandbox", error);

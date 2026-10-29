@@ -9,6 +9,7 @@ from websockets import State
 
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
+from sandbox_runtime.reconnect_backoff import ReconnectBackoff
 
 
 class TestIsFatalConnectionError:
@@ -137,7 +138,7 @@ class TestIsFatalConnectionError:
         bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.reconnect_backoff = ReconnectBackoff(base=0)
 
         await bridge.run()
 
@@ -164,7 +165,7 @@ class TestIsFatalConnectionError:
         )
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.reconnect_backoff = ReconnectBackoff(base=0)
 
         await bridge.run()
 

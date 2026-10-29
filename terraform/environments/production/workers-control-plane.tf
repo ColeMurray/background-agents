@@ -89,21 +89,25 @@ module "control_plane_worker" {
 
   plain_text_bindings = merge(
     {
-      WEB_APP_URL                   = { value = local.web_app_url }
-      ALLOWED_USERS                 = { value = var.allowed_users }
-      ALLOWED_EMAIL_DOMAINS         = { value = var.allowed_email_domains }
-      ALLOWED_EMAILS                = { value = var.allowed_emails }
-      ALLOWED_GITHUB_ORGS           = { value = var.allowed_github_orgs }
-      UNSAFE_ALLOW_ALL_USERS        = { value = tostring(var.unsafe_allow_all_users) }
-      WORKER_URL                    = { value = local.control_plane_url }
-      DEPLOYMENT_NAME               = { value = var.deployment_name }
-      APP_NAME                      = { value = var.app_name }
-      GITHUB_BOT_USERNAME           = { value = var.github_bot_username }
-      SANDBOX_PROVIDER              = { value = var.sandbox_provider }
-      SANDBOX_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_inactivity_timeout_ms) }
-      SANDBOX_BOOT_TIMEOUT_MS       = { value = tostring(var.sandbox_boot_timeout_ms) }
-      TEAMS_ENFORCEMENT             = { value = var.teams_enforcement }
+      WEB_APP_URL                              = { value = local.web_app_url }
+      ALLOWED_USERS                            = { value = var.allowed_users }
+      ALLOWED_EMAIL_DOMAINS                    = { value = var.allowed_email_domains }
+      ALLOWED_EMAILS                           = { value = var.allowed_emails }
+      ALLOWED_GITHUB_ORGS                      = { value = var.allowed_github_orgs }
+      UNSAFE_ALLOW_ALL_USERS                   = { value = tostring(var.unsafe_allow_all_users) }
+      WORKER_URL                               = { value = local.control_plane_url }
+      DEPLOYMENT_NAME                          = { value = var.deployment_name }
+      APP_NAME                                 = { value = var.app_name }
+      GITHUB_BOT_USERNAME                      = { value = var.github_bot_username }
+      SANDBOX_PROVIDER                         = { value = var.sandbox_provider }
+      SANDBOX_INACTIVITY_TIMEOUT_MS            = { value = tostring(var.sandbox_inactivity_timeout_ms) }
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_unattended_inactivity_timeout_ms) }
+      SANDBOX_BOOT_TIMEOUT_MS                  = { value = tostring(var.sandbox_boot_timeout_ms) }
+      TEAMS_ENFORCEMENT                        = { value = var.teams_enforcement }
     },
+    var.session_do_location_hint != "" ? {
+      SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }
+    } : {},
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
     } : {},
@@ -155,6 +159,19 @@ module "control_plane_worker" {
       E2B_TEMPLATE_ID             = { value = module.e2b_infra[0].template_id }
       E2B_SANDBOX_TIMEOUT_SECONDS = { value = tostring(var.e2b_sandbox_timeout_seconds) }
       E2B_AUTO_PAUSE              = { value = tostring(var.e2b_auto_pause) }
+    } : {},
+    # Boat credentials stay bound while the key is configured, as Daytona's
+    # do, so image builds recorded against Boat can finalize or be reclaimed
+    # after a provider switch; only creating sandboxes needs the base snapshot.
+    trimspace(var.boat_api_key) != "" ? {
+      BOAT_API_URL = { value = var.boat_api_url }
+    } : {},
+    trimspace(var.boat_api_key) != "" && trimspace(var.boat_org) != "" ? {
+      BOAT_ORG = { value = var.boat_org }
+    } : {},
+    local.use_boat_backend ? {
+      BOAT_BASE_SNAPSHOT = { value = module.boat_infra[0].snapshot_name }
+      BOAT_SANDBOX_TYPE  = { value = var.boat_sandbox_type }
     } : {}
   )
 
@@ -197,6 +214,9 @@ module "control_plane_worker" {
     local.use_e2b_backend ? {
       E2B_API_KEY = { value = var.e2b_api_key }
     } : {},
+    trimspace(var.boat_api_key) != "" ? {
+      BOAT_API_KEY = { value = var.boat_api_key }
+    } : {},
     # Slack bot token enables the agent-initiated `slack-notify` endpoint.
     # Shares the variable with the slack-bot worker; bound here so the same
     # token can authorize chat.postMessage from agent tool calls.
@@ -230,6 +250,7 @@ module "control_plane_worker" {
     module.linear_bot_worker,
     module.daytona_infra,
     module.e2b_infra,
+    module.boat_infra,
     module.vercel_sandbox_infra,
     module.modal_app,
   ]

@@ -116,6 +116,7 @@ export type ParticipantRow = z.infer<typeof participantRowSchema>;
 export const messageRowSchema = z.object({
   id: z.string(),
   author_id: z.string(),
+  author_canonical_user_id: z.string().nullable().optional(), // Account when queued
   content: z.string(),
   source: messageSourceSchema,
   model: z.string().nullable(), // LLM model for per-message override

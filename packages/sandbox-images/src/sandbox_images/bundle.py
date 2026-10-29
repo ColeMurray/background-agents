@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any, NamedTuple, TypedDict
 
 from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json, runtime_environment
-from .locks import update_locks
+from .locks import export_requirements, update_locks
 
 DOCKER_PACKAGES = ("engine", "cli", "containerd", "buildx", "compose")
-PROVIDERS = ("modal", "daytona", "e2b", "vercel")
+PROVIDERS = ("modal", "daytona", "e2b", "vercel", "boat")
 EXCLUDED = {
     ".terraform",
     ".git",
@@ -43,6 +43,7 @@ INFRA_MODULES = {
     "daytona": "daytona-infra",
     "e2b": "e2b-infra",
     "vercel": "vercel-sandbox-infra",
+    "boat": "boat-infra",
 }
 
 
@@ -79,6 +80,8 @@ def validate_toolchain(tools: dict[str, Any]) -> None:
         raise ValueError("OpenCode is below the image toolchain minimum")
     for name in ("agentBrowser", "pnpm", "bun", "zod", "python"):
         version(tools[name])
+    for pin in tools["npmOverrides"].values():
+        version(pin)
     if not re.fullmatch(r"[a-f0-9]{64}", tools.get("agentBrowserSha256", "")):
         raise ValueError("agent-browser native binary must have a SHA-256 pin")
     archives = [
@@ -188,6 +191,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
     """Create a fresh context for each caller; no shared cache to reconcile."""
     root = root.resolve()
     update_locks(root, check=True)
+    runtime_requirements = export_requirements(root / RUNTIME_PACKAGE)
     plan = plan_image(root, provider)
     output_root.mkdir(parents=True, exist_ok=True)
     destination = Path(tempfile.mkdtemp(prefix=f"{provider}-", dir=output_root))
@@ -196,6 +200,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             target = destination / source.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target, follow_symlinks=False)
+        (destination / "runtime-requirements.txt").write_text(runtime_requirements)
         (destination / "build-config.json").write_text(json.dumps(plan) + "\n")
         toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")
         variables = {

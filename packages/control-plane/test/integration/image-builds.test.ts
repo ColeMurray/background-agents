@@ -24,6 +24,9 @@ import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
 import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
+import { createModalClient } from "../../src/sandbox/client";
+import { ModalSandboxProvider } from "../../src/sandbox/providers/modal-provider";
+import { ModalImageBuildAdapter } from "../../src/image-builds/modal-adapter";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -634,6 +637,59 @@ describe("Image builds", () => {
     }
 
     const ctx = { request_id: "req-reap", trace_id: "trace-reap" };
+
+    for (const provider of ["modal", "modal-vm"] as const) {
+      it.each(["failed", "superseded"] as const)(
+        `retains %s ${provider} metadata for deferred cleanup without allowing restore`,
+        async (status) => {
+          const environmentId = await seedEnvironment({ prebuildEnabled: true });
+          const scope = environmentScope(environmentId);
+          const store = new ImageBuildStore(env.DB);
+          await seedImageRow({
+            id: "deferred-cleanup",
+            environmentId,
+            status,
+            provider,
+            providerImageId: "im-retained",
+            createdAt: 1,
+          });
+          await env.DB.prepare(
+            `UPDATE image_builds SET provider_session_id = ?,
+               provider_session_cleanup_pending = 0, error_message = ? WHERE id = ?`
+          )
+            .bind("sb-source", "original build error", "deferred-cleanup")
+            .run();
+          const original = await getRow("deferred-cleanup");
+          const adapter = new ModalImageBuildAdapter(
+            new ModalSandboxProvider(createModalClient("secret", "workspace"), provider, "github")
+          );
+          const factory = { create: () => adapter } as ImageBuildAdapterFactory;
+          const reaper = new ImageBuildReaper(store, factory);
+
+          for (let tick = 0; tick < 2; tick += 1) {
+            await expect(reaper.cleanupImages(86_400_000, ctx)).resolves.toEqual({
+              deletedFailed: 0,
+              reapedFailed: 0,
+              reapedSuperseded: 0,
+            });
+            expect(await getRow("deferred-cleanup")).toEqual(original);
+            expect(await store.getLatestReadyForSpawn(scope, provider)).toBeNull();
+            const pending =
+              status === "failed"
+                ? await store.getFailedImagesWithArtifacts()
+                : await store.getSupersededImages();
+            expect(pending).toEqual([
+              expect.objectContaining({
+                id: "deferred-cleanup",
+                provider,
+                provider_image_id: "im-retained",
+                provider_session_id: "sb-source",
+              }),
+            ]);
+          }
+        }
+      );
+    }
 
     it("reaps failed and superseded artifacts, retains failed rows, deletes aged-out rows", async () => {
       const environmentId = await seedEnvironment();

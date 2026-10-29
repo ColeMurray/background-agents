@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WEBHOOK_SESSION_KEY_MAX_LENGTH } from "@open-inspect/shared/triggers";
 import { followUpRefusedResponse, parseWebhookDeliveryFields } from "./automation-webhook";
-import { SessionFollowUpRefusedError } from "../scheduler/scheduler";
+import { SessionFollowUpRefusedError } from "../scheduler/contracts";
 
 describe("parseWebhookDeliveryFields", () => {
   it("reads both delivery fields", () => {

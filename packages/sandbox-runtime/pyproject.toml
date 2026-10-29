@@ -11,7 +11,7 @@ dependencies = [
     "jsonschema>=4.0",
     # Exact pin: the wheel bundles the `claude` binary and its message shapes
     # are what harness/claude.py translates.
-    "claude-agent-sdk==0.2.161",
+    "claude-agent-sdk==0.2.168",
 ]
 
 [project.optional-dependencies]

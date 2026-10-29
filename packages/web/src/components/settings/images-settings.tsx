@@ -119,12 +119,7 @@ export function ImagesSettings() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-muted-foreground">
-        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-        Loading image settings...
-      </div>
-    );
+    return <ImagesSettingsSkeleton showRebuild={canManage} />;
   }
 
   // Without the feed there is no toggle state to show — rendering the list
@@ -217,6 +212,43 @@ export function ImagesSettings() {
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+const SKELETON_REPO_COUNT = 3;
+
+/** Mirrors the loaded page: heading, description, and one row per repository. */
+function ImagesSettingsSkeleton({ showRebuild }: { showRebuild: boolean }) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading image settings"
+      className="animate-pulse motion-reduce:animate-none"
+    >
+      <div className="h-5 w-40 bg-muted rounded mt-1 mb-2" />
+      <div className="mb-6 py-0.5 space-y-1">
+        <div className="h-4 w-full bg-muted rounded" />
+        <div className="h-4 w-2/3 bg-muted rounded" />
+      </div>
+
+      <div className="space-y-2">
+        {Array.from({ length: SKELETON_REPO_COUNT }, (_, index) => (
+          <div
+            key={index}
+            className="flex items-center justify-between px-4 py-3 border border-border"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="h-5 w-9 shrink-0 bg-muted rounded-full" />
+              <div className="h-4 w-44 bg-muted rounded" />
+            </div>
+            <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+              <div className="h-3 w-16 bg-muted rounded" />
+              {showRebuild && <div className="size-7 bg-muted rounded" />}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

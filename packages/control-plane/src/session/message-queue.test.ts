@@ -20,6 +20,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import type { SandboxAlarmResult } from "../sandbox/lifecycle/manager";
 import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
@@ -249,7 +250,9 @@ function buildQueue(
     updateLastActivity: vi.fn((_timestamp: number) => {}),
     onPromptDispatched: vi.fn(() => {}),
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
-    terminateFailedSandbox: vi.fn(async () => true),
+    terminateFailedSandbox: vi.fn(
+      async (_reason: string) => "sandbox_terminated" as SandboxAlarmResult
+    ),
     reportSandboxError: vi.fn((_reason: string) => {}),
   };
   const backgroundTasks = createTestBackgroundTasks();
@@ -2357,7 +2360,7 @@ describe("SessionMessageQueue", () => {
 
   it("redrives a pending prompt after fatal sandbox termination completes", async () => {
     const h = buildQueue();
-    let resolveTermination!: (terminated: boolean) => void;
+    let resolveTermination!: (outcome: SandboxAlarmResult) => void;
     h.sandboxLifecycle.terminateFailedSandbox.mockReturnValue(
       new Promise((resolve) => {
         resolveTermination = resolve;
@@ -2369,7 +2372,7 @@ describe("SessionMessageQueue", () => {
     await Promise.resolve();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
 
-    resolveTermination(true);
+    resolveTermination("sandbox_terminated");
     await handling;
     await h.backgroundTasks.settle();
 
@@ -2377,15 +2380,98 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledOnce();
   });
 
+  it("fails the boot prompt instead of redriving once retries are exhausted", async () => {
+    const h = buildQueue();
+    const pending = createMessage({ id: "msg-pending", status: "pending" });
+    h.repository.getNextPendingMessage.mockReturnValue(pending);
+    h.repository.getMessageById.mockReturnValue(pending);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "git sync failed",
+    });
+
+    await h.queue.handleFatalSandboxFailure("git sync failed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-pending",
+        success: false,
+        error: "git sync failed",
+      }),
+      expect.any(Number),
+      "pending"
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-pending",
+      false,
+      "git sync failed"
+    );
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
+  it("leaves a queued follow-up alone when the failed sandbox was serving a prompt", async () => {
+    const h = buildQueue();
+    const running = createMessage({ id: "msg-running", status: "processing" });
+    const followUp = createMessage({ id: "msg-follow-up", status: "pending" });
+    h.repository.getProcessingMessage.mockReturnValue(running);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(running);
+    h.repository.getNextPendingMessage.mockReturnValue(followUp);
+    h.repository.getMessageById.mockReturnValue(followUp);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "Sandbox crashed",
+    });
+
+    await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ messageId: "msg-running", success: false }),
+      expect.any(Number),
+      "processing"
+    );
+  });
+
+  it("leaves a queued follow-up alone while a stopped prompt awaits confirmation", async () => {
+    const h = buildQueue();
+    const followUp = createMessage({ id: "msg-follow-up", status: "pending" });
+    h.repository.markMessageAwaitingStopConfirmation("msg-stopped", Date.now() + 10_000);
+    h.repository.getNextPendingMessage.mockReturnValue(followUp);
+    h.repository.getMessageById.mockReturnValue(followUp);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue({
+      kind: "fatal_report_unrecoverable",
+      reason: "Sandbox crashed",
+    });
+
+    await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+  });
+
+  it("neither fails nor redrives a pending prompt while the failed boot is held", async () => {
+    const h = buildQueue();
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("sandbox_failed");
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
+
+    await h.queue.handleFatalSandboxFailure("Sandbox crashed");
+    await h.backgroundTasks.settle();
+
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+  });
+
   it("leaves a pending prompt alone when the fatal report terminated nothing", async () => {
     const h = buildQueue();
-    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue(false);
+    h.sandboxLifecycle.terminateFailedSandbox.mockResolvedValue("no_action");
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-pending" }));
 
     await h.queue.handleFatalSandboxFailure("Sandbox crashed");
     await h.backgroundTasks.settle();
 
     expect(h.sandboxLifecycle.terminateFailedSandbox).toHaveBeenCalledWith("Sandbox crashed");
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
   });
 

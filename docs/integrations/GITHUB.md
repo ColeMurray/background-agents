@@ -247,12 +247,12 @@ harness, in which case the bot refuses the launch.
 Open-Inspect can sign normal agent-created commits with one deployment-wide OpenSSH Ed25519 key. The
 identities remain deliberately separate:
 
-| Git/GitHub role      | Identity                                                                                |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect               |
-| Committer and signer | The dedicated Open-Inspect signing account                                              |
-| Branch pusher        | The existing GitHub App                                                                 |
-| Pull request author  | The prompting user's OAuth identity when available; otherwise the existing App fallback |
+| Git/GitHub role      | Identity                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect                                                                               |
+| Committer and signer | The dedicated Open-Inspect signing account                                                                                                              |
+| Branch pusher        | The existing GitHub App                                                                                                                                 |
+| Pull request author  | The GitHub App for an automation run's own prompts (not its child sessions); otherwise the prompting user's OAuth identity when available, else the App |
 
 This makes the signature an attestation by the Open-Inspect deployment, not a cryptographic claim
 that the attributed user personally signed the commit. GitHub repository rules remain the
@@ -327,6 +327,10 @@ Important limitations:
   the bot.
 - If the bot cannot load its GitHub integration settings, it fails closed and does not start direct
   bot sessions.
+- Review and `@mention` sessions never include personal memories; the control plane decides this
+  from the calling service. An Autofix turn is not the session owner's prompt, so the agent cannot
+  read or save the owner's personal memories during it, and the session stops searching them
+  afterwards.
 
 ### Prompt Safety
 

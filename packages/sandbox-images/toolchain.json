@@ -34,7 +34,11 @@
   "agentBrowserSha256": "78e0c5a14a7fa1f3d1ae2acdbdcc94a047b435b998a8c505fcc49d7fa4935a49",
   "pnpm": "10.34.5",
   "bun": "1.4.2",
-  "zod": "4.4.3",
+  "zod": "4.6.6",
+  "npmOverrides": {
+    "toml": "5.0.1"
+  },
+  "npmOverridesReason": "effect@4.0.0-beta.83, pinned by @opencode-ai/plugin, requires toml ^4, and toml before 5.0.1 has toml.parse() CPU DoS advisories.",
   "python": "3.12.12",
   "uv": {
     "version": "0.9.7",

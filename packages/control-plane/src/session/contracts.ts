@@ -112,6 +112,7 @@ export const SessionInternalPaths = {
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
   activePromptAuthor: "/internal/active-prompt-author",
+  memoryPromptContext: "/internal/memory-prompt-context",
   childSummary: "/internal/child-summary",
   parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",

@@ -29,7 +29,7 @@ from ..base import (
     TurnOutcome,
 )
 from ..tools import ControlPlaneToolClient, ToolServerConfig
-from .client import CodexClient, CodexRpcError, CodexTransportError
+from .client import RPC_TIMEOUT_SECONDS, CodexClient, CodexRpcError, CodexTransportError
 from .env import (
     CODEX_BINARY,
     CODEX_VERSION,
@@ -40,13 +40,24 @@ from .env import (
     validate_native_state,
 )
 from .events import TURN_FAILED_MESSAGE, CodexRateLimits, CodexTurnEvents
+from .subagents import CodexSubagents
 from .tools import CodexTools
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from ...model_prices import ModelPriceCatalog
+
 STATE_VERSION = 1
 STOP_TIMEOUT_SECONDS = 5.0
+ABORT_TIMEOUT_SECONDS = 1.0
+# A host tool call can overtake the queued notification that identifies its turn.
+TOOL_OWNERSHIP_WAIT_SECONDS = 30.0
+
+
+def _observed_cost(state: CodexTurnEvents | None) -> float:
+    """Cost of the requests a turn reported before it ended, however it ended."""
+    return state.message_cost_usd if state is not None else 0
 
 
 class _InactivityTimeout(Exception):
@@ -76,8 +87,10 @@ class CodexHarness:
         credential_client: OpenAIAccessTokenClient | None = None,
         client_factory: Callable[..., CodexClient] = CodexClient,
         environ: Mapping[str, str] | None = None,
+        prices: ModelPriceCatalog | None = None,
     ) -> None:
         self.config, self.log, self.limits = config, log, limits
+        self._prices = prices
         self._credentials = credential_client
         self._factory = client_factory
         self._environ = dict(os.environ if environ is None else environ)
@@ -95,10 +108,14 @@ class CodexHarness:
         # record must not read as an absent one that permits unchecked adoption.
         self._turn_id: str | None = None
         self._submitting = False
-        self._turn_known = asyncio.Event()
         self._epoch = ""
         self._total: dict[str, int] = {}
         self._usage_baseline_known = True
+        # Sub-agents of the running prompt.
+        self._subagents: CodexSubagents | None = None
+        # Notified when the turn is known and after each projected frame, for
+        # tool calls whose ownership is not decided yet.
+        self._ownership = asyncio.Condition()
         # Account quota state outlives a turn; each turn projects into it.
         self._rate_limits = CodexRateLimits()
         self._manifest_path = config.state_dir / "openinspect-state.json"
@@ -390,13 +407,15 @@ class CodexHarness:
                     inputs.append({"type": "localImage", "path": str(path)})
                 if asyncio.get_running_loop().time() >= deadline:
                     raise TimeoutError
+                # Resolved before submission: pricing never runs while native work does.
+                price = self._prices.price(model) if self._prices else None
+                unpriced = None if price is not None else self._unpriced_warning(model)
                 # Durably distrust the baseline while native work may run: a crash
                 # mid-turn must not bill unobserved usage to the next message.
                 baseline_known = self._usage_baseline_known
                 self._usage_baseline_known = False
                 self._persist()
                 self._submitting = True
-                self._turn_known.clear()
                 response = await self._client.request(
                     "turn/start",
                     {
@@ -412,7 +431,6 @@ class CodexHarness:
                     },
                 )
                 self._turn_id = response["turn"]["id"]
-                self._turn_known.set()
                 state = CodexTurnEvents(
                     prompt.message_id,
                     self.session_id,
@@ -421,31 +439,38 @@ class CodexHarness:
                     self._total,
                     rate_limits=self._rate_limits,
                     baseline_known=baseline_known,
+                    price=price,
+                    unpriced_warning=unpriced,
                 )
+                subagents = CodexSubagents(state)
+                self._subagents = subagents
+                await self._ownership_changed()
                 await emit(state.start())
                 # The transport queue retains notifications delivered before the
-                # start response. Only this epoch/thread/turn is projected.
-                while state.status is None:
+                # start response. Only this epoch/thread/turn and the sub-agents
+                # rooted at it are projected. As with the other harnesses'
+                # sub-agents, the prompt settles only once its sub-agents finish.
+                while state.status is None or subagents.busy:
                     frame = await self._next_notification()
-                    for event in state.accept(frame):
+                    for event in (*state.accept(frame), *subagents.accept(frame)):
                         await emit(event)
-                    if self._total != state.total:
-                        self._total = state.total
+                    await self._interrupt(subagents.take_interrupts())
+                    await self._ownership_changed()
+                    if self._total != state.usage.total:
+                        self._total = state.usage.total
                         self._persist()
-                self._usage_baseline_known = state.status == "completed" and state.has_usage
+                self._usage_baseline_known = state.status == "completed" and state.usage.has_usage
                 self._persist()
                 await emit(state.finish())
                 if state.status == "completed":
-                    return TurnOutcome.ok(
-                        message_cost_usd=0,
-                    )
+                    return TurnOutcome.ok(message_cost_usd=state.message_cost_usd)
                 return TurnOutcome(
                     False,
                     "Codex turn interrupted"
                     if state.status == "interrupted"
                     else state.error or TURN_FAILED_MESSAGE,
                     cancelled=state.status == "interrupted",
-                    message_cost_usd=0,
+                    message_cost_usd=state.message_cost_usd,
                 )
         except asyncio.CancelledError:
             stopped = await asyncio.shield(self.stop_execution(STOP_TIMEOUT_SECONDS))
@@ -463,7 +488,7 @@ class CodexHarness:
             if stopped and not self._submitting:
                 return TurnOutcome.failed(
                     "Codex could not prepare the turn within its runtime budget",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             if stopped and (pending := await self._pending_failure(state, emit)):
                 return pending
@@ -471,7 +496,7 @@ class CodexHarness:
                 "Codex transport failed; retry to resume the conversation"
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except OpenAIAccessTokenUnavailable:
             # Transient (timeout, 5xx, 429): a plain retry can succeed, so do not
@@ -479,11 +504,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             return TurnOutcome.failed(
                 "Codex could not obtain a credential right now; retry shortly",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except (
             CodexRpcError,
@@ -493,11 +518,11 @@ class CodexHarness:
             if not await self.stop_execution(STOP_TIMEOUT_SECONDS):
                 return TurnOutcome.failed(
                     "Codex process containment could not be confirmed",
-                    message_cost_usd=0,
+                    message_cost_usd=_observed_cost(state),
                 )
             return TurnOutcome.failed(
                 "Codex rejected this session's configuration or credential; check Settings before retrying",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except _InactivityTimeout:
             timeout_seconds = self.limits.inactivity_timeout_seconds
@@ -512,7 +537,7 @@ class CodexHarness:
                 f"Codex produced no output for {timeout_seconds:.0f}s."
                 if stopped
                 else "Codex process containment could not be confirmed",
-                message_cost_usd=0,
+                message_cost_usd=_observed_cost(state),
             )
         except Exception:
             # Any other abnormal exit (e.g. the event sink) may leave native work
@@ -522,11 +547,18 @@ class CodexHarness:
             self._usage_baseline_known = False
             raise
         finally:
+            self._subagents = None
             self._submitting = False
-            self._turn_known.set()
             self._turn_id = None
+            await self._ownership_changed()
             for path in paths:
                 path.unlink(missing_ok=True)
+
+    def _unpriced_warning(self, model: str) -> str:
+        """Why a model's usage cannot be priced in this sandbox."""
+        if self._prices is None or not self._prices.available:
+            return "Model prices are unavailable in this sandbox, so this turn's cost is recorded as $0."
+        return f"No price is listed for {model} in this sandbox, so this turn's cost is recorded as $0."
 
     async def _pending_failure(
         self, state: CodexTurnEvents | None, emit: EventSink
@@ -536,7 +568,11 @@ class CodexHarness:
             return None
         for event in state.fail_pending():
             await emit(event)
-        return TurnOutcome.failed(state.error, message_cost_usd=0) if state.error else None
+        return (
+            TurnOutcome.failed(state.error, message_cost_usd=state.message_cost_usd)
+            if state.error
+            else None
+        )
 
     async def _next_notification(self) -> dict[str, Any]:
         """Next frame, bounded by the inactivity budget while no host tool call is running."""
@@ -585,30 +621,64 @@ class CodexHarness:
                 self._token = token
                 return {"accessToken": token.access_token, "chatgptAccountId": token.account_id}
         if method == "item/tool/call":
-            if self._submitting and self._turn_id is None:
-                await asyncio.wait_for(self._turn_known.wait(), 30)
-            if (
-                self._tools is None
-                or params.get("threadId") != self.session_id
-                or not self._turn_id
-                or params.get("turnId") != self._turn_id
-            ):
+            owned = await self._owns_tool_call(params.get("threadId"), params.get("turnId"))
+            if self._tools is None or not owned:
                 raise RuntimeError("Tool request is not owned by the active turn")
             return await self._tools.call(params)
         if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
             return {"decision": "decline"}
         raise RuntimeError("Interactive or unknown host requests are not supported")
 
-    async def abort(self) -> bool:
-        if self._client and self._turn_id:
+    async def _owns_tool_call(self, thread_id: Any, turn_id: Any) -> bool:
+        """Whether a host tool call comes from the active turn or one of its running sub-agents."""
+
+        def owner() -> bool | None:
+            # ``None`` while undecided: the call overtook what identifies its turn.
+            if self._submitting and self._turn_id is None:
+                return None
+            if self._turn_id and (thread_id, turn_id) == (self.session_id, self._turn_id):
+                return True
+            subagents = self._subagents
+            if subagents is None or thread_id == self.session_id or subagents.refuses(thread_id):
+                return False
+            return True if subagents.owns(thread_id, turn_id) else None
+
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(TOOL_OWNERSHIP_WAIT_SECONDS), self._ownership:
+                await self._ownership.wait_for(lambda: owner() is not None)
+        return owner() is True
+
+    async def _ownership_changed(self) -> None:
+        async with self._ownership:
+            self._ownership.notify_all()
+
+    async def _interrupt(
+        self, turns: list[tuple[str, str]], *, timeout_seconds: float = RPC_TIMEOUT_SECONDS
+    ) -> bool:
+        """Request each turn's interruption; returns whether any request was accepted.
+
+        Best effort per turn: one that already ended is rejected harmlessly, and a
+        failed transport surfaces on the next notification or in containment.
+        """
+        assert self._client is not None
+        accepted = False
+        for thread_id, turn_id in turns:
             with contextlib.suppress(CodexTransportError, CodexRpcError):
                 await self._client.request(
                     "turn/interrupt",
-                    {"threadId": self.session_id, "turnId": self._turn_id},
-                    timeout_seconds=1,
+                    {"threadId": thread_id, "turnId": turn_id},
+                    timeout_seconds=timeout_seconds,
                 )
-                return True
-        return False
+                accepted = True
+        return accepted
+
+    async def abort(self) -> bool:
+        if not (self._client and self.session_id and self._turn_id):
+            return False
+        turns = [(self.session_id, self._turn_id)]
+        if self._subagents is not None:
+            turns.extend(self._subagents.stop())
+        return await self._interrupt(turns, timeout_seconds=ABORT_TIMEOUT_SECONDS)
 
     async def stop_execution(self, timeout_seconds: float) -> bool:
         # Never wait for the open/authentication lock before containing a process.

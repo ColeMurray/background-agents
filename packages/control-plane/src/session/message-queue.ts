@@ -31,6 +31,7 @@ import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } fr
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
+import { applySandboxRecovery } from "./sandbox-recovery";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -210,6 +211,9 @@ export class SessionMessageQueue {
           });
           return participant.id;
         },
+        // Review feedback relayed from GitHub is never anyone's own prompt, whatever account its
+        // reviewer maps to.
+        authorCanonicalUserId: null,
         content: command.prompt,
         source: "github",
         status: "pending",
@@ -634,9 +638,21 @@ export class SessionMessageQueue {
   }
 
   async handleFatalSandboxFailure(reason: string): Promise<void> {
+    // Identified before termination, which may yield on provider I/O. A
+    // sandbox serving a prompt, or still confirming a stopped one, was not
+    // booting for the next one; the served prompt is already settled or is
+    // failStuckProcessingMessage's to settle.
+    const servingPrompt =
+      this.messageRepository.getProcessingMessage() ??
+      this.messageRepository.getMessageAwaitingStopConfirmation();
+    const bootPrompt = servingPrompt ? null : this.messageRepository.getNextPendingMessage();
     const termination = this.sandboxLifecycle.terminateFailedSandbox(reason);
     await this.failStuckProcessingMessage(reason);
-    if (await termination) await this.executionStop.resumeAfterSandboxTermination();
+    await applySandboxRecovery(
+      { messageQueue: this, executionStop: this.executionStop },
+      bootPrompt,
+      await termination
+    );
   }
 
   /** Close every unfinished message synchronously; status projection happens afterwards. */
@@ -809,6 +825,7 @@ export class SessionMessageQueue {
 
     const enqueued = await this.enqueuePromptCore({
       participant,
+      promptAccountUserId: data.promptAccountUserId,
       userId: data.authorId,
       content: data.content,
       source: data.source,
@@ -941,6 +958,10 @@ export class SessionMessageQueue {
         {
           id: messageId,
           authorId: data.participant.id,
+          authorCanonicalUserId:
+            data.promptAccountUserId !== undefined
+              ? data.promptAccountUserId
+              : (data.participant.canonical_user_id ?? null),
           content: data.content,
           source: data.source,
           model: messageModel,

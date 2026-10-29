@@ -27,6 +27,8 @@ jobs:
             base: python:3.12-slim-bookworm
           - provider: vercel
             base: amazonlinux:2023
+          - provider: boat
+            base: ubuntu:24.04
     steps:
       - uses: actions/checkout@v7
         with:

@@ -23,6 +23,8 @@ afterEach(() => {
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
   vi.stubGlobal(
     "IntersectionObserver",
     class {
