@@ -35,7 +35,8 @@ describe("provider account BFF routes", () => {
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/model-provider-accounts?provider=openai&status=active&archived=false",
-      undefined
+      undefined,
+      { timeoutMs: undefined }
     );
   });
 
@@ -98,17 +99,20 @@ describe("provider account BFF routes", () => {
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
       "/model-provider-accounts/openai/device-authorizations",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
+      { timeoutMs: undefined }
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
       `/model-provider-accounts/openai/device-authorizations/${transactionId}/poll`,
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
+      { timeoutMs: undefined }
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       3,
       `/model-provider-accounts/openai/device-authorizations/${transactionId}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
+      { timeoutMs: undefined }
     );
   });
 
@@ -170,22 +174,26 @@ describe("provider account BFF routes", () => {
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
       "/model-provider-accounts/anthropic/authorization-codes",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
+      { timeoutMs: undefined }
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
       `/model-provider-accounts/anthropic/authorization-codes/${transactionId}`,
-      undefined
+      undefined,
+      { timeoutMs: undefined }
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       3,
       `/model-provider-accounts/anthropic/authorization-codes/${transactionId}/complete`,
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
+      { timeoutMs: undefined }
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       4,
       `/model-provider-accounts/anthropic/authorization-codes/${transactionId}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
+      { timeoutMs: undefined }
     );
   });
 

@@ -47,7 +47,8 @@ describe("admission policy proxy", () => {
     );
     expect(controlPlaneUserFetch).toHaveBeenCalledExactlyOnceWith(
       "/settings/admission-policy",
-      undefined
+      undefined,
+      { timeoutMs: undefined }
     );
     expect(response.headers.get("ETag")).toBe('"policy-3"');
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
@@ -66,11 +67,15 @@ describe("admission policy proxy", () => {
       }),
       context
     );
-    expect(controlPlaneUserFetch).toHaveBeenCalledExactlyOnceWith("/settings/admission-policy", {
-      method: "PUT",
-      body,
-      headers: { "If-Match": '"policy-3"' },
-    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledExactlyOnceWith(
+      "/settings/admission-policy",
+      {
+        method: "PUT",
+        body,
+        headers: { "If-Match": '"policy-3"' },
+      },
+      { timeoutMs: undefined }
+    );
     expect(response.headers.get("ETag")).toBe('"policy-4"');
   });
 

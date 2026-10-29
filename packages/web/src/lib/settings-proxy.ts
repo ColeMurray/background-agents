@@ -76,11 +76,7 @@ async function relaySettingsResource(
       }
       if (ifMatch) init.headers = { "If-Match": ifMatch };
     }
-    const path = await buildPath();
-    const response =
-      timeoutMs === undefined
-        ? await controlPlaneUserFetch(path, init)
-        : await controlPlaneUserFetch(path, init, { timeoutMs });
+    const response = await controlPlaneUserFetch(await buildPath(), init, { timeoutMs });
     return relayJsonResponse(response);
   } catch (error) {
     console.error(`Failed to ${action}:`, error);

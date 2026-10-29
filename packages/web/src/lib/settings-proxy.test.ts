@@ -46,7 +46,9 @@ describe("settingsProxy", () => {
     });
 
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", undefined);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", undefined, {
+      timeoutMs: undefined,
+    });
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
@@ -88,11 +90,15 @@ describe("settingsProxy", () => {
 
     const response = await PUT(request, context);
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
-      method: "PUT",
-      headers: { "If-Match": 'W/"revision-2"' },
-      body: JSON.stringify({ enabled: true }),
-    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/settings",
+      {
+        method: "PUT",
+        headers: { "If-Match": 'W/"revision-2"' },
+        body: JSON.stringify({ enabled: true }),
+      },
+      { timeoutMs: undefined }
+    );
     expect(response.status).toBe(412);
     await expect(response.json()).resolves.toEqual({ error: "Revision conflict" });
   });
@@ -171,10 +177,14 @@ describe("settingsProxy", () => {
 
     const response = await DELETE(request, context);
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
-      method: "DELETE",
-      headers: { "If-Match": 'W/"revision-3"' },
-    });
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/settings",
+      {
+        method: "DELETE",
+        headers: { "If-Match": 'W/"revision-3"' },
+      },
+      { timeoutMs: undefined }
+    );
     expect(request.bodyUsed).toBe(false);
     expect(response.status).toBe(204);
   });
@@ -212,7 +222,8 @@ describe("settingsProxy", () => {
       );
       expect(controlPlaneUserFetch).toHaveBeenCalledWith(
         `/teams/team%2Fid/${operation === "channels" ? "slack-channels" : `channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`}`,
-        method === "GET" ? undefined : method === "PUT" ? { method, body } : { method }
+        method === "GET" ? undefined : method === "PUT" ? { method, body } : { method },
+        { timeoutMs: undefined }
       );
     }
   );
@@ -241,7 +252,8 @@ describe("settingsProxy", () => {
           method,
           headers: { "If-Match": 'W/"revision-2"' },
           ...(method === "PUT" ? { body } : {}),
-        }
+        },
+        { timeoutMs: undefined }
       );
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toEqual(refusal);
@@ -271,7 +283,8 @@ describe("settingsProxy", () => {
     );
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/teams/team/channel-bindings/linear/linear-team",
-      { method: "DELETE" }
+      { method: "DELETE" },
+      { timeoutMs: undefined }
     );
     expect(response.status).toBe(204);
     await expect(response.text()).resolves.toBe("");

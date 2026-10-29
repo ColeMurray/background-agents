@@ -99,7 +99,7 @@ interface ResolvedImportRepository {
   repository: { owner: string; name: string };
   label: string;
   source: SkillImportSourceInput;
-  access: NonNullable<Awaited<ReturnType<RepositoryReader["checkRepositoryAccess"]>>>;
+  access: RepositoryAccessResult;
   requestedRef: string | null;
   resolvedRef: string;
   commitSha: string;

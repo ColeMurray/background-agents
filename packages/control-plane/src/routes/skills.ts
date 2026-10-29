@@ -39,7 +39,6 @@ import {
 } from "../skills/content-addressing";
 import {
   fetchBulkSkillImport,
-  type BulkSkillImportResult,
   fetchSelectedBulkSkillImport,
   fetchSkillImport,
   resolveSkillImportRepository,
@@ -230,16 +229,6 @@ async function fetchAuthorizedSkillImport(
   return fetchSkillImport(access.provider, source, name, access.resolved);
 }
 
-async function fetchAuthorizedBulkSkillImport(
-  env: Env,
-  ctx: RequestContext,
-  source: SkillImportSourceInput
-): Promise<BulkSkillImportResult | Response> {
-  const access = await authorizedImportRepository(env, ctx, source);
-  if (access instanceof Response) return access;
-  return fetchBulkSkillImport(access.provider, source, access.resolved);
-}
-
 async function handlePreviewSkill(
   request: Request,
   _env: Env,
@@ -390,8 +379,9 @@ async function handlePreviewBulkSkillImport(
   );
   if (parsed instanceof Response) return parsed;
   try {
-    const result = await fetchAuthorizedBulkSkillImport(env, ctx, parsed.source);
-    if (result instanceof Response) return result;
+    const access = await authorizedImportRepository(env, ctx, parsed.source);
+    if (access instanceof Response) return access;
+    const result = await fetchBulkSkillImport(access.provider, parsed.source, access.resolved);
     const nameCounts = new Map<string, number>();
     for (const skill of result.skills) {
       nameCounts.set(skill.name, (nameCounts.get(skill.name) ?? 0) + 1);
