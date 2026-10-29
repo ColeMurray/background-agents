@@ -1,9 +1,16 @@
+import {
+  createBoatRestClient,
+  DEFAULT_BOAT_API_URL,
+  isBoatMachineType,
+  type BoatMachineType,
+  type BoatRestClient,
+} from "./boat-rest-client";
 import { createModalClient } from "./client";
 import { createDaytonaRestClient, type DaytonaRestClient } from "./daytona-rest-client";
 import { createE2BRestClient } from "./e2b-rest-client";
-import { createOpenComputerRestClient } from "./opencomputer-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 import type { SandboxProvider } from "./provider";
+import { createBoatProvider, type BoatSandboxProvider } from "./providers/boat-provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
 import {
   createE2BProvider,
@@ -12,10 +19,6 @@ import {
   type E2BSandboxProvider,
 } from "./providers/e2b-provider";
 import { createModalProvider, type ModalSandboxProvider } from "./providers/modal-provider";
-import {
-  createOpenComputerProvider,
-  type OpenComputerSandboxProvider,
-} from "./providers/opencomputer-provider";
 import { createVercelSandboxClient } from "./providers/vercel/client";
 import { createVercelProvider, type VercelSandboxProvider } from "./providers/vercel/provider";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -64,34 +67,6 @@ function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
       0
     ),
     sandboxAccessPasswordSecret: env.VERCEL_TOKEN,
-  });
-}
-
-function createOpenComputerProviderFromEnv(
-  env: Env,
-  options: { requireOpenComputerTemplate: boolean }
-): OpenComputerSandboxProvider {
-  if (!env.OPENCOMPUTER_API_URL || !env.OPENCOMPUTER_API_KEY) {
-    throw new Error(
-      "OPENCOMPUTER_API_URL and OPENCOMPUTER_API_KEY are required when SANDBOX_PROVIDER=opencomputer"
-    );
-  }
-  if (options.requireOpenComputerTemplate && !env.OPENCOMPUTER_TEMPLATE) {
-    throw new Error("OPENCOMPUTER_TEMPLATE is required to start OpenComputer sandboxes");
-  }
-
-  const client = createOpenComputerRestClient({
-    apiUrl: env.OPENCOMPUTER_API_URL,
-    apiKey: env.OPENCOMPUTER_API_KEY,
-    template: env.OPENCOMPUTER_TEMPLATE,
-  });
-
-  return createOpenComputerProvider(client, {
-    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    sandboxAccessPasswordSecret: env.OPENCOMPUTER_API_KEY,
-    llmEnvVars: {
-      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-    },
   });
 }
 
@@ -168,6 +143,47 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
   });
 }
 
+/**
+ * The Boat transport, shared by the session provider and the image-build
+ * resources. Only creating a sandbox needs the base snapshot; finalizing and
+ * reclaiming what an earlier configuration created must stay possible after
+ * a provider switch, when no Boat base snapshot is built any more.
+ */
+export function createBoatRestClientFromEnv(env: Env): BoatRestClient {
+  if (!env.BOAT_API_KEY) {
+    throw new Error("BOAT_API_KEY is required when SANDBOX_PROVIDER=boat");
+  }
+  return createBoatRestClient({
+    apiUrl: env.BOAT_API_URL || DEFAULT_BOAT_API_URL,
+    apiKey: env.BOAT_API_KEY,
+    org: env.BOAT_ORG?.trim() || undefined,
+  });
+}
+
+/** Machine size for a sandbox whose scope requests no CPU or memory. */
+export function resolveBoatDefaultMachineType(env: Env): BoatMachineType {
+  const defaultMachineType = env.BOAT_SANDBOX_TYPE?.trim() || "default";
+  if (!isBoatMachineType(defaultMachineType)) {
+    throw new Error("BOAT_SANDBOX_TYPE must be one of small, default, large, xlarge");
+  }
+  return defaultMachineType;
+}
+
+function createBoatProviderFromEnv(env: Env): BoatSandboxProvider {
+  if (!env.BOAT_API_KEY || !env.BOAT_BASE_SNAPSHOT) {
+    throw new Error("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required when SANDBOX_PROVIDER=boat");
+  }
+
+  return createBoatProvider(createBoatRestClientFromEnv(env), {
+    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    sandboxAccessPasswordSecret: env.BOAT_API_KEY,
+    baseSnapshot: env.BOAT_BASE_SNAPSHOT,
+    defaultMachineType: resolveBoatDefaultMachineType(env),
+    deploymentName: env.DEPLOYMENT_NAME,
+  });
+}
+
+export function createSandboxProviderFromEnv(env: Env, backend: "boat"): BoatSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(
@@ -177,43 +193,25 @@ export function createSandboxProviderFromEnv(
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
-  backend: "opencomputer",
-  options?: { requireOpenComputerTemplate?: boolean }
-): OpenComputerSandboxProvider;
-export function createSandboxProviderFromEnv(
-  env: Env,
-  backend?: SandboxBackendName,
-  options?: SandboxProviderFactoryOptions
+  backend?: SandboxBackendName
 ): SandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
-  backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER),
-  options: SandboxProviderFactoryOptions = {}
+  backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER)
 ): SandboxProvider {
   switch (backend) {
+    case "boat":
+      return createBoatProviderFromEnv(env);
     case "daytona":
       return createDaytonaProviderFromEnv(env);
     case "vercel":
       return createVercelProviderFromEnv(env);
-    case "opencomputer":
-      return createOpenComputerProviderFromEnv(env, {
-        requireOpenComputerTemplate: options.requireOpenComputerTemplate ?? true,
-      });
     case "e2b":
       return createE2BProviderFromEnv(env);
     case "modal":
     case "modal-vm":
       return createModalProviderFromEnv(env, backend);
   }
-}
-
-/**
- * Configuration a provider needs for the operation at hand, rather than for
- * every operation it supports. A deployment that has switched providers still
- * has resources to finalize and reclaim on the old one.
- */
-interface SandboxProviderFactoryOptions {
-  requireOpenComputerTemplate?: boolean;
 }
 
 function parseNumericEnv(name: string, value: string | undefined, defaultValue: number): number {

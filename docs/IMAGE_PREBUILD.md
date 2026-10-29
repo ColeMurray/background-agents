@@ -34,11 +34,12 @@ few minutes of changes.
 ## Getting Started
 
 Pre-built images are available when the deployment uses `sandbox_provider = "modal"`,
-`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "opencomputer"`,
-`sandbox_provider = "e2b"`, or `sandbox_provider = "daytona"`. The artifact is stored per provider
-as a Modal image, Vercel snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot. With
-`modal-vm`, the artifact is a Modal image built on the VM backend. Images built under `modal` are
-not used by `modal-vm` sessions.
+`sandbox_provider = "modal-vm"`, `sandbox_provider = "vercel"`, `sandbox_provider = "e2b"`,
+`sandbox_provider = "daytona"`, or `sandbox_provider = "boat"`. The artifact is stored per provider
+as a Modal image, Vercel snapshot, E2B/Daytona snapshot, or Boat saved snapshot. With `modal-vm`,
+the artifact is a Modal image built on the VM backend. Images built under `modal` are not used by
+`modal-vm` sessions. Boat's artifact has its own allowance and snapshot rules — see
+[Boat prebuilds](#boat-prebuilds).
 
 Daytona additionally requires an operator to open admission (`daytona_prebuilds_enabled`, default
 off) — see [Daytona prebuilds](#daytona-prebuilds) below. While admission is closed the settings
@@ -172,7 +173,7 @@ flowchart TD
     state -->|failure: failed| cleanup[Terminate provider session]
     lease -->|no| retry[Retry after the active lease]
     retry --> lease
-    lease -->|yes| artifact[Snapshot or checkpoint provider session]
+    lease -->|yes| artifact[Snapshot provider session]
 
     artifact --> fence[Fence provider artifact id in build store]
     fence --> ready[Mark image ready or superseded]
@@ -197,6 +198,10 @@ work. The step is best-effort: a failure is logged and the build continues. Open
 environment variables (`OPENCODE_MODELS_URL`, `OPENCODE_MODELS_PATH`) apply to the refresh as they
 do to sessions.
 
+Codex sessions price their token usage from the same file, so a model published after the image was
+built has no price there: its turns are recorded as $0 with a timeline warning until the image is
+rebuilt.
+
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
 state in `global.db`. Both hosts run the same finalization handler and retry contract.
@@ -210,13 +215,14 @@ workspace environment build has no team layer, even when a team session later la
 
 Everything your setup scripts install — dependencies, build artifacts, caches — is captured in the
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
-snapshot, OpenComputer checkpoint, or E2B/Daytona snapshot.
+snapshot, E2B/Daytona snapshot, or Boat saved snapshot (on Boat, caches under `/tmp` and `~/.cache`
+are the exception; see [Boat prebuilds](#boat-prebuilds)).
 
 The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
-ten minutes for callback delivery and snapshot/checkpoint finalization. Because Vercel limits
-sandbox lifetime to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve
-is never lost; Modal, OpenComputer, E2B and Daytona continue to honor the configured execution
-timeout up to the shared one-hour limit.
+ten minutes for callback delivery and snapshot finalization. Because Vercel limits sandbox lifetime
+to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve is never lost;
+Modal, E2B, Daytona and Boat continue to honor the configured execution timeout up to the shared
+one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
@@ -317,7 +323,11 @@ admission:
 
 Open-Inspect's own plumbing never persists build credentials into an image: the callback token stays
 in memory, the clone token and scope secrets reach only the build process and its children, and none
-of them are written to the container's configuration or to a file.
+of them are written to the container's configuration or to a file. Boat is the one provider where
+the build's env takes a file on the way in: a Boat snapshot inherits a sandbox's create-time env, so
+the env is written under `/tmp` only after the sandbox is private and bound, the launcher reads it
+once and removes it, and `/tmp` is never part of a Boat snapshot, so it reaches no image either (see
+[Boat prebuilds](#boat-prebuilds)).
 
 A repository's `.openinspect/setup.sh` is trusted code that runs with those secrets in its
 environment. It can write them into a dependency, a cache, or any file it likes, and the capture has
@@ -340,6 +350,73 @@ own secrets. See [Secrets Management](SECRETS.md#secrets-and-prebuilt-images).
 
 ---
 
+## Boat prebuilds
+
+On Boat a prebuilt image is a **saved snapshot**: a standalone copy of the build sandbox's disk,
+saved under a name derived from the build (`oi-img-<scope>-<digest>`). A session deploys from it
+exactly as it deploys from the deployment's base snapshot, with its own env, and the runtime syncs
+the checkout and skips `setup.sh`.
+
+Finalization archives the build sandbox (the same stop an idle session gets), saves the archived
+disk under the image name, and waits for Boat to report the snapshot `ready`; the build sandbox is
+then deleted. The name is fixed per build, and Boat replaces rather than duplicates a snapshot saved
+under an existing name, so a retried finalization can never leave a second artifact behind.
+Superseded images are deleted by the same reaper as on every other provider.
+
+Things to know:
+
+- **Allowance.** Boat includes a fixed number of saved snapshots per account or organization wallet
+  and bills each one beyond that monthly. The deployed and retained rollback bases count, as does
+  every ready image plus, briefly, the image a rebuild is replacing. After switching the Worker,
+  Terraform [prunes superseded bases](./BOAT_SANDBOX_PROVIDER.md#base-snapshot-pruning), retaining
+  the deployed base and its confirmed deployment predecessor, not the newest artifact. Cleanup skips
+  when history cannot establish a predecessor and leaves `saving` snapshots, manual names and
+  prebuilt images untouched. The `oi-img` namespace is reserved and rejected as a base prefix.
+  Deleting a source base does not affect existing sandboxes or prebuilt images. A save past the
+  allowance with no credit fails the build with Boat's `credit_required` reason. Operators can
+  remove unrelated unused manual snapshots or add credit, then rebuild.
+- **What the image keeps.** A saved snapshot follows Boat's snapshot rules: `/home` (the workspace
+  with every clone and everything `setup.sh` put there) and changes under `/etc`, `/usr`, `/opt`,
+  `/var`, `/root` and `/srv` are saved; `/tmp` and `~/.cache` are not. A setup script that warms a
+  cache under `~/.cache` (pip, uv, Playwright browsers) does not carry it into the image — point
+  such caches somewhere under the workspace instead. OpenCode's refreshed
+  [model catalog](#model-catalog) lives under `~/.cache` too, so sessions from a Boat image resolve
+  models from the pinned binary's catalog until OpenCode's own background refresh lands.
+- **Build state stays out of the image.** The Boat launcher keeps an image build's lock, log and
+  runtime state under `/tmp`, so the saved disk carries the workspace and nothing of the build that
+  produced it; a session's first boot from the image creates its own state under
+  `/home/user/.openinspect`.
+- **The build's env never reaches the image.** Boat keeps a sandbox's create-time env as the default
+  env for a deploy from a snapshot saved from it, so a build sandbox is created with the boot
+  markers alone. Its env — the repository set, the clone token, the scope's secrets, the callback
+  contract — is written to a file under `/tmp` once the sandbox is private and bound to the build;
+  the launcher reads the file once and removes it, and `/tmp` is never part of a snapshot. A session
+  deployed from the image always gets its own env. Treat a scope's image as no less sensitive than
+  the scope's secrets all the same: its filesystem holds whatever `setup.sh` wrote, as the
+  [credential trust boundary](#credential-trust-boundary) already requires.
+- **Organization sandboxes.** A build sandbox is created private, exactly as a session sandbox is:
+  Boat sets the visibility before the sandbox has a machine, so nothing of the build ever reaches a
+  shared sandbox ([Boat provider guide](./BOAT_SANDBOX_PROVIDER.md#billing-to-an-organization)).
+- **Build machine.** The build runs on the machine size the scope's CPU and memory settings select,
+  the same size its sessions get, so `setup.sh` has at build time the memory it will have at
+  runtime.
+- **A create whose response is lost** is repeated under the same idempotency key, and Boat answers
+  with the first sandbox. Should every attempt lose its response, the sandbox holds nothing of the
+  build (its env never arrived), stops by itself at its TTL, and Boat deletes its data 14 days
+  later. The create names the sandbox, but nothing looks a sandbox up by that name to reclaim it
+  sooner.
+- **Starts.** Each build spends one Boat sandbox start against the plan's start limits; the save and
+  the deploys from the image spend none beyond each session's own.
+
+| Symptom                                                 | What it means                                                  | What to do                                                                                                                                 |
+| ------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Build fails with `credit_required`                      | The account is at its saved-snapshot allowance with no credit. | Delete saved snapshots nothing deploys from (`DELETE /saved-snapshots/{name}` or the Boat CLI), or add credit, then rebuild.               |
+| Callback accepted, build stays `building` for minutes   | The save is still `saving`, or the source is still archiving.  | Nothing; finalization re-polls the reserved name. It fails the build only past the save's fixed deadline, and then reclaims the name.      |
+| `image_build.operation_unresolved` naming an `oi-img-*` | A reserved save never settled and maintenance keeps asking.    | Check the name in the Boat dashboard; a `failed` or `ready` snapshot under it is deleted by maintenance on its next pass.                  |
+| Cleanup backlog after a provider switch                 | Rows dispatch cleanup from their own recorded provider.        | Keep `boat_api_key` (with `boat_api_url` and `boat_org`) configured until the backlog drains. The base snapshot is not needed for cleanup. |
+
+---
+
 ## Optimizing Your Setup Script
 
 The more work you front-load into your `.openinspect/setup.sh`, the faster your sessions start. Here
@@ -348,8 +425,10 @@ are some tips:
 - **Install all dependencies** — `npm install`, `pip install -r requirements.txt`, `bundle install`,
   etc.
 - **Run build steps** — `npm run build`, `cargo build`, code generation, compiled assets
-- **Warm caches** — Running your test suite once during setup means cached files are available for
-  subsequent runs in the session
+- **Warm caches** — Run tools that persist reusable caches. For example, `tsc --noEmit` only writes
+  a reusable `.tsbuildinfo` cache when the project enables `incremental`. Since `setup.sh` also runs
+  on fresh session boots, guard heavy cache-warming steps with `OPENINSPECT_BOOT_MODE` so they run
+  during image builds (`build`) rather than delaying fresh boots (`fresh`).
 - **Pre-download large resources** — Models, datasets, or any large files the agent might need
 
 Don't worry about build duration. Builds run in the background and users always get the last

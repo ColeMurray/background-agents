@@ -13,8 +13,6 @@ import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
 import type * as VercelProviderModule from "../sandbox/providers/vercel/provider";
 import type * as VercelClientModule from "../sandbox/providers/vercel/client";
-import type * as OpenComputerProviderModule from "../sandbox/providers/opencomputer-provider";
-import type * as OpenComputerClientModule from "../sandbox/opencomputer-rest-client";
 import type * as IntegrationSettingsResolutionModule from "../session/integration-settings-resolution";
 import {
   createTestEnv,
@@ -50,10 +48,6 @@ const modalClient = vi.hoisted(() => ({
 }));
 
 const vercelProvider = vi.hoisted(() => ({
-  triggerImageBuild: vi.fn(),
-}));
-
-const openComputerProvider = vi.hoisted(() => ({
   triggerImageBuild: vi.fn(),
 }));
 
@@ -97,22 +91,6 @@ vi.mock("../sandbox/providers/vercel/client", async (importOriginal) => {
   };
 });
 
-vi.mock("../sandbox/providers/opencomputer-provider", async (importOriginal) => {
-  const actual = await importOriginal<typeof OpenComputerProviderModule>();
-  return {
-    ...actual,
-    createOpenComputerProvider: vi.fn(() => openComputerProvider),
-  };
-});
-
-vi.mock("../sandbox/opencomputer-rest-client", async (importOriginal) => {
-  const actual = await importOriginal<typeof OpenComputerClientModule>();
-  return {
-    ...actual,
-    createOpenComputerRestClient: vi.fn(() => ({})),
-  };
-});
-
 vi.mock("../session/integration-settings-resolution", async (importOriginal) => {
   const actual = await importOriginal<typeof IntegrationSettingsResolutionModule>();
   return {
@@ -148,20 +126,6 @@ function createVercelEnv(): Env {
     IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
-    JOBS: jobs,
-  });
-}
-
-function createOpenComputerEnv(): Env {
-  return createTestEnv({
-    DB: ownerAuthorizationDatabase(),
-    SANDBOX_PROVIDER: "opencomputer",
-    SCM_PROVIDER: "github",
-    WORKER_URL: "https://cp.test",
-    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
-    OPENCOMPUTER_API_URL: "https://opencomputer.test",
-    OPENCOMPUTER_API_KEY: "oc-token",
-    OPENCOMPUTER_TEMPLATE: "openinspect-runtime",
     JOBS: jobs,
   });
 }
@@ -228,7 +192,6 @@ beforeEach(() => {
   modalClient.startImageBuildSandbox.mockResolvedValue(undefined);
   modalClient.terminateImageBuildSandbox.mockResolvedValue(undefined);
   vercelProvider.triggerImageBuild.mockResolvedValue(undefined);
-  openComputerProvider.triggerImageBuild.mockResolvedValue(undefined);
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
   scmProvider.generateCredentialHelperAuth.mockResolvedValue({
     username: "x-access-token",
@@ -310,27 +273,6 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
         provider: "vercel",
         callbackTokenHash: expect.any(String),
       })
-    );
-  });
-
-  it("threads the clone token into the OpenComputer build backend", async () => {
-    scmProvider.checkRepositoryAccess.mockResolvedValue(RESOLVED_REPO);
-
-    const response = await callTrigger(createOpenComputerEnv());
-
-    expect(response.status).toBe(200);
-    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
-    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
-    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scopeKind: "repo",
-        scopeId: "acme/repo",
-        repositories: REPO_REPOSITORIES,
-        cloneToken: "clone-token",
-      })
-    );
-    expect(registerBuildSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "opencomputer" })
     );
   });
 

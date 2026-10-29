@@ -233,7 +233,7 @@ export async function handleSpawnChild(
   const harness = spawnContext.harness;
   let selection;
   try {
-    selection = await resolveChildHarnessSelection(ctx.db, env, spawnContext, body, enabledModels);
+    selection = await resolveChildHarnessSelection(ctx.db, spawnContext, body, enabledModels);
   } catch (cause) {
     if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
     throw cause;

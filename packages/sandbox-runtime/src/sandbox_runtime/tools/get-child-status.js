@@ -8,7 +8,8 @@ import { z } from "zod";
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 import {
   buildChildDetailQuery,
-  formatChildDetail,
+  childStatusDetailOutput,
+  childStatusListOutput,
   formatStatus,
   formatTimestamp,
 } from "./get-child-status-format.js";
@@ -24,7 +25,7 @@ async function listChildren() {
   const { children } = await response.json();
 
   if (!children || children.length === 0) {
-    return "No child sessions found.";
+    return childStatusListOutput([], "No child sessions found.");
   }
 
   const counts = { pending: 0, running: 0, done: 0, failed: 0 };
@@ -46,7 +47,7 @@ async function listChildren() {
   }
 
   const header = `${children.length} child session(s): ${counts.running} running, ${counts.pending} pending, ${counts.done} done, ${counts.failed} failed`;
-  return [header, "", ...lines].join("\n");
+  return childStatusListOutput(children, [header, "", ...lines].join("\n"));
 }
 
 async function getChildDetail(childId, options = {}) {
@@ -64,7 +65,7 @@ async function getChildDetail(childId, options = {}) {
   }
 
   const detail = await response.json();
-  return formatChildDetail(detail, childId, options);
+  return childStatusDetailOutput(detail, childId, options);
 }
 
 export default tool({

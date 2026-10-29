@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { HARNESS_IDS } from "@open-inspect/shared/harnesses";
+import { harnessMemoryToolName } from "@open-inspect/shared/memory-tools";
 import type { SessionMemorySelection } from "./types";
 import type { PinnedSelection } from "../db/session-memory-selections";
 import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError } from "./errors";
 import type { MemoryPartition } from "./partition";
+import { emptySelection } from "./selection";
 import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-memory-service";
 import type {
   MemoryRecord,
@@ -292,6 +295,17 @@ describe("SessionMemoryService.renderedContext", () => {
     const rendered = await service.renderedContext("session");
     expect(rendered).toMatchObject({ schemaVersion: 1, manifestSha256: "hash" });
     expect(rendered.rendered).toContain("mcp__oi__memory_read");
+  });
+
+  it.each(HARNESS_IDS)("supplies %s boot guidance without pinned memories", async (harness) => {
+    const selection = await emptySelection(1);
+    const { service } = setup({
+      loaded: { selection, drift: [], entries: [] },
+      session: memorySession({ harness }),
+    });
+    const rendered = await service.renderedContext("session");
+    expect(rendered).toMatchObject({ schemaVersion: 1, manifestSha256: selection.manifestSha256 });
+    expect(rendered.rendered).toContain(harnessMemoryToolName(harness, "memory_write"));
   });
 
   it("refuses to install when the principal lost access to a pinned partition", async () => {

@@ -10,17 +10,19 @@ import { serializeBrowserSessionCookies } from "./browser-session-cookie";
 type ServerAuthUser = BrowserAuthSessionUser;
 
 /**
- * App-owned session contract consumed by server-side BFF routes.
+ * App-owned session contract consumed by server-side session lookups.
  *
  * Provider-specific session implementations adapt to this shape at the seam so
- * route authorization does not depend on framework-owned session types.
+ * callers do not depend on framework-owned session types.
  */
 export interface ServerAuthSession {
   user: ServerAuthUser;
 }
 
 /**
- * Server-side authentication seam for BFF routes.
+ * Explicit session lookup for server-rendered pages and local-only responses.
+ * BFF routes that call the control plane should delegate authentication to
+ * controlPlaneUserFetch instead of adding this separate network round trip.
  *
  * The web is a framework-free BFF for browser authentication. Only the opaque
  * Better Auth session cookie crosses this boundary; OAuth transaction cookies

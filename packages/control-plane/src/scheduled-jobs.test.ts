@@ -9,7 +9,7 @@ import type * as ImageBuildScheduler from "./image-builds/scheduler";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import type { Logger } from "./logger";
 import type { BackgroundTasks } from "./platform-ports";
-import { Scheduler } from "./scheduler/scheduler";
+import { createScheduler } from "./scheduler/factory";
 import type * as AbandonedDraftSweepModule from "./session/abandoned-draft-sweep";
 import {
   ABANDONED_DRAFT_SWEEP_CRON,
@@ -32,8 +32,8 @@ vi.mock("./image-builds/scheduler", async (importOriginal) => ({
   ...(await importOriginal<typeof ImageBuildScheduler>()),
   runImageBuildScheduler: vi.fn(async () => ({})),
 }));
-vi.mock("./scheduler/scheduler", () => ({
-  Scheduler: vi.fn(function () {
+vi.mock("./scheduler/factory", () => ({
+  createScheduler: vi.fn(function () {
     return { tick: schedulerTick };
   }),
 }));
@@ -104,7 +104,7 @@ describe("SCHEDULED_JOBS", () => {
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
 
-    expect(Scheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
+    expect(createScheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
     expect(schedulerTick).toHaveBeenCalledTimes(1);
     expect(deps.submitted.map((entry) => entry.name)).toEqual(["autofix_queue_health"]);
     expect(checkAutofixQueueHealth).not.toHaveBeenCalled();

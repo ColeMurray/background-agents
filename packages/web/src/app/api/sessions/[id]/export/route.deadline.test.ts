@@ -3,9 +3,6 @@ import { cookies, headers } from "next/headers";
 import { dispatchControlPlaneFetch } from "@/lib/control-plane-transport";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn(), headers: vi.fn() }));
-vi.mock("@/lib/server-auth-session", () => ({
-  getServerAuthSession: vi.fn(async () => ({ user: { id: "test-user" } })),
-}));
 
 import { GET } from "./route";
 

@@ -185,7 +185,7 @@ describe("browser authentication", () => {
     expect(providerUrl.searchParams.get("redirect_uri")).toBe(
       `${PUBLIC_WEB_ORIGIN}/api/auth/callback/github`
     );
-    expect(providerUrl.searchParams.get("scope")).toBe("");
+    expect(providerUrl.searchParams.has("scope")).toBe(false);
     expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
     expect(providerUrl.searchParams.get("state")).toBeTruthy();
 
@@ -380,12 +380,17 @@ describe("browser authentication", () => {
           clientSecret: "google-client-secret",
           getUserInfo: async () => ({
             user: {
-              id: "direct-id-token-subject",
               name: "Direct ID Token User",
               email: "direct-id-token@example.com",
               emailVerified: true,
             },
-            data: null,
+            data: {
+              provider: "google",
+              issuer: "https://accounts.google.com",
+              subject: "direct-id-token-subject",
+              verifiedEmails: ["direct-id-token@example.com"],
+              primaryEmail: "direct-id-token@example.com",
+            },
           }),
         },
       });
@@ -406,7 +411,8 @@ describe("browser authentication", () => {
         })
       );
 
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: "ID_TOKEN_NOT_SUPPORTED" });
       expect(response.headers.get("set-cookie")).toBeNull();
       const sessionCount = await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM auth_sessions"

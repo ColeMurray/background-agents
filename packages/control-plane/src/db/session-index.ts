@@ -601,9 +601,9 @@ export class SessionIndexStore {
     return new SessionInboxStore(this.db).snapshot(options);
   }
 
-  /** Mark every unread session in the viewer's filtered inbox as read. */
-  async markInboxRead(options: InboxFilterOptions): Promise<number> {
-    return new SessionInboxStore(this.db).markAllRead(options);
+  /** Mark every unread session in the viewer's filtered inbox, or one of its hierarchies, as read. */
+  async markInboxRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
+    return new SessionInboxStore(this.db).markAllRead(options, rootSessionId);
   }
 
   private async attachListMetadata<T extends { id: string }>(sessions: T[]): Promise<T[]> {

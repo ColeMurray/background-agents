@@ -4,7 +4,7 @@ import {
   MEMORY_LIST_PAGE_SIZE,
   memoryScopeDisplayKey,
   type MemoryDto,
-  type MemoryScope,
+  type MemoryListScope,
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
 import { useMemories, useMemory } from "@/hooks/use-memories";
@@ -13,7 +13,7 @@ import { useMemories, useMemory } from "@/hooks/use-memories";
  * One status tab of a scope's records, paged and optionally filtered by search text, with any
  * deep-linked record kept visible.
  */
-export function useMemoryCollection(scope: MemoryScope, search: string) {
+export function useMemoryCollection(scope: MemoryListScope, search: string) {
   const focusedId = useSearchParams().get("memoryId");
   const focused = useMemory(focusedId);
   const [selectedStatus, setSelectedStatus] = useState<MemoryStatus | null>(null);
@@ -38,7 +38,9 @@ export function useMemoryCollection(scope: MemoryScope, search: string) {
     focusedRecord &&
     !search &&
     focusedRecord.status === status &&
-    memoryScopeDisplayKey(focusedRecord.scope) === memoryScopeDisplayKey(scope) &&
+    (scope === "shared"
+      ? focusedRecord.scope.type !== "personal"
+      : memoryScopeDisplayKey(focusedRecord.scope) === memoryScopeDisplayKey(scope)) &&
     !page.memories.some((record) => record.id === focusedRecord.id)
       ? [focusedRecord, ...page.memories]
       : page.memories;
@@ -51,11 +53,13 @@ export function useMemoryCollection(scope: MemoryScope, search: string) {
       setOffset(0);
     },
     records,
+    offset,
     canCreate: page.canCreate,
     loading: page.loading,
     error: page.error,
     hasPreviousPage: offset > 0,
     hasNextPage: page.nextOffset !== null,
+    truncated: page.truncated,
     previousPage() {
       setOffset((current) => Math.max(0, current - MEMORY_LIST_PAGE_SIZE));
     },

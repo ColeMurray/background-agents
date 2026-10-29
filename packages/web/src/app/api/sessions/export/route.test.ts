@@ -10,17 +10,21 @@ import { GET } from "./route";
 describe("bulk session export proxy", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("requires a browser session before contacting the control plane", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await GET(new Request("http://local/api/sessions/export"));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("streams NDJSON and forwards only the supported bulk query parameters", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     const body = new ReadableStream<Uint8Array>();
     vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
       new Response(body, { headers: { "Content-Type": "application/x-ndjson" } })
@@ -43,7 +47,6 @@ describe("bulk session export proxy", () => {
   });
 
   it("preserves upstream authorization errors", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
       Response.json({ error: "Forbidden" }, { status: 403 })
     );

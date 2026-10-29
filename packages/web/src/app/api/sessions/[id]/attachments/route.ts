@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { type NextRequest, NextResponse } from "next/server";
+import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { WEB_SESSION_ATTACHMENT_MAX_REQUEST_BYTES } from "@/lib/session-attachment-limits";
 
@@ -31,9 +31,9 @@ async function readAttachmentRequestBody(request: Request): Promise<ArrayBuffer 
   return body.buffer;
 }
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const cookieHeader = serializeBrowserSessionCookies(request.cookies.getAll());
+  if (!cookieHeader) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

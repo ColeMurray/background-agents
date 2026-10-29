@@ -219,20 +219,40 @@ export class SessionInboxStore {
    * Mark every unread session the inbox lists under these filters as read for
    * the viewer. Any unread session puts its hierarchy in needs attention, so
    * this empties that category, including pages the client has not loaded.
-   * Returns the number of sessions whose read state changed.
+   * A `rootSessionId` limits marking to that session and its descendants
+   * under the same filters. Returns the number of sessions whose read state
+   * changed.
    */
-  async markAllRead(options: InboxFilterOptions): Promise<number> {
-    const { sql, params } = this.eligibleSessionsCte(options);
-    const binds = [...params, options.viewerUserId, Date.now()];
+  async markAllRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
+    const { sql, params } = this.eligibleSessionsCte(options, rootSessionId !== undefined);
+    const binds = [
+      ...params,
+      ...(rootSessionId === undefined ? [] : [rootSessionId]),
+      options.viewerUserId,
+      Date.now(),
+    ];
     assertD1QueryParameterLimit(binds.length);
     const result = await this.db
       .prepare(
-        `WITH ${sql}
+        `WITH RECURSIVE ${sql}${
+          rootSessionId === undefined
+            ? ""
+            : `,
+            -- UNION rather than UNION ALL stops at a corrupt parent cycle.
+            requested_sessions(id) AS (
+              SELECT id FROM eligible_sessions WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM requested_sessions
+              JOIN eligible_sessions child ON child.parent_session_id = requested_sessions.id
+            )`
+        }
          INSERT INTO session_read_states
            (user_id, session_id, last_read_message_id, updated_at)
          SELECT ?, id, latest_terminal_message_id, ?
          FROM eligible_sessions
          WHERE unread = 1
+           ${rootSessionId === undefined ? "" : "AND id IN (SELECT id FROM requested_sessions)"}
          ON CONFLICT(user_id, session_id) DO UPDATE SET
            last_read_message_id = excluded.last_read_message_id,
            updated_at = excluded.updated_at
@@ -245,10 +265,13 @@ export class SessionInboxStore {
   }
 
   /** The filtered, viewer-visible, unarchived sessions with viewer-specific unread state. */
-  private eligibleSessionsCte(options: InboxFilterOptions): { sql: string; params: unknown[] } {
+  private eligibleSessionsCte(
+    options: InboxFilterOptions,
+    materialized: boolean
+  ): { sql: string; params: unknown[] } {
     const { where, params } = buildSessionListPredicates(options);
     return {
-      sql: `eligible_sessions AS (
+      sql: `eligible_sessions AS ${materialized ? "MATERIALIZED " : ""}(
               SELECT sessions.*, ${unreadSql("sessions")} AS unread
               -- Filter before viewer joins to keep shared predicates' columns unambiguous.
               FROM (
@@ -269,7 +292,9 @@ export class SessionInboxStore {
 
   /** Build the shared visibility, effective-root, and category aggregation CTEs. */
   private inboxCtes(options: InboxFilterOptions): { sql: string; params: unknown[] } {
-    const eligible = this.eligibleSessionsCte(options);
+    // The recursive step and later CTEs reuse this set. Inlining it rescans
+    // the viewer's sessions for every re-rooted row.
+    const eligible = this.eligibleSessionsCte(options, true);
     return {
       sql: `WITH RECURSIVE ${eligible.sql},
             -- Filtering can hide an ancestor. Re-root each resulting visible subtree

@@ -21,7 +21,7 @@
 
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { CACHE_ENTRIES_SCHEMA_SQL } from "../db/sql-cache-store";
+import { CACHE_ENTRIES_EXPIRY_INDEX_SQL, CACHE_ENTRIES_SCHEMA_SQL } from "../db/sql-cache-store";
 import type { Logger } from "../logger";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "./sqlite-database";
@@ -33,6 +33,7 @@ function open(path: string): NodeSqlDatabase {
   const db = openPrivateSqliteFile(path);
   try {
     db.exec(CACHE_ENTRIES_SCHEMA_SQL);
+    db.exec(CACHE_ENTRIES_EXPIRY_INDEX_SQL);
   } catch (error) {
     db.close();
     throw error;

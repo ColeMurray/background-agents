@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeOtherProviderBuilds,
@@ -8,11 +7,8 @@ import {
   imageBuildsEnabledResponseSchema,
   imageBuildsStatusResponseSchema,
 } from "@/lib/image-builds";
-import {
-  getPublicSandboxProvider,
-  REPO_IMAGES_UNSUPPORTED_MESSAGE,
-  supportsRepoImages,
-} from "@/lib/sandbox-provider";
+import { getPublicSandboxProvider } from "@/lib/sandbox-provider";
+import { rejectUnsupportedRepoImages } from "@/lib/repo-images-unsupported";
 
 /**
  * Unified image-build feed: every prebuild-enabled scope plus the cross-scope
@@ -20,21 +16,24 @@ import {
  * the settings pages and the session-target picker.
  */
 export async function GET() {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  if (!supportsRepoImages()) {
-    return NextResponse.json({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE }, { status: 501 });
-  }
-
   try {
-    const [enabledResponse, enabledReposResponse, statusResponse] = await Promise.all([
+    const rejection = await rejectUnsupportedRepoImages();
+    if (rejection) return rejection;
+
+    const results = await Promise.allSettled([
       controlPlaneUserFetch("/image-builds/enabled"),
       controlPlaneUserFetch("/image-builds/enabled-repos"),
       controlPlaneUserFetch("/image-builds/status"),
     ]);
+
+    if (results.some((result) => result.status === "fulfilled" && result.value.status === 401)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const [enabledResponse, enabledReposResponse, statusResponse] = results.map((result) => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
 
     if (!enabledResponse.ok || !enabledReposResponse.ok || !statusResponse.ok) {
       return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });

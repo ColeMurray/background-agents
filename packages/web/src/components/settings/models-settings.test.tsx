@@ -73,6 +73,17 @@ function getModelSwitch(name: RegExp) {
 }
 
 describe("ModelsSettings", () => {
+  it("shows a skeleton while model preferences load", () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map(), fetcher: () => new Promise(() => {}) }}>
+        <ModelsSettings />
+      </SWRConfig>
+    );
+
+    expect(screen.getByRole("status", { name: "Loading model preferences" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
   it("automatically saves toggles and updates other model selectors", async () => {
     const fetchMock = createSaveMock(["openai/gpt-5.4"]);
     vi.stubGlobal("fetch", fetchMock);

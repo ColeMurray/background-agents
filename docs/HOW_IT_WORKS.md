@@ -199,8 +199,13 @@ incurring compute costs.
 
 Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
 does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
-in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+in case the process is actually gone. A ready sandbox whose heartbeat is overdue gets a short
+reconnect grace before that check retires it. Explicit lifecycle paths such as inactivity and stale
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+While the coordinator that started their checkpoint is still capturing the sandbox, a refused bridge
+is told to retry rather than exit, so the save is not aborted by the container shutting down. After
+a control-plane restart the new coordinator cannot record such a checkpoint, so the bridge exits. A
+shutdown save that is `draining`, `prepared`, or `capturing` is persisted and still answers retry.
 
 ### Data Plane (Sandbox Backends)
 
@@ -213,7 +218,7 @@ development environment.
 - Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode and the Claude Agent SDK (the coding agent harnesses)
+- OpenCode, the Claude Agent SDK, and the pinned Codex CLI (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -221,14 +226,14 @@ Open-Inspect supports these sandbox backends:
 - **Daytona**: persistent stop/start sandboxes via direct REST API calls
 - **Vercel Sandboxes**: filesystem snapshot restore and prebuilt-image builds via the Vercel Sandbox
   API
-- **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
-  OpenComputer REST API
 - **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
+- **Boat**: full-VM sandboxes deployed from a saved snapshot, archived on inactivity and resumed on
+  a new machine via direct Boat REST API calls
 
-Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
-be restored on those same providers for session resumes; Daytona and E2B use persistent sandboxes
-instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity or stale
-heartbeat, then resumes that same sandbox later.
+Prebuilt-image builds are supported on Modal, Vercel, E2B, and Daytona (opt-in); Boat has none.
+Saved filesystem state can be restored on Modal and Vercel for session resumes; Daytona, E2B, and
+Boat use persistent sandboxes instead. For those three, the control plane stops, pauses, or archives
+the sandbox on inactivity or stale heartbeat, then resumes that same sandbox later.
 
 ### Clients
 
@@ -286,7 +291,7 @@ When you create a session for a repo without an existing snapshot:
 5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
 6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
 7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
-   staging). The bridge attaches to it and sends `ready`
+   or Codex staging). The bridge attaches to it and sends `ready`
 8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
    were waiting dispatch now
 
@@ -337,7 +342,7 @@ When restoring from a previous snapshot:
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
-   snapshot or checkpoint
+   snapshot
 2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
 3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
    so the snapshot's commit and any uncommitted work survive the restore
@@ -544,11 +549,21 @@ runs on exactly one harness, chosen at create:
   the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
   carries exactly one Anthropic credential. This is the harness that can use a connected Claude
   subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+- **Codex**: the bridge launches OpenAI's Codex CLI as `codex app-server` and speaks JSON-RPC to it
+  over stdio. It always runs the image's pinned install (`/opt/openinspect/codex/bin/codex`), never
+  whatever `codex` is in `/usr/local/bin`, which a provider such as Boat replaces at boot. A small
+  subreaper owns the process and contains everything it spawns when the harness stops it.
+  `CODEX_HOME` is a per-sandbox directory (`~/.openinspect/codex`) that never holds the OpenAI
+  credential: the bridge hands Codex `OPENAI_API_KEY` or a short-lived ChatGPT access token fetched
+  from the control plane at login, and the process does not inherit the sandbox's `OPENAI_*` or
+  `CODEX_*` variables. Codex runs OpenAI models only and refuses a model, reasoning effort, or
+  credential it cannot use instead of substituting a default. See
+  [Using OpenAI Models](OPENAI_MODELS.md).
 
-Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
-above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
-of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
-the running turn ends on both harnesses.
+All three harnesses emit the same session events (tokens, tool calls, steps, warnings), so
+everything above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports
+the outcome of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts
+queue until the running turn ends on every harness.
 
 ### What the Agent Can Do
 
@@ -636,7 +651,7 @@ indicator.
 
 ### How Snapshots Solve This
 
-Provider snapshots and checkpoints let us capture a sandbox's state after setup:
+Provider snapshots let us capture a sandbox's state after setup:
 
 ```
 First session:  Clone ─▶ Install/Build ─▶ Start Runtime ─▶ [Snapshot] ─▶ Work
@@ -652,9 +667,7 @@ active provider supports saved filesystem state.
 For Vercel, Terraform builds a base-runtime snapshot from the local checkout and wires a
 deterministic snapshot name into `VERCEL_BASE_SNAPSHOT_NAME`. Fresh Vercel sandboxes resolve that
 name to the newest created snapshot instead of cloning and installing the sandbox runtime on every
-session. OpenComputer uses a managed template plus checkpoints for the same prebuilt-image
-lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
-[OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
+session. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for provider-specific details.
 
 ### Image Prebuilding
 
@@ -755,8 +768,8 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 
 > **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
 > deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
-> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
-> precedence over it, and the other providers read only the secret store.
+> into Modal session sandboxes; a global secret of the same name takes precedence over it, and the
+> other providers read only the secret store.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
 > require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go

@@ -203,3 +203,56 @@ test("ordinary child status renders safe output summaries without a final respon
   for (const text of ["shot-1", "screenshot", "Dashboard", "csv-1", "report.csv"])
     assert.ok(output.includes(text));
 });
+
+test("child status output envelopes retain readable output without private metadata", async () => {
+  const { childStatusListOutput, childStatusDetailOutput } =
+    await import("../src/sandbox_runtime/tools/get-child-status-format.js");
+  const session = {
+    id: "child-1",
+    title: "Test child",
+    status: "completed",
+    repoOwner: "acme/team",
+    repoName: "web",
+    createdAt: 1000,
+    secret: "private",
+  };
+  const list = JSON.parse(childStatusListOutput([session], "1 child session"));
+  assert.equal(list.kind, "list");
+  assert.equal(list.children[0].id, "child-1");
+  assert.equal(list.children[0].repoOwner, "acme/team");
+  const detail = {
+    session,
+    hasUnfinishedPrompt: true,
+    finalResponse: {
+      success: false,
+      error: "Test failed",
+      textContent: "## Test results",
+      eventCount: 1000,
+      eventLimitReached: true,
+      fileArtifacts: protectedFiles,
+    },
+    trajectory: { events: [], hasMore: true, cursor: "next-page" },
+  };
+  const raw = childStatusDetailOutput(detail, "child-1", { includeResponse: true });
+  const result = JSON.parse(raw);
+  assert.equal(result.kind, "detail");
+  assert.equal(result.hasUnfinishedPrompt, true);
+  assert.equal(result.finalResponse.textContent, "## Test results");
+  assert.equal(result.finalResponse.success, false);
+  assert.equal(result.finalResponse.error, "Test failed");
+  assert.equal(result.finalResponse.eventLimitReached, true);
+  assert.match(result.agentMessage, /Latest completed response/);
+  assert.match(result.agentMessage, /next-page/);
+  assert.match(result.agentMessage, /report.csv/);
+  assert.ok(!raw.includes("objectKey"));
+  assert.ok(!raw.includes("sessions/private"));
+  assert.ok(!raw.includes('"secret"'));
+  assert.ok(!childStatusListOutput([session], "list").includes('"secret"'));
+  assert.deepEqual(JSON.parse(childStatusListOutput([], "No child sessions found.")), {
+    version: 1,
+    kind: "list",
+    children: [],
+    agentMessage: "No child sessions found.",
+  });
+  assert.equal(JSON.parse(childStatusDetailOutput({ session }, "child-1")).finalResponse, null);
+});

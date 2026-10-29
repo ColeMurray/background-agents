@@ -1,9 +1,9 @@
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import type { ResolvedIdentity } from "../auth/principal";
 import { normalizeEmail } from "../db/email";
 import type { IdentityClaimStore } from "../db/identity-claim-store";
 import { isEmailAttestingProvider, type UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
-import type { ServiceActorProfileClaims } from "../routes/shared";
 
 const logger = createLogger("router:known-actor-profile");
 
@@ -34,7 +34,7 @@ export class KnownActorProfileClaim {
     private readonly claimStore: IdentityClaimStore
   ) {}
 
-  async claim(actor: KnownActor, profile: ServiceActorProfileClaims): Promise<void> {
+  async claim(actor: KnownActor, profile: ActorProfileClaims): Promise<void> {
     // One read decides what is missing, so a complete profile costs no writes;
     // the guarded writes stay authoritative if another writer gets there first.
     const user = await this.users.getUserById(actor.canonicalUserId);
@@ -50,24 +50,26 @@ export class KnownActorProfileClaim {
     const email = isEmailAttestingProvider(actor.provider) ? normalizeEmail(claimedEmail) : null;
     if (!email) return;
 
-    const emailOwnerId = await this.claimStore.findEmailOwnerId(email);
-    // A concurrent request may already have claimed it for this same user.
-    if (emailOwnerId === actor.canonicalUserId) return;
-    if (emailOwnerId !== null) {
+    let emailOwnerId = await this.claimStore.findEmailOwnerId(email);
+    if (emailOwnerId === null) {
+      if (await this.claimStore.claimEmail(actor.canonicalUserId, email)) {
+        logger.info("Claimed NULL-email canonical row with attested actor email", {
+          event: "auth.email_claimed",
+          provider: actor.provider,
+          user_id: actor.canonicalUserId,
+        });
+        return;
+      }
+      // Another writer may have taken the email after the initial lookup.
+      emailOwnerId = await this.claimStore.findEmailOwnerId(email);
+    }
+    if (emailOwnerId !== null && emailOwnerId !== actor.canonicalUserId) {
       logger.warn("Actor identity and attested email belong to different canonical users", {
         event: "auth.subject_email_collision",
         provider: actor.provider,
         subject: actor.providerUserId,
         subject_user_id: actor.canonicalUserId,
         email_owner_user_id: emailOwnerId,
-      });
-      return;
-    }
-    if (await this.claimStore.claimEmail(actor.canonicalUserId, email)) {
-      logger.info("Claimed NULL-email canonical row with attested actor email", {
-        event: "auth.email_claimed",
-        provider: actor.provider,
-        user_id: actor.canonicalUserId,
       });
     }
   }

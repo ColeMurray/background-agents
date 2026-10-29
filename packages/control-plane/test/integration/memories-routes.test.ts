@@ -333,6 +333,11 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       .selection;
     await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     await act(record.id, "archive", record.currentRevisionId);
+    // The request helper links every seeded user to GitHub; a merge refuses to give one user two
+    // GitHub identities, so drop the merged-in user's fixture identity first.
+    await env.DB.prepare("DELETE FROM user_identities WHERE user_id = ? AND provider = 'github'")
+      .bind(OWNER)
+      .run();
     await mergeUsers(env.DB, { survivorId: OTHER, loserId: OWNER });
     const after = (await new SessionMemorySelectionStore(env.DB).loadSelection("merged-owner"))!
       .selection;

@@ -4,7 +4,7 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/session/session-target-secrets.ts
@@ -15,6 +15,7 @@ relatedCode:
   - packages/shared/src/triggers/types.ts
   - docs/HOW_IT_WORKS.md
   - docs/AUTH.md
+  - docs/MEMORY.md
 ---
 
 This page defines the terms you will meet everywhere else in these docs.
@@ -51,7 +52,7 @@ Learn more: [Follow-ups and stopping](/sessions/follow-ups-and-stopping).
 
 ## Harness
 
-The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (OpenCode by default; Slack users can pick their own in App Home), and automations let you choose OpenCode or Claude Agent.
+The harness is the agent program that runs inside the sandbox. **OpenCode** is the default and runs every enabled model. **Claude Agent** runs Anthropic models only and can use a connected Claude account instead of an API key. **Codex** runs OpenAI models that support it, with an OpenAI API key or a connected ChatGPT account. Every session runs on exactly one harness, chosen at creation and fixed for its life; child sessions inherit it. Slack, GitHub, and Linear launches use the harness chosen in their integration settings (OpenCode by default; Slack users can pick their own in App Home), and automations let you choose any of the three.
 
 Learn more: [Agent harnesses](/models/agent-harnesses).
 
@@ -66,6 +67,12 @@ Learn more: [Choosing a model](/models/choosing-a-model), [Provider accounts](/m
 A managed skill is a reusable instruction file, with optional supporting files, stored in the workspace and assigned to repositories, environments, or everything. At session creation you choose **All applicable**, **None**, or a personal profile; the matching skills are installed into the sandbox before the agent starts and pinned at their current revision for that session.
 
 Learn more: [Managed skills](/configure/managed-skills).
+
+## Memory
+
+A memory is a fact or a directive that carries knowledge between sessions without changing repository files. Memories belong to you personally, to a repository, or to an environment. Directives are given to the agent in full; facts appear as a catalog the agent reads from when relevant. Active memories that apply are pinned when a session is created. Agents can propose new memories, which usually wait for your approval, or for approval by someone who manages the repository or environment.
+
+Learn more: [Memories](/configure/memories).
 
 ## Automation
 

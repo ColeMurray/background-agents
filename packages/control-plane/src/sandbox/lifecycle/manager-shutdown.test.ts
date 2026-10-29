@@ -392,7 +392,7 @@ describe("final graceful shutdown lifecycle integration", () => {
         const row = f.storage.getSandbox()!;
         if (failure === "fatal runtime error") {
           row.last_heartbeat = Date.now();
-          expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+          expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe("sandbox_failed");
         } else {
           vi.advanceTimersByTime(
             failure === "connect timeout"
@@ -471,7 +471,7 @@ describe("final graceful shutdown lifecycle integration", () => {
     const ordinaryResume = f.manager.spawnSandbox();
     await vi.waitFor(() => expect(resumeSandbox).toHaveBeenCalledTimes(2));
     row.last_heartbeat = Date.now();
-    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe("sandbox_failed");
     finishResume(resumed);
     await ordinaryResume;
 
@@ -534,7 +534,7 @@ describe("final graceful shutdown lifecycle integration", () => {
       reason: "shutdown in progress",
     });
     await f.manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
-    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe(false);
+    expect(await f.manager.terminateFailedSandbox("runtime failed")).toBe("no_action");
     expect(await f.manager.handleAlarm()).toBe("no_action");
     await f.manager.spawnSandbox();
     expect(f.provider.stopSandbox).not.toHaveBeenCalled();

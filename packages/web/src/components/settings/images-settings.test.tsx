@@ -65,6 +65,17 @@ afterEach(() => {
 });
 
 describe("ImagesSettings", () => {
+  it("shows a skeleton while the image build feed loads", () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map(), fetcher: () => new Promise(() => {}) }}>
+        <ImagesSettings />
+      </SWRConfig>
+    );
+
+    expect(screen.getByRole("status", { name: "Loading image settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Pre-Built Images" })).not.toBeInTheDocument();
+  });
+
   it("renders ready details from the primary repository provenance entry", () => {
     renderWithFeed({
       units: [{ scopeKind: "repo", scopeId: "acme/web", repositoriesFingerprint: "fp" }],

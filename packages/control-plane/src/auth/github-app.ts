@@ -698,13 +698,13 @@ export async function listRepositoryBranches(
   env?: InstallationTokenCacheBindings
 ): Promise<{ name: string }[]> {
   const token = await getCachedInstallationToken(config, env, { scope: { kind: "all" } });
-  const branches: { name: string }[] = [];
-  let page = 1;
+  const perPage = 100;
+  const maxBranches = 500;
+  const maxPages = maxBranches / perPage;
 
-  // Paginate through branches (100 per page, cap at 500)
-  while (branches.length < 500) {
+  const fetchPage = async (page: number) => {
     const response = await fetchWithTimeout(
-      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
+      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -725,14 +725,48 @@ export async function listRepositoryBranches(
     if (!parsed.success) {
       throw new Error("Failed to list branches: invalid response");
     }
-    const data = parsed.data;
-    branches.push(...data.map((b) => ({ name: b.name })));
+    return { data: parsed.data, link: response.headers.get("Link") };
+  };
 
-    if (data.length < 100) break;
-    page++;
+  const first = await fetchPage(1);
+  const branches = [...first.data];
+  let lastPage: number | undefined;
+
+  for (const link of first.link?.split(",") ?? []) {
+    const match = link.match(/^\s*<([^>]+)>(.*)$/);
+    if (!match || !/;\s*rel\s*=\s*"last"\s*(?:;|$)/i.test(match[2])) continue;
+
+    try {
+      const value = new URL(match[1]).searchParams.get("page");
+      if (!value || !/^\d+$/.test(value)) continue;
+      const page = Number(value);
+      if (Number.isSafeInteger(page) && page >= 1) {
+        lastPage = Math.min(page, maxPages);
+        break;
+      }
+    } catch {
+      // Ignore malformed pagination links and retain sequential pagination.
+    }
   }
 
-  return branches;
+  if (lastPage !== undefined) {
+    // Use only the page number from Link, never its URL or other query parameters.
+    const pages = Array.from({ length: lastPage - 1 }, (_, index) => index + 2);
+    const results = await Promise.all(pages.map(fetchPage));
+    for (const result of results) branches.push(...result.data);
+  } else {
+    let data = first.data;
+    for (
+      let page = 2;
+      data.length >= perPage && page <= maxPages && branches.length < maxBranches;
+      page++
+    ) {
+      data = (await fetchPage(page)).data;
+      branches.push(...data);
+    }
+  }
+
+  return branches.slice(0, maxBranches);
 }
 
 /**

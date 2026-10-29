@@ -1,6 +1,11 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
-import { createAlarmFixture, createMockSandbox, createMockProvider } from "./test-helpers";
+import {
+  EXPIRED_HEARTBEAT_AGE_MS,
+  createAlarmFixture,
+  createMockSandbox,
+  createMockProvider,
+} from "./test-helpers";
 
 describe("cross-path alarm effects", () => {
   afterEach(() => {
@@ -13,7 +18,7 @@ describe("cross-path alarm effects", () => {
     async (trigger) => {
       const now = Date.now();
       const sandbox = createMockSandbox({
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
         last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
         code_server_url: "https://code.test",
         code_server_password: "code-secret",
@@ -136,7 +141,7 @@ describe("cross-path alarm effects", () => {
     async (trigger) => {
       const now = Date.now();
       const sandbox = createMockSandbox({
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now - 10_000,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now - 10_000,
         last_activity:
           trigger === "inactivity" ? now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1 : now,
       });
@@ -184,7 +189,7 @@ describe("cross-path alarm effects", () => {
         vi.setSystemTime(10_000_000);
         const now = Date.now();
         const sandbox = createMockSandbox({
-          last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+          last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
           last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
         });
         const providerObjectId = sandbox.modal_object_id;
@@ -284,7 +289,7 @@ describe("cross-path alarm effects", () => {
       vi.setSystemTime(10_000_000);
       const now = Date.now();
       const sandbox = createMockSandbox({
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
         last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       });
       let captureStarted!: () => void;
@@ -315,7 +320,7 @@ describe("cross-path alarm effects", () => {
         expect(h.shutdown.isHolding()).toBe(true);
         await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
         await expect(h.manager.terminateFailedSandbox("competing fatal report")).resolves.toBe(
-          false
+          "no_action"
         );
         await h.manager.terminateUnresponsiveSandbox("stop_send_failed");
       } finally {
@@ -323,7 +328,13 @@ describe("cross-path alarm effects", () => {
         await pending;
       }
 
-      await expect(pending).resolves.toBe("no_action");
+      // The heartbeat path names the runtime it lost, so the alarm handler
+      // fails the prompt that runtime was serving instead of waiting on the hold.
+      await expect(pending).resolves.toEqual(
+        trigger === "heartbeat"
+          ? { kind: "heartbeat_lost", reason: "The sandbox stopped responding." }
+          : "no_action"
+      );
       expect(h.shutdown.isHolding()).toBe(true);
       await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
       expect(takeSnapshot).toHaveBeenCalledOnce();
@@ -341,7 +352,7 @@ describe("cross-path alarm effects", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         modal_object_id: null,
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
         last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       });
       const initialRow = { ...sandbox };
@@ -506,7 +517,7 @@ describe("cross-path alarm effects", () => {
       const sandbox = createMockSandbox({
         status: "connecting",
         created_at: createdAt,
-        last_heartbeat: trigger === "heartbeat" ? now - 100_000 : now,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
         spawn_failure_count: 2,
         last_spawn_failure: createdAt,
       });
@@ -561,7 +572,7 @@ describe("cross-path alarm effects", () => {
       await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
       expect(sandbox).toEqual(original);
-      expect(h.storage.calls).toEqual(["getSandbox"]);
+      expect(h.storage.calls).toEqual(sandbox ? ["getSandbox", "getSession"] : ["getSandbox"]);
       expect(h.broadcaster.messages).toEqual([]);
       expect(h.alarmScheduler.schedule).not.toHaveBeenCalled();
       expect(h.alarmScheduler.cancel).not.toHaveBeenCalled();

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_images.bundle import PROVIDERS, pack_bundle, plan_image, validate_toolchain
+from sandbox_images.locks import update_locks
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -32,6 +33,17 @@ def test_runtime_user_global_pnpm_commands_are_on_path(provider):
     assert "VIRTUAL_ENV" not in environment
 
 
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_image_bin_directory_heads_the_launch_path(provider):
+    environment = plan_image(REPO_ROOT, provider)["runtimeEnv"]
+    assert environment["PATH"].split(":")[0] == "/opt/openinspect/bin"
+    tools = (REPO_ROOT / "packages/sandbox-images/install/tools.sh").read_text()
+    languages = (REPO_ROOT / "packages/sandbox-images/install/languages.sh").read_text()
+    for command in ("agent-browser", "code-server", "ttyd", "google-chrome", "codex"):
+        assert f"/opt/openinspect/bin/{command}" in tools
+    assert '"/opt/openinspect/bin/$command"' in languages
+
+
 def test_binary_checksum_and_minimum_tool_version_are_required():
     tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
     validate_toolchain(tools)
@@ -42,6 +54,25 @@ def test_binary_checksum_and_minimum_tool_version_are_required():
     del tools["agentBrowserSha256"]
     with pytest.raises(ValueError, match="agent-browser"):
         validate_toolchain(tools)
+
+
+def test_npm_overrides_require_exact_versions():
+    tools = json.loads((REPO_ROOT / "packages/sandbox-images/toolchain.json").read_text())
+    tools["npmOverrides"]["toml"] = "^5.0.1"
+    with pytest.raises(ValueError, match="exact release versions"):
+        validate_toolchain(tools)
+
+
+def test_lock_check_rejects_npm_lock_that_ignores_overrides(tmp_path):
+    package = tmp_path / "packages/sandbox-images"
+    shutil.copytree(REPO_ROOT / "packages/sandbox-images/locks", package / "locks")
+    shutil.copy(REPO_ROOT / "packages/sandbox-images/toolchain.json", package)
+    lock_path = package / "locks/tools/package-lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["packages"]["node_modules/toml"]["version"] = "4.3.0"
+    lock_path.write_text(json.dumps(lock))
+    with pytest.raises(ValueError, match=re.escape("tools npm lock resolves toml to 4.3.0")):
+        update_locks(tmp_path, check=True)
 
 
 def test_codex_pin_matches_protocol_and_requires_checksum():
@@ -116,6 +147,21 @@ def test_vercel_transitive_build_inputs_are_covered(checkout, source):
     path = checkout / source
     path.write_text(path.read_text() + "\n")
     assert plan_image(checkout, "vercel")["buildHash"] != before
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "packages/boat-infra/launcher.sh",
+        "packages/boat-infra/build-template.py",
+        "terraform/modules/boat-infra/scripts/build-snapshot.sh",
+    ],
+)
+def test_boat_hash_covers_launcher_builder_and_deployment(checkout, source):
+    before = plan_image(checkout, "boat")["buildHash"]
+    path = checkout / source
+    path.write_text(path.read_text() + "\n")
+    assert plan_image(checkout, "boat")["buildHash"] != before
 
 
 def test_runtime_assets_are_packed_without_per_file_manifest(checkout, tmp_path):

@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useLayoutEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxEvent } from "@/types/session";
 import { SessionTimeline } from "./session-timeline";
+
+vi.mock("next-themes", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
+
+vi.mock("@/lib/mermaid-renderer", () => ({
+  renderMermaid: async () => ({
+    src: "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20200%20100'%3E%3C/svg%3E",
+    width: 200,
+    height: 100,
+  }),
+}));
 
 const baseTimelineProps = {
   sessionId: "session-1",
@@ -136,6 +146,56 @@ function mockAnimationFrames() {
 }
 
 describe("timeline auto-scrolling", () => {
+  it.each([true, false])(
+    "preserves follow state (%s) after asynchronous Mermaid row growth",
+    async (follow) => {
+      const notifyResize = mockResizeObservers();
+      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+        this: HTMLElement
+      ) {
+        return this.hasAttribute("data-index") ? 180 : 800;
+      });
+      const flushAnimationFrames = mockAnimationFrames();
+      const metrics = {
+        clientHeight: 50,
+        scrollHeight: () =>
+          Number.parseFloat(
+            document.querySelector<HTMLElement>("[data-index]")?.parentElement?.style.height ?? "0"
+          ),
+        scrollTop: 0,
+      };
+      mockTimelineScrollMetrics(metrics);
+      const { container } = render(
+        <SessionTimeline
+          {...baseTimelineProps}
+          isProcessing
+          events={[
+            {
+              type: "token",
+              sandboxId: "sandbox-1",
+              messageId: "diagram",
+              timestamp: 1,
+              content:
+                "```mermaid\nflowchart LR\n A --> " + (follow ? "Follow" : "Reading") + "\n```",
+            },
+          ]}
+        />
+      );
+      const timeline = container.firstElementChild as HTMLDivElement;
+      metrics.scrollTop = follow ? metrics.scrollHeight() - metrics.clientHeight : 0;
+      fireEvent.scroll(timeline);
+      const before = metrics.scrollTop;
+      await screen.findByRole("img", { name: /Mermaid diagram/ });
+      act(() => {
+        notifyResize(timeline.querySelector<HTMLElement>("[data-index]")!, 500);
+        flushAnimationFrames();
+      });
+      expect(metrics.scrollTop).toBe(
+        follow ? metrics.scrollHeight() - metrics.clientHeight : before
+      );
+    }
+  );
+
   it("follows measured row growth through the virtualizer", () => {
     const notifyResize = mockResizeObservers();
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (

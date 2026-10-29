@@ -180,6 +180,7 @@ def test_native_launch_preserves_auth_dependent_first_party_routing(tmp_path):
     # separately prove both auth modes using this built-in provider.
     assert not config.get("openai_base_url")
     assert config["chatgpt_base_url"] == "https://chatgpt.com/backend-api"
+    assert config["features"]["api_key_model_discovery"] is False
     assert config["features"]["shell_snapshot"] is False
     assert config["features"]["shell_snapshot_v2"] is False
 

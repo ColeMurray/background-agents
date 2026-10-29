@@ -38,4 +38,15 @@ describe("memory tool specs", () => {
     expect(harnessMemoryToolName("opencode", "memory_read")).toBe("memory_read");
     expect(harnessMemoryToolName("claude", "memory_read")).toBe("mcp__oi__memory_read");
   });
+
+  it("limits writes to user-taught or hard-won knowledge and reports proposals for review", () => {
+    const write = buildMemorySandboxContract().tools.find((tool) => tool.name === "memory_write")!;
+    expect(write.description).toContain("Most sessions need no write");
+    expect(write.description).toMatch(/user correction or standing preference/);
+    expect(write.description).toMatch(/fixes now in the code/);
+    expect(write.description).toMatch(/proposed.*review/);
+    expect(write.description).toContain("only when the user asks");
+    expect(write.description).toContain("Never store credentials");
+    expect(write.description).toContain("personal-memory opt-out");
+  });
 });

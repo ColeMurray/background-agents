@@ -17,6 +17,7 @@ from .constants import BOOT_EVENTS_FILE_PATH
 from .git_signing import GitSigningError
 from .harness import HarnessStartError
 from .push_operation import PushRejected, PushRequest
+from .reconnect_backoff import ReconnectBackoff
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -25,8 +26,6 @@ if TYPE_CHECKING:
     from .git_signing import GitSigningRuntime
     from .harness import AgentHarness
 
-RECONNECT_BACKOFF_BASE = 2.0
-RECONNECT_MAX_DELAY_SECONDS = 60.0
 BOOT_EVENTS_POLL_SECONDS = 0.25
 
 
@@ -252,7 +251,9 @@ class BootAttach:
 
     async def _initialize_signing_for_attach(self) -> None:
         """Use the transport's retry policy without delaying the early connection."""
-        attempt = 0
+        # Attach happens at each sandbox's own boot time, not on a shared
+        # network event, so these retries need no jitter.
+        backoff = ReconnectBackoff(jitter_ratio=0.0)
         while True:
             try:
                 await self.git_signing.initialize(None)
@@ -260,7 +261,6 @@ class BootAttach:
             except GitSigningError as error:
                 if not error.retryable:
                     raise
-                attempt += 1
-                delay = min(RECONNECT_BACKOFF_BASE**attempt, RECONNECT_MAX_DELAY_SECONDS)
-                self.log.warn("bridge.signing_init_retry", attempt=attempt, delay_s=delay)
+                delay = backoff.next_delay_seconds()
+                self.log.warn("bridge.signing_init_retry", attempt=backoff.attempt, delay_s=delay)
                 await asyncio.sleep(delay)

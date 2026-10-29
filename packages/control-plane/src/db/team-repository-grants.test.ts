@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMigrations } from "../node/migrate";
 import { createNodeSqlDatabase, type NodeSqlDatabase } from "../node/sqlite-database";
 import { TeamStore } from "./teams";
@@ -142,6 +142,33 @@ describe("team repository grant writes", () => {
     await store.add(teamId, named(1));
     await new TeamStore(db).archive(teamId);
     expect(await store.listTeamsForRepository(1)).toEqual([teamId]);
+  });
+
+  it("bulk loads the same owners plus activity, including unowned IDs and installation grants", async () => {
+    const teams = new TeamStore(db);
+    const installation = await teams.create({
+      slug: "installation",
+      name: "Installation",
+      joinPolicy: "open",
+    });
+    await store.add(teamId, named(1));
+    await teams.archive(teamId);
+    const ids = Array.from({ length: 205 }, (_, index) => index + 1);
+    const prepare = vi.spyOn(db, "prepare");
+    const owners = await store.listOwnersForRepositories(ids);
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(owners.size).toBe(205);
+    expect(owners.get(1)).toEqual([{ teamId, active: false }]);
+    expect(owners.get(2)).toEqual([]);
+    prepare.mockRestore();
+    await store.add(installation.id, { kind: "installation" });
+    const withInstallation = await store.listOwnersForRepositories(ids);
+    expect(withInstallation.get(205)).toEqual([{ teamId: installation.id, active: true }]);
+    expect(withInstallation.get(1)?.map((owner) => owner.teamId)).toEqual(
+      await store.listTeamsForRepository(1)
+    );
+    expect(withInstallation.get(1)).toContainEqual({ teamId, active: false });
+    expect(await store.listOwnersForRepositories([])).toEqual(new Map());
   });
 
   it("rolls mutation, version and domain audit back together", async () => {
