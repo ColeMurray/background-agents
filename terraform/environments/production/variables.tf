@@ -182,6 +182,25 @@ variable "github_app_installation_id" {
 # GitHub Bot Configuration
 # =============================================================================
 
+variable "github_reviewer_app_id" {
+  description = "App ID of the second GitHub App whose token submits code reviews. Empty disables it."
+  type        = string
+  default     = ""
+}
+
+variable "github_reviewer_app_private_key" {
+  description = "Reviewer GitHub App private key (PKCS#8 format)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_reviewer_app_installation_id" {
+  description = "Reviewer GitHub App installation ID"
+  type        = string
+  default     = ""
+}
+
 variable "enable_github_bot" {
   description = "Enable the GitHub bot worker. Requires github_webhook_secret and github_bot_username."
   type        = bool
@@ -204,6 +223,33 @@ variable "github_bot_username" {
   description = "GitHub App bot username for @mention detection (e.g., 'my-app[bot]')"
   type        = string
   default     = ""
+}
+
+variable "github_reviewer_username" {
+  description = <<-EOT
+    Login of the reviewer GitHub App (e.g., 'my-reviewer[bot]'). Set together with the
+    three github_reviewer_app_* values: the login decides whether a review may approve, the
+    credentials mint the token that submits it, and either one alone breaks every review.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      (
+        length(trimspace(var.github_reviewer_username)) > 0 &&
+        length(trimspace(var.github_reviewer_app_id)) > 0 &&
+        length(trimspace(var.github_reviewer_app_private_key)) > 0 &&
+        length(trimspace(var.github_reviewer_app_installation_id)) > 0
+        ) || (
+        length(trimspace(var.github_reviewer_username)) == 0 &&
+        length(trimspace(var.github_reviewer_app_id)) == 0 &&
+        length(trimspace(var.github_reviewer_app_private_key)) == 0 &&
+        length(trimspace(var.github_reviewer_app_installation_id)) == 0
+      )
+    )
+    error_message = "Set github_reviewer_username and all three github_reviewer_app_* values together, or leave all four empty."
+  }
 }
 
 variable "github_bot_default_model" {

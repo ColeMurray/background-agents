@@ -17,6 +17,7 @@ import { channelBindingRoutes } from "./channel-bindings";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { githubReviewerTokenRoutes } from "./github-reviewer-token";
 import { githubRoutingRoutes } from "./github-route";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
@@ -77,6 +78,9 @@ export const catalog: readonly RouteModule[] = [
   modelProviderAccountRoutes,
   // Delivery of stored provider secrets to sandboxes (Anthropic)
   providerRuntimeCredentialRoutes,
+
+  // Reviewer GitHub App installation token brokered to review sandboxes
+  githubReviewerTokenRoutes,
 
   // Integration settings
   integrationSettingsRoutes,
