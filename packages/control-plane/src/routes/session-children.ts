@@ -238,6 +238,9 @@ export async function handlePromptChild(
     }
   }
 
+  // The participant identity attributes the follow-up; the account its parent prompt was queued
+  // under, null included, decides whose prompt it counts as.
+  const { promptAccountUserId = null, ...promptAuthor } = author.data;
   // A transport error is ambiguous: the child may have accepted the prompt before the response
   // was lost. Keep the lease until active-state finalization or its expiry rather than undercounting.
   const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
@@ -246,7 +249,8 @@ export async function handlePromptChild(
     body: JSON.stringify({
       parentSessionId: parentId,
       content: parsed.content,
-      author: author.data,
+      author: promptAuthor,
+      promptAccountUserId,
     }),
   });
   if (response.ok) {

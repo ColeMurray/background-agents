@@ -7,6 +7,7 @@
 
 import type { RouteModule } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
+import { actorRoutes } from "./actors";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
@@ -39,6 +40,7 @@ import { teamRoutes } from "./teams";
 import { teamChannelBindingRoutes } from "./team-channel-bindings";
 import { teamSecretsRoutes } from "./team-secrets";
 import { teamSettingsRoutes } from "./settings-teams";
+import { admissionPolicyRoutes } from "./settings-admission-policy";
 
 /** Registration order is the precedence order: each module is mounted where it appears. */
 export const catalog: readonly RouteModule[] = [
@@ -124,4 +126,10 @@ export const catalog: readonly RouteModule[] = [
 
   // Read-only GitHub bot routing hints
   githubRoutingRoutes,
+
+  // Bot actor enrollment with an attested profile
+  actorRoutes,
+
+  // Deployment-additive browser sign-in rules
+  admissionPolicyRoutes,
 ];

@@ -4,7 +4,7 @@ description: How follow-up prompts queue behind a running turn, what Stop does, 
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/web/src/hooks/use-prompt-input.ts
   - packages/web/src/hooks/use-prompt-draft.ts
@@ -29,7 +29,7 @@ You can send a prompt at any time. If the agent is still working on an earlier p
 Prompt 1 (processing) -> Prompt 2 (queued) -> Prompt 3 (queued)
 ```
 
-Both harnesses behave the same way here: OpenCode and Claude Agent hold follow-ups until the running turn finishes. A follow-up never interrupts the agent mid-turn.
+Every harness behaves the same way here: OpenCode, Claude Agent, and Codex hold follow-ups until the running turn finishes. A follow-up never interrupts the agent mid-turn.
 
 ```mermaid
 sequenceDiagram

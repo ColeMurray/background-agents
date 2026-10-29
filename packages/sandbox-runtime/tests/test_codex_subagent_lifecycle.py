@@ -132,6 +132,46 @@ async def test_grandchild_turn_is_interrupted_as_soon_as_it_starts(tmp_path):
     assert interrupts == [("grandchild", "grand-turn")]
 
 
+async def test_prompt_waits_for_refused_grandchild_start_after_parent_completion(tmp_path):
+    harness, _, queue, interrupts = build(tmp_path)
+    for frame in (
+        spawned(),
+        started(CHILD, "child-turn"),
+        spawned("grandchild", thread=CHILD, turn="child-turn"),
+        completed(CHILD, "child-turn"),
+        completed(PARENT, TURN),
+        started("grandchild", "grand-turn"),
+        completed("grandchild", "grand-turn", "interrupted"),
+    ):
+        queue.put_nowait(frame)
+    assert (await asyncio.wait_for(run(harness, []), 5)).success
+    assert interrupts == [("grandchild", "grand-turn")]
+    assert queue.empty()
+
+
+@pytest.mark.parametrize("grandchild_started", [False, True])
+async def test_unsettled_refused_grandchild_is_contained_on_timeout(tmp_path, grandchild_started):
+    harness, client, queue, interrupts = build(tmp_path)
+    harness.limits = PromptLimits(0.05, 30, 5)
+    for frame in (
+        spawned(),
+        started(CHILD, "child-turn"),
+        spawned("grandchild", thread=CHILD, turn="child-turn"),
+        completed(CHILD, "child-turn"),
+        completed(PARENT, TURN),
+    ):
+        queue.put_nowait(frame)
+    if grandchild_started:
+        queue.put_nowait(started("grandchild", "grand-turn"))
+    outcome = await asyncio.wait_for(run(harness, []), 5)
+    assert not outcome.success
+    assert "no output" in outcome.error
+    assert interrupts == ([("grandchild", "grand-turn")] if grandchild_started else [])
+    client.close.assert_awaited_once()
+    assert queue.empty()
+    assert harness._subagents is None
+
+
 async def test_subagent_tool_call_waits_for_its_turn_to_be_projected(tmp_path):
     harness, _, queue, _ = build(tmp_path)
     harness._tools = MagicMock(

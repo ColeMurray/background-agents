@@ -229,7 +229,7 @@ export async function handleReviewComment(
         isPublic: !repo.private,
         filePath: comment.path,
         diffHunk: comment.diff_hunk,
-        commentId: comment.id,
+        commentId: comment.in_reply_to_id ?? comment.id,
         commentActionInstructions: config.commentActionInstructions,
       }),
   });

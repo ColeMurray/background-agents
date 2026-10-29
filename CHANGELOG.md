@@ -2,6 +2,71 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 28, 2026
+
+**Session connections recover automatically.** Transient disconnects now retry without an attempt
+limit, with capped backoff and random jitter, rather than waiting for a click on **Reconnect** after
+a long outage. Each retry waits between half and all of its exponential delay, up to 30 seconds, so
+tabs affected by the same outage do not keep retrying in lockstep. Retries pause while the tab is
+hidden or the browser is offline and resume immediately once the tab is visible and online again.
+Existing connections stay open when a tab is hidden, but an expired authorization lease waits for
+visibility before reconnecting; a hidden session page may therefore stop maintaining sandbox
+presence while you use a separate editor or terminal. Session-expired connections fetch a fresh
+credential, and temporary credential-service failures retry instead of showing an authentication
+error. Actual authentication failures and server-overload closes still require user action.
+
+## October 27, 2026
+
+**GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
+cancelled consent screen, return to the login page with an error and a retry option. If the GitHub
+App lacks **Email addresses: Read-only**, the page names the permission to check and the control
+plane logs GitHub's status. Rate limits show a temporary failure instead.
+
+**Slack automations can trigger on bot messages.** Slack Message automations used to ignore every
+message from a bot or integration, so alerts from monitoring or CI tools could never start a run.
+Turn on **Trigger on bot messages** and add a **Slack User** condition listing the bot IDs (`B…`)
+allowed to trigger the automation; saving is refused without one. That list limits people too, so
+add anyone else who should still trigger it. Only a message's `text` is matched. Bots can start at
+most 10 runs of an automation per hour and never continue an existing session, and Open-Inspect's
+own messages never trigger anything. See [Bot messages](docs/AUTOMATIONS.md#bot-messages).
+
+**Personal memory follows its owner's prompts.** Your personal memories now serve only your own
+prompts, whatever the session's visibility. On someone else's prompt, an Autofix turn, or between
+prompts, the agent can't search, read, or save them, and once someone else has prompted a session it
+stops searching them there for good; the personal directives and catalog loaded when the session
+started still shape it. New team- and workspace-visible sessions you prompt yourself now save the
+personal facts the agent learns right away, until someone else prompts. Automation runs, manual ones
+included, and sessions started from Slack channels, Linear, or GitHub no longer include personal
+memories; Slack DMs work like the web. A child session spawned on someone else's prompt leaves out
+the parent owner's personal memories. Turning off **Use my personal memories in my sessions**, or
+suspending the account, now reaches existing sessions too. Only the owner sees personal items in a
+session's memory sidebar, and reads of personal memories are audited as `memory.personal_read`.
+Sessions prompted earlier keep the personal memories they loaded but stop searching them. See
+[Persistent session memory](docs/MEMORY.md).
+
+## October 26, 2026
+
+**Codex sub-agents appear as tasks.** Most Codex models can spawn sub-agents, but their activity was
+dropped and a prompt could finish while they were still running. Each sub-agent now shows as a task
+with its tool calls grouped beneath it and its final message as the result, as on Claude Agent and
+OpenCode. The prompt finishes only after its sub-agents do, and their usage counts toward the
+prompt's tokens and cost. Sub-agents can use Open-Inspect tools. Nesting is limited to one level,
+and at most four threads, the parent included, run at once.
+
+**Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing
+is now the expected outcome. They save when you ask them to remember something, correct them, state
+a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact the
+repository doesn't record and that would change what the next session does first. Work summaries,
+fixes already in the code, sandbox quirks, and guesses are skipped. See
+[Persistent session memory](docs/MEMORY.md).
+
+**Placement settings for the web app and sessions.** Two optional Terraform inputs let you move
+parts of the request path closer to your users and D1. `web_serverless_region` moves the Vercel web
+functions (default `iad1`) and takes effect after the web app is redeployed.
+`session_do_location_hint` asks Cloudflare to create new session Durable Objects in a chosen region,
+such as `weur` or `apac`; existing sessions stay where they are. Both default to current behavior.
+See [Co-locating the request path](terraform/README.md#co-locating-the-request-path).
+
 ## October 25, 2026
 
 **Boat saved snapshot API.** Base builds, prebuilt image builds, and image cleanup now use Boat's

@@ -4,11 +4,12 @@ description: Short definitions of the terms used across OpenInspect, each linked
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/AUTOMATIONS.md
   - docs/MANAGED_SKILLS.md
+  - docs/MEMORY.md
   - docs/IMAGE_PREBUILD.md
   - docs/AUTH.md
   - docs/CLAUDE_AGENT.md
@@ -22,7 +23,7 @@ relatedCode:
 Definitions of the terms you meet in the OpenInspect app and documentation, in alphabetical order.
 
 **Agent harness**
-The program that runs the model inside the sandbox. OpenInspect offers OpenCode (the default, any model family) and Claude Agent (Anthropic models only). The harness is fixed when a session is created and child sessions inherit it. See [Agent harnesses](/models/agent-harnesses).
+The program that runs the model inside the sandbox. OpenInspect offers OpenCode (the default, any model family), Claude Agent (Anthropic models only), and Codex (OpenAI models that support it). The harness is fixed when a session is created and child sessions inherit it. See [Agent harnesses](/models/agent-harnesses).
 
 **Artifact**
 An output the session records beside its messages: a pull request, a branch, a screenshot, a video, or a preview. Pull requests and branches appear in the sidebar; screenshots and videos appear under Media. See [Reviewing changes](/sessions/reviewing-changes).
@@ -53,6 +54,9 @@ Reusable instructions and supporting files stored in OpenInspect and installed i
 
 **MCP server**
 A Model Context Protocol server the agent can call as a tool source, configured under Settings › MCP Servers as a local command or a remote URL, for all repositories or selected ones. See [MCP servers](/configure/mcp-servers).
+
+**Memory**
+A fact or directive that carries knowledge between sessions, scoped to you personally, a repository, or an environment. Active memories are pinned into new sessions; agent-written memories usually wait for approval under Settings › Memories or Settings › Shared memories. See [Memories](/configure/memories).
 
 **Multi-repository session**
 A session whose sandbox holds several repositories cloned side by side under `/workspace`, either an ad-hoc "Multiple repositories" pick or an environment. Pushes and pull requests are per repository. See [Core concepts](/getting-started/core-concepts).

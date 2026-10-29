@@ -88,6 +88,7 @@ import {
   getEnvironmentSelection,
   getRepositorySelection,
   getTriggerEventTypeError,
+  getTriggerOptionsError,
   resolveEnvironmentSelection,
   resolveRepositorySelection,
   validateSlackTriggerConfig,
@@ -245,6 +246,8 @@ async function handleCreateAutomation(
 
   const eventTypeError = getTriggerEventTypeError(triggerType, body.eventType);
   if (eventTypeError) return error(eventTypeError, 400);
+  const triggerOptionsError = getTriggerOptionsError(triggerType, body.triggerConfig);
+  if (triggerOptionsError) return error(triggerOptionsError, 400);
 
   // Validate conditions
   if (body.triggerConfig) {
@@ -768,6 +771,8 @@ async function handleUpdateAutomation(
     body.eventType !== undefined ? body.eventType : (existing.event_type ?? undefined);
   const eventTypeError = getTriggerEventTypeError(existingTriggerType, effectiveEventType);
   if (eventTypeError) return error(eventTypeError, 400);
+  const triggerOptionsError = getTriggerOptionsError(existingTriggerType, body.triggerConfig);
+  if (triggerOptionsError) return error(triggerOptionsError, 400);
 
   let triggerConfigToValidate = body.triggerConfig;
   if (
@@ -835,9 +840,9 @@ async function handleUpdateAutomation(
     }
   }
 
-  // trigger_config is a single source-interpreted JSON blob (the conditions),
-  // so a PUT replaces it wholesale (null clears it). The caller owns the full
-  // blob; the web form always re-submits the conditions within triggerConfig.
+  // trigger_config is a single source-interpreted JSON blob (the conditions and
+  // any source options, such as `slack`), so a PUT replaces it wholesale (null
+  // clears it). The caller owns the full blob; the web form always re-submits it.
   if (body.triggerConfig === null) {
     updateFields.trigger_config = null;
   } else if (body.triggerConfig !== undefined) {

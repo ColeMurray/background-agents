@@ -45,12 +45,13 @@ describe("GitHubSignInProfileResolver", () => {
       accessToken: "github-access-token",
     });
     expect(result.user).toEqual({
-      id: "583231",
       name: "The Octocat",
       email: "primary@example.com",
       image: "https://github.com/images/error/octocat_happy.gif",
       emailVerified: true,
     });
+    expect(result.data).toBe(await resolveIdentity.mock.results[0].value);
+    expect(result.user).not.toHaveProperty("id");
   });
 
   it("rejects missing access-token evidence before lookup or admission", async () => {

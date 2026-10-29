@@ -1,6 +1,7 @@
 import { isValidTimeZone, validateAutomationCron } from "@open-inspect/shared/cron";
 import {
   conditionRegistry,
+  hasSlackActorIncludeList,
   hasValidSlackChannelCondition,
   triggerSources,
   validateTriggerConditions,
@@ -55,6 +56,8 @@ export interface AutomationTriggerDraft {
   maxRetries: number;
   eventType: string;
   conditions: TriggerCondition[];
+  /** Slack triggers only: let other bots' messages trigger the automation. */
+  includeBotMessages: boolean;
   sentryClientSecret: string;
 }
 
@@ -84,6 +87,7 @@ type AutomationFormInvalidReason =
   | "event-type-required"
   | "invalid-conditions"
   | "slack-channel-required"
+  | "slack-bot-allow-list-required"
   | "sentry-secret-required";
 
 export type AutomationFormEvaluation =
@@ -128,6 +132,7 @@ export function createAutomationFormDraft(
       maxRetries: initialValues.maxRetries ?? 0,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
+      includeBotMessages: initialValues.triggerConfig?.slack?.includeBotMessages === true,
       sentryClientSecret: "",
     },
     agent: {
@@ -295,6 +300,7 @@ export function transitionAutomationTriggerType(
     type: nextType,
     eventType: eventTypeStillValid ? trigger.eventType : "",
     conditions: [],
+    includeBotMessages: false,
   };
 }
 
@@ -308,9 +314,11 @@ function isValidEventType(triggerType: AutomationTriggerType, eventType: string)
 
 function getConditionRequirementError(
   trigger: AutomationTriggerDraft
-): "slack-channel-required" | null {
-  if (trigger.type === "slack_event" && !hasValidSlackChannelCondition(trigger.conditions)) {
-    return "slack-channel-required";
+): "slack-channel-required" | "slack-bot-allow-list-required" | null {
+  if (trigger.type !== "slack_event") return null;
+  if (!hasValidSlackChannelCondition(trigger.conditions)) return "slack-channel-required";
+  if (trigger.includeBotMessages && !hasSlackActorIncludeList(trigger.conditions)) {
+    return "slack-bot-allow-list-required";
   }
   return null;
 }
@@ -453,6 +461,9 @@ function buildSubmissionValues({
   }
 
   values.triggerConfig = { conditions: draft.trigger.conditions };
+  if (draft.trigger.type === "slack_event" && draft.trigger.includeBotMessages) {
+    values.triggerConfig.slack = { includeBotMessages: true };
+  }
   if (draft.trigger.eventType) values.eventType = draft.trigger.eventType;
   if (draft.trigger.type === "sentry" && mode === "create") {
     values.sentryClientSecret = draft.trigger.sentryClientSecret.trim();

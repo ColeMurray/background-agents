@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export async function GET(
@@ -24,6 +25,9 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ owner: string; name: string }> }
 ) {
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
+
   const { owner, name } = await params;
 
   try {

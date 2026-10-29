@@ -1,5 +1,11 @@
 {
   "allowed": {
+    "packages/control-plane/src/db/admission-policy-store.ts": {
+      "json-function": {
+        "occurrences": ["json(", "json(", "json_object(", "json_object("],
+        "reason": "Admission-policy audit before/after state and revision must reflect the same transaction's actor and CAS decision, including concurrent rejected writes. A TypeScript pre-read cannot capture that state. This follows authorization-store's guarded audit pattern; the Postgres form is json_build_object."
+      }
+    },
     "packages/control-plane/src/db/authorization-store.ts": {
       "collate-nocase": {
         "occurrences": ["COLLATE NOCASE"],

@@ -67,7 +67,7 @@ describe("persistent resume keeps the create-time service credentials", () => {
     expect(client.createSandbox).toHaveBeenCalledOnce();
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].setupScript).toBe(BOAT_SETUP_SCRIPT);
     expect(client.startDetachedCommand).toHaveBeenCalledOnce();
-    expect(storage.completeProviderResume).toHaveBeenCalledWith(
+    expect(storage.commitProviderAccess).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         codeServer: { url: "https://sub-8080.on.boat.dev", password: createdCodeServerPassword },
@@ -103,7 +103,7 @@ describe("persistent resume keeps the create-time service credentials", () => {
 
     // Only the resume issues a start command; the create's launch is Boat's.
     expect(client.startDetachedCommand).toHaveBeenCalledOnce();
-    expect(storage.completeProviderResume).toHaveBeenCalledWith(
+    expect(storage.commitProviderAccess).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         codeServer: { url: "https://sub-8080.on.boat.dev", password: expect.any(String) },

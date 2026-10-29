@@ -50,6 +50,7 @@ import {
   reviewRequestLogins,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
+import { reviewCommentPayloadSchema } from "../src/payload-schemas";
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -1333,6 +1334,29 @@ describe("handleReviewComment", () => {
     expect(promptBody.content).toContain("const cache = new Map()");
     expect(promptBody.content).toContain("comments/200/replies");
     expect(promptBody).not.toHaveProperty("authorId");
+  });
+
+  it("replies to the thread's top-level comment when mentioned in a reply", async () => {
+    const env = createMockEnv();
+    // Parse through the webhook schema, as index.ts does, so a field it drops never arrives.
+    // GitHub's replies endpoint only accepts a top-level review comment id.
+    const payload = reviewCommentPayloadSchema.parse({
+      ...reviewCommentPayload,
+      comment: { ...reviewCommentPayload.comment, id: 201, in_reply_to_id: 200 },
+    });
+
+    await handleReviewComment(env, createMockLogger(), payload, "trace-reply");
+
+    // The reaction stays on the comment that mentioned the bot.
+    expect(postReaction).toHaveBeenCalledWith(
+      "test-installation-token",
+      "https://api.github.com/repos/acme/widgets/pulls/comments/201/reactions",
+      "eyes",
+      "Open-Inspect"
+    );
+    const content = promptSendBody(getControlPlaneFetch(env)).content;
+    expect(content).toContain("comments/200/replies");
+    expect(content).not.toContain("comments/201/replies");
   });
 
   it("returns early if no @mention", async () => {

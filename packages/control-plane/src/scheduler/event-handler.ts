@@ -43,6 +43,9 @@ export class AutomationEventHandler {
             automation,
             repositories,
             source: "event",
+            // Absent from older github-bots, and when GitHub's sender is missing
+            // or neither a User nor a Bot.
+            actorKind: event.actorKind ?? "unknown",
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
             eventRepositoryId: event.repositoryId,
@@ -98,6 +101,7 @@ export class AutomationEventHandler {
       const result = await invocations.start({
         automation,
         source: "event",
+        actorKind: "unknown",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: null,

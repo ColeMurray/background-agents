@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
@@ -14,9 +15,9 @@ function markReadRequest(
     Origin: "http://localhost",
   }
 ) {
-  return new Request("http://localhost/api/sessions/inbox/read-state", {
+  return new NextRequest("http://localhost/api/sessions/inbox/read-state", {
     method: "POST",
-    headers,
+    headers: { Cookie: "openinspect.session_token=test-session", ...headers },
     body: JSON.stringify(body),
   });
 }

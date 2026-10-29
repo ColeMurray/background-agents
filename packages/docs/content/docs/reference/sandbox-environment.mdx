@@ -4,7 +4,7 @@ description: What is preinstalled in an OpenInspect sandbox, how the workspace i
 audience: team-owner
 owner: sandbox-runtime
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/sandbox-images/toolchain.json
   - packages/sandbox-images/targets.json
@@ -14,6 +14,8 @@ relatedCode:
   - packages/sandbox-images/install/filesystem.sh
   - packages/sandbox-runtime/src/sandbox_runtime/runtime_config.py
   - packages/sandbox-runtime/src/sandbox_runtime/constants.py
+  - packages/sandbox-runtime/src/sandbox_runtime/codex_stager.py
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/env.py
   - packages/sandbox-runtime/src/sandbox_runtime/claude_stager.py
   - packages/sandbox-runtime/src/sandbox_runtime/credentials/git_credential_helper.py
   - packages/sandbox-images/src/sandbox_images/configuration.py
@@ -48,7 +50,7 @@ Every provider's image installs the shared toolchain with Node.js 24. The Vercel
 | Node.js            | Node.js 24 with `npm` and `npx`, plus `pnpm`, `bun`, and `bunx`                                                                             |
 | Python             | Python 3.12 with `uv` and `uvx`. `python` and `python3` point at the same interpreter                                                       |
 | Browser automation | The `agent-browser` CLI with a headless Chrome for Testing build at `/usr/local/bin/google-chrome`                                          |
-| Agent harnesses    | OpenCode, and the Claude Agent SDK whose wheel bundles the `claude` binary                                                                  |
+| Agent harnesses    | OpenCode; the Claude Agent SDK, whose wheel bundles the `claude` binary; and the pinned Codex CLI under `/opt/openinspect/codex`            |
 | Sandbox tools      | `code-server` (browser VS Code), `ttyd` (web terminal), and Xvfb, Fluxbox, x11vnc, and noVNC for the VNC desktop                            |
 
 Version pins live in `packages/sandbox-images/toolchain.json`. Updating the shared toolchain does not refresh existing prebuilt images; rebuild them from Settings › Images or Settings › Environments when they must pick up new tools.
@@ -62,8 +64,9 @@ Version pins live in `packages/sandbox-images/toolchain.json`. Updating the shar
 | `/workspace/.tunnels.env`                      | Written before `start.sh` when configured tunnel URLs resolve within the 30-second wait. `start.sh` may run without a fresh file on timeout. Plain `KEY=value` lines work with `node --env-file`, `bun --env-file`, or `docker compose --env-file` on `modal-vm`. Not written in build mode. |
 | `.opencode/skills` under the working directory | Where OpenCode discovers skills. The runtime copies its bundled skills here before launch; managed skills are installed into the workspace before the agent starts.                                                                                                                          |
 | `~/.openinspect/claude`                        | The Claude Agent harness's `CLAUDE_CONFIG_DIR`. Managed and bundled skills are staged under `~/.openinspect/claude/skills`. It is outside repositories, but not excluded from Modal filesystem snapshots.                                                                                    |
+| `~/.openinspect/codex`                         | The Codex harness's `CODEX_HOME`. Managed and bundled skills are staged under `~/.openinspect/codex/skills`, and Codex keeps its conversation state here so a restored sandbox can resume the thread. It never holds the OpenAI credential.                                                  |
 
-Repository `.opencode/` and `.claude/` directories are read by their respective harness, the same trust boundary as `.openinspect/setup.sh`.
+Repository `.opencode/` and `.claude/` directories are read by their respective harness, the same trust boundary as `.openinspect/setup.sh`. Codex reads the repository's `AGENTS.md` but refuses to run when the repository has a `.codex/config.toml`.
 
 ## Environment variables
 

@@ -4,13 +4,14 @@ description: Start a session when a pull request, issue, comment, check suite, o
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/integrations/GITHUB.md
   - packages/shared/src/triggers/github/webhook-types.ts
   - packages/shared/src/triggers/github/context.ts
   - packages/shared/src/triggers/github/normalizer.ts
+  - packages/shared/src/triggers/registry.ts
   - packages/web/src/components/automations/condition-labels.ts
   - packages/web/src/components/automations/condition-builder.tsx
   - packages/control-plane/src/routes/automation-validation.ts
@@ -85,7 +86,7 @@ Conditions are optional. When you add any, every condition must pass before a ru
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Head branch   | The PR source branch (or the branch of a check suite or workflow run) matches one of the listed patterns. Globs such as `feature/*` are supported. |
 | Target branch | The PR merge base matches one of the listed patterns (PR and review-comment events only).                                                          |
-| Label         | Any of the listed labels is present on the PR or issue; matching ignores case.                                                                     |
+| Label         | **any of**: at least one listed label is on the PR or issue. **none of**: no listed label is on it. Matching ignores case.                         |
 | Actor         | The GitHub login that triggered the event is in the list (**include**) or not in the list (**exclude**); matching ignores case.                    |
 | Conclusion    | Equals the chosen value.                                                                                                                           |
 | Workflow Name | Equals the workflow name exactly, for example `CI`.                                                                                                |
@@ -96,6 +97,10 @@ Every list-type condition needs at least one entry; an empty one blocks saving.
 ### Draft pull requests
 
 Add **Draft** set to **Not draft** to PR Opened and PR Updated automations to skip draft pull requests. Open-Inspect checks the condition before it starts a session, so a skipped draft costs nothing. Add a **PR Ready for Review** automation with the same instructions so the pull request still gets a run when the author marks it ready without a new push.
+
+### Skip pull requests by label
+
+Add **Label** set to **none of** to keep an automation off pull requests that carry a given label, for example `dependencies` or a translation bot's label. A pull request or issue with no labels passes a **none of** condition and fails an **any of** condition.
 
 ### Workflow Run Completed
 

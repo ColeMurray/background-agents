@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS session (
 CREATE TABLE IF NOT EXISTS participants (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
-  canonical_user_id TEXT,                           -- D1 users.id for cosmetic profile joins only
+  canonical_user_id TEXT,                           -- D1 users.id of the participant's account; NULL for unmapped integration authors
   scm_user_id TEXT,                                 -- SCM numeric ID
   scm_login TEXT,                                   -- SCM username
   scm_email TEXT,                                   -- For git commit attribution
@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS participants (
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   author_id TEXT NOT NULL,
+  author_canonical_user_id TEXT,                    -- Author's account when queued; NULL for Autofix turns and authors without one
   content TEXT NOT NULL,
   source TEXT NOT NULL,                             -- 'web', 'slack', 'extension', 'github'
   model TEXT,                                       -- LLM model for this specific message (per-message override)
@@ -769,6 +770,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 56,
     description: "Retain rejected sandbox startup cleanup intent",
     run: "ALTER TABLE sandbox ADD COLUMN startup_rejected INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    id: 57,
+    description: "Record each prompt author's account as it was when the prompt was queued",
+    run: "ALTER TABLE messages ADD COLUMN author_canonical_user_id TEXT",
   },
 ];
 

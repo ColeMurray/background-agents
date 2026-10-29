@@ -235,6 +235,7 @@ describe("MessageRepository", () => {
     repository.createMessage({
       id: "msg-1",
       authorId: "p-1",
+      authorCanonicalUserId: "user-1",
       content: "Hello",
       source: "web",
       model: "claude-sonnet-4",
@@ -247,6 +248,7 @@ describe("MessageRepository", () => {
     expect(mock.calls[0].params).toEqual([
       "msg-1",
       "p-1",
+      "user-1",
       "Hello",
       "web",
       "claude-sonnet-4",
@@ -273,6 +275,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -296,6 +299,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -319,6 +323,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -336,6 +341,7 @@ describe("MessageRepository", () => {
     expect(inserted?.params).toEqual([
       "msg-new",
       "p-1",
+      null,
       "Fix feedback",
       "github",
       null,
@@ -360,6 +366,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -376,9 +383,43 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  it("rejects malformed persisted session budget rows during Autofix admission", () => {
+    mock.setData(`SELECT budget_exhausted FROM session LIMIT 1`, [{ budget_exhausted: "1" }]);
+    const authorId = vi.fn(() => "p-1");
+
+    expect(() =>
+      repository.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId,
+          content: "Fix feedback",
+          source: "github",
+          status: "pending",
+          createdAt: 2000,
+        },
+        feedbackKey: "github:review:1",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 3,
+        windowStart: 1000,
+        sessionClosed: false,
+      })
+    ).toThrow(SessionStorageIntegrityError);
+    expect(authorId).not.toHaveBeenCalled();
+  });
+
   it("fails closed when cancel sees a malformed persisted status", () => {
     mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
       { status: "queued", source: "web", callback_context: null },
+    ]);
+
+    expect(repository.cancelPendingMessage("msg-1")).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("fails closed when cancel sees a partial persisted message row", () => {
+    mock.setData(`SELECT status, source, callback_context FROM messages WHERE id = ?`, [
+      { status: "pending", callback_context: null },
     ]);
 
     expect(repository.cancelPendingMessage("msg-1")).toBe(false);
@@ -393,6 +434,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -450,6 +492,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -474,6 +517,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -503,6 +547,7 @@ describe("MessageRepository", () => {
         message: {
           id: "msg-new",
           authorId: "p-1",
+          authorCanonicalUserId: null,
           content: "Fix feedback",
           source: "github",
           status: "pending",
@@ -763,14 +808,17 @@ describe("MessageRepository", () => {
     mock.setData(`SELECT callback_context, source FROM messages WHERE id = ?`, [
       { callback_context: '{"channel":"C123"}', source: "slack" },
     ]);
-    mock.setData(`SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`, [
-      { author_id: "p-1" },
+    mock.setData(`SELECT author_id, source FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { author_id: "p-1", source: "automation" },
     ]);
     expect(repository.getMessageCallbackContext("msg-1")).toEqual({
       callback_context: '{"channel":"C123"}',
       source: "slack",
     });
-    expect(repository.getProcessingMessageAuthor()).toEqual({ author_id: "p-1" });
+    expect(repository.getProcessingMessageAuthor()).toEqual({
+      author_id: "p-1",
+      source: "automation",
+    });
   });
 
   it("reads nullable callback context rows", () => {
@@ -795,8 +843,8 @@ describe("MessageRepository", () => {
   });
 
   it("rejects malformed persisted processing author rows", () => {
-    mock.setData(`SELECT author_id FROM messages WHERE status = 'processing' LIMIT 1`, [
-      { author_id: null },
+    mock.setData(`SELECT author_id, source FROM messages WHERE status = 'processing' LIMIT 1`, [
+      { author_id: null, source: "web" },
     ]);
 
     expect(() => repository.getProcessingMessageAuthor()).toThrow(SessionStorageIntegrityError);
@@ -825,5 +873,39 @@ describe("MessageRepository", () => {
       expect(repository.raiseReportedCost("missing", 2.5)).toBe(0);
       expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
     });
+
+    it("rejects malformed persisted reported-cost rows", () => {
+      mock.setMatchingData(/SELECT reported_cost_usd FROM messages/, [{ reported_cost_usd: "1" }]);
+
+      expect(() => repository.raiseReportedCost("msg-1", 2.5)).toThrow(
+        SessionStorageIntegrityError
+      );
+      expect(mock.calls.filter((c) => c.query.includes("SET reported_cost_usd"))).toHaveLength(0);
+    });
   });
+});
+
+describe("SessionAttachmentRepository", () => {
+  let mock: ReturnType<typeof createMockSql>;
+  let repository: SessionAttachmentRepository;
+
+  beforeEach(() => {
+    mock = createMockSql();
+    repository = new SessionAttachmentRepository(mock.sql);
+  });
+
+  it("parses attachment total rows", () => {
+    mock.setMatchingData(/SELECT COUNT\(\*\) as count/, [{ count: 2, total_bytes: 512 }]);
+
+    expect(repository.getTotals()).toEqual({ count: 2, totalBytes: 512 });
+  });
+
+  it.each([{ count: "2" }, { count: 1, total_bytes: Number.POSITIVE_INFINITY }])(
+    "rejects malformed or partial attachment total rows: %j",
+    (row) => {
+      mock.setMatchingData(/SELECT COUNT\(\*\) as count/, [row]);
+
+      expect(() => repository.getTotals()).toThrow(SessionStorageIntegrityError);
+    }
+  );
 });

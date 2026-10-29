@@ -195,6 +195,7 @@ export class AutomationSlackService {
       return buildSlackContextBlock({
         channelLabel: slackChannelLabel(event.channelId, event.channelName),
         actorUserId: event.actorUserId,
+        botId: event.botId,
         permalink: event.permalink,
         text: event.text,
         threadContext,

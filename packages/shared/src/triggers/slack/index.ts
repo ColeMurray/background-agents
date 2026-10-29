@@ -10,10 +10,11 @@ export {
   slackChannelLabel,
   SLACK_TEXT_MAX_LENGTH,
 } from "./normalizer";
-export type { SlackMessageInput, SlackChannelMeta } from "./normalizer";
+export type { SlackMessageAuthor, SlackMessageInput, SlackChannelMeta } from "./normalizer";
 export {
   slackConditions,
   hasValidSlackChannelCondition,
+  hasSlackActorIncludeList,
   normalizeSlackChannelConditions,
   parseSlackChannelCondition,
   REGEX_PATTERN_MAX_LENGTH,
