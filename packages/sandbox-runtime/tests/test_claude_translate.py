@@ -174,8 +174,17 @@ def test_conversation_reset_during_injected_turn_updates_cost_and_resumable_sess
         interrupted=False,
     )
     assert injected.events == [] and injected.outcome is None and injected.result is None
-    assert not state.injected and translator.session_id == "native"
-    assert translator.cost_baseline == state.cost_baseline == 0.0
+    # The skipped result is the first to carry the new resumable id.
+    assert not state.injected and translator.session_id == "new-native"
+    assert not translator._session_rotated
+    assert next(
+        record for record in injected.records if record.event == "claude.session.rotated"
+    ).fields == {
+        "agent_session_id": "new-native",
+        "previous_session_id": "native",
+    }
+    assert translator.cost_baseline == 0.0
+    assert state.cost_baseline == state.injected_cost == pytest.approx(0.05)
 
     human = translator.translate(
         state,
@@ -187,13 +196,8 @@ def test_conversation_reset_during_injected_turn_updates_cost_and_resumable_sess
     assert human.events[0]["messageCostUsd"] == pytest.approx(0.2)
     assert len(human.events) == 1
     assert translator.session_id == human.agent_session_id == "new-native"
-    assert not translator._session_rotated and translator.cost_baseline == pytest.approx(0.2)
-    assert next(
-        record for record in human.records if record.event == "claude.session.rotated"
-    ).fields == {
-        "agent_session_id": "new-native",
-        "previous_session_id": "native",
-    }
+    assert translator.cost_baseline == pytest.approx(0.2)
+    assert not any(record.event == "claude.session.rotated" for record in human.records)
 
 
 def test_task_parent_survives_a_new_turn_state_until_terminal_update():
