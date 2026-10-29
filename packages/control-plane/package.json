@@ -17,7 +17,7 @@
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1150.0",
+    "@aws-sdk/client-s3": "^3.1155.0",
     "@cloudflare/workers-types": "^4.20241230.0",
     "@hono/node-server": "^2.1.4",
     "@open-inspect/shared": "file:../shared",
@@ -35,6 +35,6 @@
     "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.12",
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.151.3"
   }
 }
