@@ -67,7 +67,8 @@ function PersonalMemoryDefault() {
 
 /**
  * Combine owner-only memory management with the personal memory preference. The preference is
- * available to every session creator; only the catalog requires `memories.manage_own`.
+ * available to every session creator so anyone can opt out; only the catalog requires
+ * `memories.manage_own`, and sessions use personal memory only while the owner holds it.
  */
 export function MemoriesSettings() {
   const { hasPermission } = useCurrentUserAuthorization();

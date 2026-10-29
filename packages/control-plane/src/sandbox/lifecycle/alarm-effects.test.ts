@@ -344,100 +344,93 @@ describe("cross-path alarm effects", () => {
     });
   });
 
-  it("characterizes inherited inactivity retirement and absent-handle retargeting", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000_000);
-    const now = Date.now();
-    const sandbox = createMockSandbox({
-      modal_object_id: null,
-      last_heartbeat: now,
-      last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
-    });
-    const initialRow = { ...sandbox };
-    const replacement = createMockSandbox({
-      modal_sandbox_id: "sandbox-replacement",
-      modal_object_id: "modal-obj-replacement",
-      created_at: now,
-      last_heartbeat: now,
-      last_activity: now,
-      code_server_url: "https://code.test/replacement",
-      code_server_password: "replacement-code-secret",
-      vnc_url: "https://vnc.test/replacement",
-      vnc_password: "replacement-vnc-secret",
-      ttyd_url: "https://terminal.test/replacement",
-      ttyd_token: "replacement-terminal-secret",
-      tunnel_urls: '{"3000":"https://preview.test/replacement"}',
-    });
-    const stopSandbox = vi.fn(async () => ({ success: true }));
-    const h = createAlarmFixture(
-      sandbox,
-      createMockProvider({
-        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
-        stopSandbox,
-      })
-    );
-    vi.mocked(h.storage.getSandbox).mockImplementation(() => ({ ...sandbox }));
-    let shutdownStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      shutdownStarted = resolve;
-    });
-    let releaseShutdown!: () => void;
-    const shutdownGate = new Promise<void>((resolve) => {
-      releaseShutdown = resolve;
-    });
-    const requestShutdown = vi.spyOn(h.shutdown, "requestShutdown").mockImplementation(async () => {
-      shutdownStarted();
-      await shutdownGate;
-      return "unmanaged";
-    });
-    const pending = h.manager.handleAlarm();
-    try {
-      await started;
-      const alarmRow = vi.mocked(h.storage.getSandbox).mock.results[0].value;
-      expect(alarmRow).not.toBe(sandbox);
-      expect(alarmRow).toEqual(initialRow);
-      expect(requestShutdown).toHaveBeenCalledExactlyOnceWith("inactivity_timeout");
-      expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
-      expect(h.broadcaster.messages).toEqual([]);
-      expect(stopSandbox).not.toHaveBeenCalled();
-      Object.assign(sandbox, replacement);
-
-      // Inherited gaps, not safety guarantees: retirement is unscoped and an absent handle falls back.
-      releaseShutdown();
-      await expect(pending).resolves.toBe("no_action");
-
-      expect(alarmRow).toEqual(initialRow);
-      expect(h.storage.getSandbox()).not.toBe(alarmRow);
-      expect(sandbox).toEqual({
-        ...replacement,
-        status: "stopped",
-        code_server_url: null,
-        vnc_url: null,
-        ttyd_url: null,
-        tunnel_urls: null,
+  it.each(["heartbeat", "inactivity"] as const)(
+    "does not retire or retarget a replacement after %s shutdown admission yields",
+    async (trigger) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        modal_object_id: null,
+        last_heartbeat: trigger === "heartbeat" ? now - EXPIRED_HEARTBEAT_AGE_MS : now,
+        last_activity: now - DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       });
-      expect(stopSandbox).toHaveBeenCalledExactlyOnceWith({
-        providerObjectId: replacement.modal_object_id,
-        sessionId: "test-session",
-        reason: "inactivity_timeout",
-        intent: "preserve",
-        signal: undefined,
-        generationCreatedAtMs: initialRow.created_at,
+      const initialRow = { ...sandbox };
+      const replacement = createMockSandbox({
+        modal_sandbox_id: "sandbox-replacement",
+        modal_object_id: "modal-obj-replacement",
+        created_at: now,
+        last_heartbeat: now,
+        last_activity: now,
+        code_server_url: "https://code.test/replacement",
+        code_server_password: "replacement-code-secret",
+        vnc_url: "https://vnc.test/replacement",
+        vnc_password: "replacement-vnc-secret",
+        ttyd_url: "https://terminal.test/replacement",
+        ttyd_token: "replacement-terminal-secret",
+        tunnel_urls: '{"3000":"https://preview.test/replacement"}',
       });
-      expect(h.broadcaster.messages).toEqual([
-        { type: "sandbox_access_changed" },
-        { type: "sandbox_status", status: "stopped" },
-      ]);
-      expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
-      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
-      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
-    } finally {
-      releaseShutdown();
-      await pending;
+      const stopSandbox = vi.fn(async () => ({ success: true }));
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: {
+            supportsExplicitStop: true,
+            supportsPersistentResume: true,
+            snapshotRequiresShutdown: trigger === "heartbeat",
+          },
+          stopSandbox,
+        })
+      );
+      vi.mocked(h.storage.getSandbox).mockImplementation(() => ({ ...sandbox }));
+      let shutdownStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        shutdownStarted = resolve;
+      });
+      let releaseShutdown!: () => void;
+      const shutdownGate = new Promise<void>((resolve) => {
+        releaseShutdown = resolve;
+      });
+      const requestShutdown = vi
+        .spyOn(h.shutdown, "requestShutdown")
+        .mockImplementation(async () => {
+          shutdownStarted();
+          await shutdownGate;
+          return "unmanaged";
+        });
+      const pending = h.manager.handleAlarm();
+      try {
+        await started;
+        const alarmRow = vi.mocked(h.storage.getSandbox).mock.results[0].value;
+        expect(alarmRow).not.toBe(sandbox);
+        expect(alarmRow).toEqual(initialRow);
+        expect(requestShutdown).toHaveBeenCalledExactlyOnceWith(
+          ...(trigger === "heartbeat" ? ["heartbeat_timeout", "emergency"] : ["inactivity_timeout"])
+        );
+        expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
+        expect(h.broadcaster.messages).toEqual([]);
+        expect(stopSandbox).not.toHaveBeenCalled();
+        Object.assign(sandbox, replacement);
+
+        releaseShutdown();
+        await expect(pending).resolves.toBe("no_action");
+
+        expect(alarmRow).toEqual(initialRow);
+        expect(h.storage.getSandbox()).not.toBe(alarmRow);
+        expect(sandbox).toEqual(replacement);
+        expect(stopSandbox).not.toHaveBeenCalled();
+        expect(h.broadcaster.messages).toEqual([]);
+        expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+        expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+        expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      } finally {
+        releaseShutdown();
+        await pending;
+      }
     }
-  });
+  );
 
-  it("characterizes inherited connect-timeout failure publication on a replacement", async () => {
+  it("does not publish a connect-timeout failure on a replacement", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000_000);
     const now = Date.now();
@@ -494,23 +487,14 @@ describe("cross-path alarm effects", () => {
       });
       Object.assign(sandbox, replacement);
 
-      // The old failure still publishes and persists after replacement; this is inherited behavior.
+      // Completion of A's stop must leave B's row and client status alone.
+      const publications = [...h.broadcaster.messages];
       releaseStop();
       await expect(pending).resolves.toBe("sandbox_failed");
 
-      const error =
-        "Sandbox failed to connect within the allowed time. Queued prompts will be retried on a fresh sandbox.";
-      expect(sandbox).toEqual({
-        ...replacement,
-        last_spawn_error: error,
-        last_spawn_error_at: now,
-      });
-      expect(h.storage.setLastSpawnError).toHaveBeenCalledExactlyOnceWith(error, now);
-      expect(h.broadcaster.messages).toEqual([
-        { type: "sandbox_access_changed" },
-        { type: "sandbox_status", status: "failed" },
-        { type: "sandbox_error", error },
-      ]);
+      expect(sandbox).toEqual(replacement);
+      expect(h.storage.setLastSpawnError).not.toHaveBeenCalled();
+      expect(h.broadcaster.messages).toEqual(publications);
     } finally {
       releaseStop();
       await pending;

@@ -1,3 +1,4 @@
+import { rolePermissionFragment } from "../authorization/permission-sql";
 import { unhandled } from "../memory/errors";
 import type { MemoryPartition } from "../memory/partition";
 import type { MemoryActor } from "../memory/types";
@@ -5,7 +6,11 @@ import { sql, type SqlFragment } from "./sql-fragment";
 
 type AgentActor = Extract<MemoryActor, { kind: "agent" }>;
 
-function sessionReaches(partition: MemoryPartition): SqlFragment {
+/**
+ * The session still reaches the partition. Personal writes also need the owner (bound to
+ * `s.user_id`) to keep their preference on and still hold `memories.manage_own`.
+ */
+function sessionMayWrite(partition: MemoryPartition): SqlFragment {
   switch (partition.type) {
     case "personal":
       // The owner's preference is live: once they turn personal memory off, no write lands.
@@ -14,7 +19,9 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
           AND manifest.personal_owner_user_id = ${partition.userId}
           AND NOT EXISTS (SELECT 1 FROM memory_preferences preference
             WHERE preference.user_id = manifest.personal_owner_user_id
-              AND preference.include_personal_memories = 0))`;
+              AND preference.include_personal_memories = 0))
+        AND EXISTS (SELECT 1 FROM user_role_assignments ura JOIN roles r ON r.id = ura.role_id
+          WHERE ura.user_id = s.user_id AND ${rolePermissionFragment("memories.manage_own")})`;
     case "repository":
       return sql`EXISTS (SELECT 1 FROM session_repositories sr
         WHERE sr.session_id = s.id AND sr.repo_id = ${partition.repoId})`;
@@ -28,8 +35,9 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
 /**
  * Commit-time preconditions for an agent insert: facts about the writing session itself, which
  * a delayed tool call must not outlive. The session is still live, its owner is not suspended,
- * and the session still reaches the target partition (for personal memory, with the owner's
- * preference still on).
+ * and the session still reaches the target partition. For personal writes the owner's preference
+ * is still on and they still hold `memories.manage_own` (personal facts can auto-save without
+ * review, so a revocation racing the insert must not leave memories the owner cannot see).
  *
  * Repository/team grants are deliberately not re-encoded here. They are checked immediately
  * before the write and rechecked on every read, and agent writes to shared scopes are proposals
@@ -39,7 +47,7 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
   return sql`EXISTS (SELECT 1 FROM sessions s
     JOIN users u ON u.id = s.user_id AND u.suspended_at IS NULL
     WHERE s.id = ${actor.sessionId} AND s.user_id = ${actor.userId}
-      AND s.status IN ('created', 'active') AND ${sessionReaches(partition)})`;
+      AND s.status IN ('created', 'active') AND ${sessionMayWrite(partition)})`;
 }
 
 /**

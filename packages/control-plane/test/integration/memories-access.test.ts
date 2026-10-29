@@ -64,6 +64,7 @@ describe("memory shared-scope authorization", () => {
         "environments.read",
         "environments.manage",
         "environments.settings.manage",
+        "memories.manage_own",
       ]);
     }
     await seedTeam("engineering", [[MEMBER, "member"]]);
@@ -358,19 +359,18 @@ describe("memory shared-scope authorization", () => {
 
   /**
    * Commit-time fencing covers facts about the writing session (liveness, owner suspension,
-   * personal auto-save eligibility). Grant changes are not re-encoded in SQL: they are checked
-   * just before the write and on every later read, and shared-scope agent writes are proposals.
+   * personal auto-save eligibility, and for personal writes the owner's preference and
+   * `memories.manage_own`). Grant changes are not re-encoded in SQL: they are checked just before
+   * the write and on every later read, and shared-scope agent writes are proposals.
    */
   async function raceWrite(change: string, during: () => Promise<unknown>) {
     const sessionId = `race-${change.replaceAll(" ", "-")}`;
-    const workspaceOrPersonal = ["workspace membership removal", "personal failure"].includes(
-      change
-    );
+    const personal = change.startsWith("personal ");
+    const workspaceOrPersonal = personal || change === "workspace membership removal";
     await seedMemorySession(sessionId, {
       userId: MEMBER,
       ownerTeamId: workspaceOrPersonal ? null : "engineering",
-      visibility:
-        change === "personal failure" ? "private" : workspaceOrPersonal ? "workspace" : "team",
+      visibility: personal ? "private" : workspaceOrPersonal ? "workspace" : "team",
       repositories: [repo],
       environmentId: workspaceOrPersonal ? null : "dev",
     });
@@ -384,16 +384,15 @@ describe("memory shared-scope authorization", () => {
       author,
       options
     ) {
-      if (change === "personal failure") expect(options?.personalAutoSaveEligible).toBe(true);
+      if (personal) expect(options?.personalAutoSaveEligible).toBe(true);
       await during();
       return original.call(this, input, author, options);
     });
-    const scope =
-      change === "personal failure"
-        ? "personal"
-        : change === "environment transfer"
-          ? "environment"
-          : "repository";
+    const scope = personal
+      ? "personal"
+      : change === "environment transfer"
+        ? "environment"
+        : "repository";
     const sandbox = (path: string, body: object) =>
       routeRequest(
         new Request(`https://test.local/sessions/${sessionId}/sandbox-memory${path}`, {
@@ -410,34 +409,45 @@ describe("memory shared-scope authorization", () => {
     };
   }
 
-  it.each(["personal failure", "suspension", "failed", "completed", "cancelled", "archived"])(
-    "rejects a write when %s wins after route authorization",
-    async (change) => {
-      const { response } = await raceWrite(change, () =>
-        change === "personal failure"
-          ? env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
-              .bind(`race-${change.replaceAll(" ", "-")}`)
+  it.each([
+    "personal failure",
+    "personal revocation",
+    "suspension",
+    "failed",
+    "completed",
+    "cancelled",
+    "archived",
+  ])("rejects a write when %s wins after route authorization", async (change) => {
+    const { response } = await raceWrite(change, () =>
+      change === "personal failure"
+        ? env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
+            .bind(`race-${change.replaceAll(" ", "-")}`)
+            .run()
+        : change === "personal revocation"
+          ? env.DB.prepare(
+              "DELETE FROM role_permissions WHERE role_id = ? AND permission_id = 'memories.manage_own'"
+            )
+              .bind(`role_custom_${MEMBER}`)
               .run()
           : change === "suspension"
             ? env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run()
             : env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
                 .bind(change, `race-${change}`)
                 .run()
-      );
-      expect(response.status).toBe(409);
-      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
-        count: 0,
-      });
-      expect(
-        await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()
-      ).toEqual({ count: 0 });
-      expect(
-        await env.DB.prepare(
-          "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
-        ).first()
-      ).toEqual({ count: 0 });
-    }
-  );
+    );
+    expect(response.status).toBe(409);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
+      count: 0,
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()).toEqual({
+      count: 0,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
+      ).first()
+    ).toEqual({ count: 0 });
+  });
 
   it.each([
     [

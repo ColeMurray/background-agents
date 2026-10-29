@@ -4,7 +4,7 @@ description: Keep facts and standing instructions between sessions, review what 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-27"
+lastReviewed: "2026-10-28"
 relatedCode:
   - docs/MEMORY.md
   - packages/shared/src/types/memories.ts
@@ -87,6 +87,8 @@ Your personal memories work for you, not for whoever is using a session. Setting
 Session visibility changes none of this: a team- or workspace-visible session you prompt yourself uses your personal memories exactly as a private one does.
 
 What this does not stop: anything the agent writes from your personal memories appears in the session, where everyone who can see it can read it. The directives and catalog loaded at the start shape every prompt, and they sit in the sandbox's files, where anyone who opens its terminal can read them. Anyone who can open a session's terminal, editor, or desktop can do what its agent can, so while your prompts run they can also search and read the rest of your personal memories and save new facts, just as they can use the session's other credentials.
+
+Sessions use your personal memories only while you have `memories.manage_own`, so agents never save memories you cannot review. If your role loses it, new sessions don't include your personal memories, and agents can no longer search, read, or save them. Unlike turning the switch off, it also leaves the personal directives and catalog out of an existing session's context the next time its sandbox starts; the session keeps running without them.
 
 ## How agent proposals are approved
 

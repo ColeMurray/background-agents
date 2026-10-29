@@ -287,6 +287,7 @@ search stays off there and in its children for good, because that prompt can lea
 in the sandbox. The session's memory sidebar lists personal items only for the owner. New automation
 runs, manual ones included, and new sessions started from Slack channels, Linear, or GitHub don't
 include personal memory. Sessions started earlier keep what they pinned but no longer read it live.
+Sessions also leave personal memory out while its owner lacks `memories.manage_own`.
 
 Two things still reach beyond the owner's prompts. The personal directives and catalog pinned when
 the session started shape every prompt, whoever wrote it, though they give no one else's prompt live

@@ -340,6 +340,9 @@ describe("personal memory follows the session owner's prompts", () => {
     const preferences = new MemoryPreferenceStore(env.DB);
 
     await preferences.set(OWNER, { includePersonalMemories: false });
+    expect(((await (await sandbox("")).json()) as { rendered: string }).rendered).toContain(
+      fact.title
+    );
     expect((await sandbox(`/${record.id}`)).status).toBe(404);
     expect(await searchIds(sandbox)).toEqual([]);
     expect((await sandbox("", "POST", personalWrite)).status).toBe(403);

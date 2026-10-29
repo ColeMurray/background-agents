@@ -70,6 +70,7 @@ describe("session memory discovery", () => {
       "repositories.use",
       "repositories.read",
       "environments.read",
+      "memories.manage_own",
     ]);
     await seedTeam("engineering", [[OWNER, "member"]]);
     await seedGrant("engineering", {
@@ -252,6 +253,32 @@ describe("session memory discovery", () => {
     expect((await excluded({ query: "needle", scopeType: "environment" })).status).toBe(403);
   });
 
+  it("leaves the pinned personal store out once its owner loses memories.manage_own", async () => {
+    await seedSearchFacts(env.DB, OWNER, [
+      { id: "mine", title: "needle", description: "PRIVATE_PERSONAL_SENTINEL" },
+      { id: "shared", title: "needle", partition: repoPartition },
+    ]);
+    const call = await sandbox("revoked-personal", { repositories: [repo] });
+    expect(await (await call(null, "")).text()).toContain("PRIVATE_PERSONAL_SENTINEL");
+    expect(await (await call({ query: "needle" })).json()).toEqual(
+      expect.objectContaining({
+        results: expect.arrayContaining([expect.objectContaining({ id: "mine" })]),
+      })
+    );
+    await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
+      .bind(`role_custom_${OWNER}`, "memories.manage_own")
+      .run();
+    const context = await call(null, "");
+    expect(context.status).toBe(200);
+    expect(await context.text()).not.toContain("PRIVATE_PERSONAL_SENTINEL");
+    expect(await (await call({ query: "needle" })).json()).toEqual({
+      results: [expect.objectContaining({ id: "shared" })],
+      hasMore: false,
+    });
+    expect((await call({ query: "needle", scopeType: "personal" })).status).toBe(403);
+    expect((await call(null, "/mine")).status).toBe(404);
+  });
+
   it.each(["before", "during"])(
     "denies repository results when grants are revoked %s search",
     async (when) => {
@@ -283,6 +310,27 @@ describe("session memory discovery", () => {
       expect(await response.text()).not.toContain("PRIVATE_SCOPE_SENTINEL");
     }
   );
+
+  it("denies personal results when memories.manage_own is revoked during search", async () => {
+    await seedSearchFacts(env.DB, OWNER, [
+      { id: "mine", title: "needle", description: "PRIVATE_PERSONAL_SENTINEL" },
+    ]);
+    const call = await sandbox("revoked-personal-during");
+    const original = LexicalFactIndex.prototype.search;
+    const search = vi
+      .spyOn(LexicalFactIndex.prototype, "search")
+      .mockImplementationOnce(async function (this: LexicalFactIndex, ...args) {
+        const result = await original.apply(this, args);
+        await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
+          .bind(`role_custom_${OWNER}`, "memories.manage_own")
+          .run();
+        return result;
+      });
+    const response = await call({ query: "needle", scopeType: "personal" });
+    expect(search).toHaveBeenCalledOnce();
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("PRIVATE_PERSONAL_SENTINEL");
+  });
 
   it("rejects malformed searches and does not accept identity overrides", async () => {
     const call = await sandbox("invalid");
