@@ -97,7 +97,6 @@ export class PullRequestHandler {
     }
 
     const promptingParticipant = promptingParticipantResult.participant;
-    const promptSource = promptingParticipantResult.source;
 
     // Base-branch defaulting happens in the service (requested > target
     // repo's base branch > repo default), so the raw request value passes
@@ -111,8 +110,7 @@ export class PullRequestHandler {
         repoOwner: target.repoOwner,
         repoName: target.repoName,
         promptingUserId: promptingParticipant.user_id,
-        resolvePromptingAuth: () =>
-          this.participants.resolveAuthForPR(promptingParticipant, promptSource),
+        resolvePromptingAuth: promptingParticipantResult.resolveAuth,
         sessionUrl: this.getSessionUrl(session),
         draft: body.draft,
       },

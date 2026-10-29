@@ -53,12 +53,12 @@ Calling the tool again from the same branch updates that branch's open pull requ
 
 Commits and pull requests keep the human and the platform separate:
 
-| Role                                       | Identity                                                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| Commit author                              | The prompting user's source control identity when available; otherwise OpenInspect                                       |
-| Committer (and signer, when signing is on) | OpenInspect (the dedicated signing account when signing is configured)                                                   |
-| Branch pusher                              | The GitHub App installation                                                                                              |
-| Pull request author                        | The GitHub App for automation prompts; otherwise the prompting user's OAuth identity when available, else the GitHub App |
+| Role                                       | Identity                                                                                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commit author                              | The prompting user's source control identity when available; otherwise OpenInspect                                                                             |
+| Committer (and signer, when signing is on) | OpenInspect (the dedicated signing account when signing is configured)                                                                                         |
+| Branch pusher                              | The GitHub App installation                                                                                                                                    |
+| Pull request author                        | The GitHub App for an automation run's own prompts (not its child sessions); otherwise the prompting user's OAuth identity when available, else the GitHub App |
 
 ## Commit signing
 

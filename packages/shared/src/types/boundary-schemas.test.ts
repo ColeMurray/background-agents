@@ -530,6 +530,10 @@ describe("boundary schemas", () => {
         sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
       ).toBe(false);
     });
+
+    it.each(["automation", "agent"])("rejects the internally minted %s source", (source) => {
+      expect(sendPromptRequestSchema.safeParse({ content: "hello", source }).success).toBe(false);
+    });
   });
 
   describe("childFollowUpPromptRequestSchema", () => {

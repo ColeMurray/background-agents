@@ -111,12 +111,16 @@ export class ParticipantService {
 
   /**
    * Find the participant who authored the currently-processing message, and
-   * where that message came from. Used for PR creation to determine whose
-   * OAuth token to use.
+   * how to resolve the credential that opens its PR.
    */
   async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; source: MessageSource; error?: never; status?: never }
-    | { participant?: never; source?: never; error: string; status: number }
+    | {
+        participant: ParticipantRow;
+        resolveAuth: () => Promise<PromptingAuthResolution>;
+        error?: never;
+        status?: never;
+      }
+    | { participant?: never; resolveAuth?: never; error: string; status: number }
   > {
     const processingMessage = this.getProcessingMessageAuthor();
 
@@ -137,7 +141,16 @@ export class ParticipantService {
       return { error: "User not found. Please re-authenticate.", status: 401 };
     }
 
-    return { participant, source: processingMessage.source };
+    const resolveAuth =
+      pullRequestAuthorFor(processingMessage.source) === "app"
+        ? async (): Promise<PromptingAuthResolution> => {
+            this.log.info("PR creation: automation prompt, using app auth", {
+              user_id: participant.user_id,
+            });
+            return { auth: null };
+          }
+        : () => this.resolveAuthForPR(participant);
+    return { participant, resolveAuth };
   }
 
   /**
@@ -145,24 +158,10 @@ export class ParticipantService {
    *
    * Returns:
    * - `{ auth: SourceControlAuthContext }` on success
-   * - `{ auth: null }` when the prompt came from an automation, or the user has
-   *   no usable OAuth token (caller falls back to app token)
+   * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
    * - `{ error, status }` on unexpected failure
-   *
-   * An automation prompt carries its owner's identity for commit attribution,
-   * but the PR it opens is the app's: opening it with the owner's OAuth would
-   * present unattended work as the owner's own.
    */
-  async resolveAuthForPR(
-    participant: ParticipantRow,
-    source: MessageSource
-  ): Promise<PromptingAuthResolution> {
-    if (source === "automation") {
-      this.log.info("PR creation: automation prompt, using app auth", {
-        user_id: participant.user_id,
-      });
-      return { auth: null };
-    }
+  private async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
     if (this.resolveCurrentGitHubAccessToken && participant.canonical_user_id) {
       try {
         const accessToken = await this.resolveCurrentGitHubAccessToken(
@@ -196,4 +195,15 @@ export class ParticipantService {
     });
     return { auth: null };
   }
+}
+
+/**
+ * Whose credential opens the PR for the prompt being processed. An automation
+ * prompt carries its owner's identity for commit attribution, but the PR it
+ * opens is the app's: the owner's OAuth would present unattended work as the
+ * owner's own. A child session spawned by an automation run is prompted with
+ * source "agent", so its PRs still use the owner's OAuth.
+ */
+export function pullRequestAuthorFor(source: MessageSource): "prompting-user" | "app" {
+  return source === "automation" ? "app" : "prompting-user";
 }

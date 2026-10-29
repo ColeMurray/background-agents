@@ -247,12 +247,12 @@ harness, in which case the bot refuses the launch.
 Open-Inspect can sign normal agent-created commits with one deployment-wide OpenSSH Ed25519 key. The
 identities remain deliberately separate:
 
-| Git/GitHub role      | Identity                                                                                                          |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect                                         |
-| Committer and signer | The dedicated Open-Inspect signing account                                                                        |
-| Branch pusher        | The existing GitHub App                                                                                           |
-| Pull request author  | The GitHub App for automation prompts; otherwise the prompting user's OAuth identity when available, else the App |
+| Git/GitHub role      | Identity                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect                                                                               |
+| Committer and signer | The dedicated Open-Inspect signing account                                                                                                              |
+| Branch pusher        | The existing GitHub App                                                                                                                                 |
+| Pull request author  | The GitHub App for an automation run's own prompts (not its child sessions); otherwise the prompting user's OAuth identity when available, else the App |
 
 This makes the signature an attestation by the Open-Inspect deployment, not a cryptographic claim
 that the attributed user personally signed the commit. GitHub repository rules remain the
