@@ -359,8 +359,9 @@ describe("memory shared-scope authorization", () => {
 
   /**
    * Commit-time fencing covers facts about the writing session (liveness, owner suspension,
-   * personal auto-save eligibility). Grant changes are not re-encoded in SQL: they are checked
-   * just before the write and on every later read, and shared-scope agent writes are proposals.
+   * personal auto-save eligibility, and for personal writes the owner's preference and
+   * `memories.manage_own`). Grant changes are not re-encoded in SQL: they are checked just before
+   * the write and on every later read, and shared-scope agent writes are proposals.
    */
   async function raceWrite(change: string, during: () => Promise<unknown>) {
     const sessionId = `race-${change.replaceAll(" ", "-")}`;

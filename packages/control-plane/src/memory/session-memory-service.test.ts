@@ -476,7 +476,7 @@ describe("SessionMemoryService.search", () => {
     });
     await expect(
       service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
-    ).rejects.toThrow(MemoryAccessError);
+    ).rejects.toThrow("Memory scope is no longer available");
   });
 });
 
@@ -530,6 +530,17 @@ describe("SessionMemoryService.renderedContext", () => {
     const rendered = await service.renderedContext("session");
     expect(rendered).toMatchObject({ schemaVersion: 1, manifestSha256: selection.manifestSha256 });
     expect(rendered.rendered).toContain(harnessMemoryToolName(harness, "memory_write"));
+  });
+
+  it("keeps pinned personal records after the owner opts out", async () => {
+    const { service, deps } = setup({
+      loaded,
+      session: memorySession({ sources: { personalOwnerUserId: null } }),
+    });
+    expect((await service.renderedContext("session")).rendered).toContain("Test setup");
+    expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
+      { type: "personal", userId: "owner" },
+    ]);
   });
 
   it("refuses to install when the principal lost access to a pinned partition", async () => {

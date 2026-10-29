@@ -25,7 +25,7 @@ import { AuthorizationError, type AuthorizationService } from "./service";
  *   asked when a session's memory is selected and again on every sandbox read, search, write,
  *   and boot;
  * - which agent writes remain valid at commit time (`db/session-memory-write-guard.ts`, which
- *   checks only facts about the writing session, never grant rules).
+ *   checks only facts about the writing session and its owner, never repository or team grants).
  *
  * Both classes receive their stores and admission checks through their constructors;
  * `memory-access-factory.ts` wires the D1-backed implementations for a request.
@@ -377,8 +377,9 @@ function mayUsePersonalMemory(authorization: EffectiveAuthorization | null): boo
  * Whether a session's principal may read memory partitions right now. A pinned manifest or an
  * issued sandbox token never freezes access: team activity, repository grants, owner suspension,
  * environment ownership, and the personal owner's `memories.manage_own` are evaluated on every
- * check. Which personal store a session reaches is governed by its pinned owner and opt-out; this
- * only decides whether that owner may still use it, so agents never write memories the owner
+ * check. Which personal store a session reaches is governed by its pinned owner, their opt-out and
+ * the prompt being processed (`memory/session-rules.ts`); this only decides whether that owner may
+ * still use it, so agents never write memories the owner
  * cannot review in Settings. Like any partition, a denied personal store fails the whole check;
  * callers that can do without it (selection, boot context, unscoped search) leave it out first.
  *

@@ -260,8 +260,10 @@ describe("session memory discovery", () => {
     ]);
     const call = await sandbox("revoked-personal", { repositories: [repo] });
     expect(await (await call(null, "")).text()).toContain("PRIVATE_PERSONAL_SENTINEL");
-    expect((await (await call({ query: "needle" })).json()).results).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "mine" })])
+    expect(await (await call({ query: "needle" })).json()).toEqual(
+      expect.objectContaining({
+        results: expect.arrayContaining([expect.objectContaining({ id: "mine" })]),
+      })
     );
     await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
       .bind(`role_custom_${OWNER}`, "memories.manage_own")

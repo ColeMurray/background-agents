@@ -211,7 +211,8 @@ export class SessionMemoryService {
   /**
    * Search current facts in the session's partitions, checking access before and after SQL. A
    * personal store the owner may not use is skipped, or refused when explicitly requested. Personal
-   * hits are dropped if the session may no longer read them once the query returns.
+   * hits are dropped if the prompt or the owner's preference no longer allows them once the query
+   * returns; a permission revoked meanwhile fails the search.
    */
   async search(sessionId: string, input: MemorySearchInput): Promise<MemorySearchResponse> {
     const session = await this.loadSession(sessionId);

@@ -180,7 +180,8 @@ export class SessionMemorySelectionStore {
   /**
    * Load the pinned selection with live drift flags and renderable pinned revisions.
    * Sessions that predate memory get empty context; nonexistent sessions return null.
-   * Callers must authorize the session and recheck shared-partition access before rendering.
+   * Callers must authorize the session and recheck partition access before rendering, leaving out
+   * a personal store its owner may no longer use.
    */
   async loadSelection(sessionId: string): Promise<PinnedSelection | null> {
     const [headers, rows] = await this.db.batch<ManifestRow | PinnedItemRow>([
