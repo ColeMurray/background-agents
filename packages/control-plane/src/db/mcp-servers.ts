@@ -105,7 +105,7 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
   };
 }
 
-function rowToMetadata(row: McpServerRow, credentialKeys: string[]): McpServerMetadata {
+function rowToMetadata(row: McpServerRow, credentialKeys?: string[]): McpServerMetadata {
   const type = mcpServerTypeSchema.parse(row.type);
   const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
   return {
@@ -117,10 +117,20 @@ function rowToMetadata(row: McpServerRow, credentialKeys: string[]): McpServerMe
     url: type === "remote" ? (row.url ?? undefined) : undefined,
     hasEnv: type === "local" && hasCredentials,
     hasHeaders: type === "remote" && hasCredentials,
-    credentialKeys,
+    ...(credentialKeys ? { credentialKeys } : {}),
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
   };
+}
+
+/** How much a metadata read reveals about each server's stored credentials. */
+export interface McpServerMetadataOptions {
+  /**
+   * Name the stored credentials (`credentialKeys`). This decrypts every row
+   * read, so pass it only for callers holding `mcp_servers.manage`; without it,
+   * reads stay decrypt-free.
+   */
+  includeCredentialKeys?: boolean;
 }
 
 export class McpServerStore {
@@ -166,33 +176,49 @@ export class McpServerStore {
     return rowToConfig(row, env);
   }
 
-  /** Metadata names the stored credentials so the UI can show what is saved; values stay here. */
-  private async toMetadata(row: McpServerRow): Promise<McpServerMetadata> {
+  /**
+   * Credential names come from decrypting the row, so a pre-encryption or
+   * undecryptable row logs `mcp_server.env_decrypt_*` on each such read. Only
+   * the names leave this method; the values are discarded.
+   */
+  private async toMetadata(
+    row: McpServerRow,
+    options: McpServerMetadataOptions
+  ): Promise<McpServerMetadata> {
+    if (!options.includeCredentialKeys) return rowToMetadata(row);
     return rowToMetadata(row, Object.keys(await this.decryptEnv(row.env, row.id)));
   }
 
-  async list(repoScope?: string): Promise<McpServerMetadata[]> {
+  async list(
+    repoScope?: string,
+    options: McpServerMetadataOptions = {}
+  ): Promise<McpServerMetadata[]> {
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers ORDER BY name")
       .all<McpServerRow>();
-    const metadata = await Promise.all(results.map((row) => this.toMetadata(row)));
-    if (repoScope === undefined) return metadata;
-    const normalized = repoScope.toLowerCase();
-    return metadata.filter((c) => {
-      if (!c.repoScopes) return true;
-      return c.repoScopes.some((s) => s.toLowerCase() === normalized);
-    });
+    const normalized = repoScope?.toLowerCase();
+    const rows =
+      normalized === undefined
+        ? results
+        : results.filter((row) => {
+            const scopes = parseRepoScopes(row.repo_scope);
+            return !scopes || scopes.some((s) => s.toLowerCase() === normalized);
+          });
+    return Promise.all(rows.map((row) => this.toMetadata(row, options)));
   }
 
-  async get(id: string): Promise<McpServerMetadata | null> {
+  async get(id: string, options: McpServerMetadataOptions = {}): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
-    return row ? this.toMetadata(row) : null;
+    return row ? this.toMetadata(row, options) : null;
   }
 
-  async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
+  async create(
+    config: ValidatedCreateMcpServerInput,
+    options: McpServerMetadataOptions = {}
+  ): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
 
@@ -235,7 +261,7 @@ export class McpServerStore {
       throw err;
     }
 
-    const created = await this.get(id);
+    const created = await this.get(id, options);
     if (!created) {
       throw new Error(`MCP server '${id}' not found after insert — this should not happen`);
     }
@@ -245,7 +271,8 @@ export class McpServerStore {
   async update(
     id: string,
     patch: ValidatedUpdateMcpServerInput,
-    expectedRevision?: number
+    expectedRevision?: number,
+    options: McpServerMetadataOptions = {}
   ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
@@ -331,7 +358,7 @@ export class McpServerStore {
       if (!updated) {
         throw new McpServerConflictError("MCP server changed; reload and try again");
       }
-      return await this.toMetadata(updated);
+      return await this.toMetadata(updated, options);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new McpServerValidationError(

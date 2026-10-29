@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, SELF } from "cloudflare:test";
+import type { BuiltInRoleKey } from "@open-inspect/shared/rbac";
+import { McpServerStore } from "../../src/db/mcp-servers";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, type ServiceRequestInit } from "./helpers";
 
 interface McpServerMetadata {
   id: string;
@@ -12,9 +14,16 @@ interface McpServerMetadata {
   url?: string;
   hasEnv: boolean;
   hasHeaders: boolean;
-  credentialKeys: string[];
+  credentialKeys?: string[];
   repoScopes: string[] | null;
   enabled: boolean;
+}
+
+/** The credentials stored for a server, read the way sessions read them. */
+async function storedCredentials(id: string): Promise<Record<string, string> | undefined> {
+  const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!);
+  const server = (await store.getDecryptedForSession([])).find((s) => s.id === id);
+  return server?.type === "remote" ? server.headers : server?.env;
 }
 
 describe("MCP Servers API", () => {
@@ -291,6 +300,35 @@ describe("MCP Servers API", () => {
       const body = await response.json<McpServerMetadata>();
       expect(body.credentialKeys).toEqual(["Accept", "x-api-key"]);
       expect(JSON.stringify(body)).not.toContain("new-key");
+      expect(await storedCredentials(created.id)).toEqual({
+        Accept: "text/event-stream",
+        "x-api-key": "new-key",
+      });
+    });
+
+    it("keeps every saved env var when all are kept and none are sent", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "kept-env",
+          type: "local",
+          command: ["npx", "x"],
+          env: { API_TOKEN: "token-1", REGION: "eu" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: "kept-env-renamed",
+          env: {},
+          keepCredentialKeys: ["API_TOKEN", "REGION"],
+          revision: created.revision,
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await storedCredentials(created.id)).toEqual({ API_TOKEN: "token-1", REGION: "eu" });
     });
 
     it("rejects a stale revision and accepts a retry from the latest revision", async () => {
@@ -485,6 +523,142 @@ describe("MCP Servers API", () => {
       });
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe("saved credential names", () => {
+    const SECRET_VALUES = ["Bearer header-secret", "header-key-secret", "env-secret", "new-secret"];
+    const MANAGER = { userId: "71717171717171717171717171717171", role: "administrator" } as const;
+
+    function as(userId: string, role: BuiltInRoleKey): Pick<ServiceRequestInit, "as"> {
+      return { as: { userId, role } };
+    }
+
+    async function createServers(): Promise<{
+      remote: McpServerMetadata;
+      local: McpServerMetadata;
+    }> {
+      const remoteRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "named-remote",
+          type: "remote",
+          url: "https://mcp.example.com",
+          headers: { Authorization: "Bearer header-secret", "X-Api-Key": "header-key-secret" },
+        }),
+        as: MANAGER,
+      });
+      const localRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "named-local",
+          type: "local",
+          command: ["npx", "x"],
+          env: { API_TOKEN: "env-secret" },
+        }),
+        as: MANAGER,
+      });
+      expect(remoteRes.status).toBe(201);
+      expect(localRes.status).toBe(201);
+      return {
+        remote: await remoteRes.json<McpServerMetadata>(),
+        local: await localRes.json<McpServerMetadata>(),
+      };
+    }
+
+    it.each([
+      ["viewer", "73737373737373737373737373737373"],
+      ["member", "74747474747474747474747474747474"],
+    ] as const)("omits names for a %s, who can only read MCP servers", async (role, userId) => {
+      const { remote, local } = await createServers();
+      const reader = as(userId, role);
+
+      const listRes = await serviceFetch("https://test.local/mcp-servers", reader);
+      const getRes = await serviceFetch(`https://test.local/mcp-servers/${remote.id}`, reader);
+      const putRes = await serviceFetch(`https://test.local/mcp-servers/${local.id}`, {
+        ...reader,
+        method: "PUT",
+        body: JSON.stringify({ keepCredentialKeys: [] }),
+      });
+
+      expect(listRes.status).toBe(200);
+      expect(getRes.status).toBe(200);
+      expect(putRes.status).toBe(403);
+      const listed = await listRes.json<McpServerMetadata[]>();
+      const got = await getRes.json<McpServerMetadata>();
+      expect(listed.map((s) => [s.name, s.hasEnv || s.hasHeaders])).toEqual([
+        ["named-local", true],
+        ["named-remote", true],
+      ]);
+      for (const server of [...listed, got]) {
+        expect("credentialKeys" in server).toBe(false);
+      }
+      expect(await storedCredentials(local.id)).toEqual({ API_TOKEN: "env-secret" });
+    });
+
+    it("returns names to a manager", async () => {
+      const { remote, local } = await createServers();
+      expect(remote.credentialKeys).toEqual(["Authorization", "X-Api-Key"]);
+      expect(local.credentialKeys).toEqual(["API_TOKEN"]);
+
+      const listRes = await serviceFetch("https://test.local/mcp-servers", { as: MANAGER });
+      const getRes = await serviceFetch(`https://test.local/mcp-servers/${remote.id}`, {
+        as: MANAGER,
+      });
+
+      const listed = await listRes.json<McpServerMetadata[]>();
+      expect(listed.map((s) => s.credentialKeys)).toEqual([
+        ["API_TOKEN"],
+        ["Authorization", "X-Api-Key"],
+      ]);
+      expect((await getRes.json<McpServerMetadata>()).credentialKeys).toEqual([
+        "Authorization",
+        "X-Api-Key",
+      ]);
+    });
+
+    it("never returns a credential value from create, list, get, or update", async () => {
+      const { remote, local } = await createServers();
+      const reader = as("72727272727272727272727272727272", "viewer");
+      const bodies: string[] = [JSON.stringify(remote), JSON.stringify(local)];
+      const responses = [
+        await serviceFetch("https://test.local/mcp-servers", { as: MANAGER }),
+        await serviceFetch("https://test.local/mcp-servers?repo=acme/web", { as: MANAGER }),
+        await serviceFetch(`https://test.local/mcp-servers/${remote.id}`, { as: MANAGER }),
+        await serviceFetch("https://test.local/mcp-servers", reader),
+        await serviceFetch(`https://test.local/mcp-servers/${local.id}`, reader),
+        await serviceFetch(`https://test.local/mcp-servers/${remote.id}`, {
+          as: MANAGER,
+          method: "PUT",
+          body: JSON.stringify({
+            headers: { "x-api-key": "new-secret" },
+            keepCredentialKeys: ["Authorization"],
+          }),
+        }),
+        await serviceFetch(`https://test.local/mcp-servers/${local.id}`, {
+          as: MANAGER,
+          method: "PUT",
+          body: JSON.stringify({ enabled: false }),
+        }),
+        await serviceFetch(`https://test.local/mcp-servers/${local.id}`, {
+          as: MANAGER,
+          method: "PUT",
+          body: JSON.stringify({ env: { API_TOKEN: "new-secret" } }),
+        }),
+      ];
+
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        bodies.push(await response.text());
+      }
+      for (const body of bodies) {
+        for (const value of SECRET_VALUES) expect(body).not.toContain(value);
+        expect(body).not.toMatch(/"(env|headers)":/);
+      }
+      expect(await storedCredentials(remote.id)).toEqual({
+        Authorization: "Bearer header-secret",
+        "x-api-key": "new-secret",
+      });
     });
   });
 
