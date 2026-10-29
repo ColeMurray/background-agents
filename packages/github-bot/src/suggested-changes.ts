@@ -9,10 +9,7 @@
 import type { ReviewCommentPayload } from "./payload-schemas";
 
 export type ThreadSuggestionUnavailableReason =
-  | "file_comment"
-  | "outdated"
-  | "base_side"
-  | "missing_anchor";
+  "file_comment" | "outdated" | "base_side" | "missing_anchor";
 
 /** What a suggestion block in a reply to a review thread would replace. */
 export type ThreadSuggestionTarget =
