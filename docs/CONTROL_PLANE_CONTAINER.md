@@ -158,17 +158,19 @@ deployments/configuration edits and Settings policy edits, and disable or contro
 first; nothing locks deployment configuration or the editor for you.
 
 While still on current code, reload Settings, discard any unsaved draft, and copy the managed rules;
-treat the copy as sensitive data. If Settings is unavailable, read the same rules from the actual
-volume with the `operator_sql` helper above:
+treat the copy as sensitive data. If Settings is unavailable, a signed-in Owner or Administrator can
+open `/api/settings/admission-policy` on the web app for the same snapshot, or you can read the
+rules from the actual volume with the `operator_sql` helper above:
 
 ```bash
 operator_sql -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync("/data/global.db", { readOnly: true }); console.log(JSON.stringify(db.prepare("SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1").get()))'
 ```
 
-The copy contains managed rules only, not the deployment baseline. Separately read the serving
-container's admission configuration, normalize and union each baseline list with the managed list,
-and put that union in `.env` (or the AWS SSM source). Set unsafe mode false. Apply the reviewed
-configuration on current code; local Compose recreates the app with:
+Both direct reads report the policy `revision`; record it with the copy. The copy contains managed
+rules only, not the deployment baseline. Separately read the serving container's admission
+configuration, normalize and union each baseline list with the managed list, and put that union in
+`.env` (or the AWS SSM source). Set unsafe mode false. Apply the reviewed configuration on current
+code; local Compose recreates the app with:
 
 ```bash
 docker compose up -d --build app
@@ -176,11 +178,12 @@ docker compose up -d --build app
 
 On AWS, use its normal SSM/deployment workflow and Compose overlay rather than relying on a local
 `.env` edit that a later deployment would replace. Verify the **deployed** union and intended login
-eligibility. Immediately before moving to old code, reload Settings again and confirm the managed
-rules and the deployed union still match what you reviewed. If either changed, stop and repeat the
-review. Only then deploy the approved old image/source version with that union intact. Keep
-`global.db`, the policy row, and audit history; do not drop policy data. A frontend-only rollback
-does not stop the new backend from enforcing managed rules.
+eligibility. Immediately before moving to old code, reload Settings (or repeat the direct read) and
+confirm the managed rules, any recorded revision, and the deployed union still match what you
+reviewed. If anything changed, stop and repeat the review. Only then deploy the approved old
+image/source version with that union intact. Keep `global.db`, the policy row, and audit history; do
+not drop policy data. A frontend-only rollback does not stop the new backend from enforcing managed
+rules.
 
 ### Recover
 

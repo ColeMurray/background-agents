@@ -604,18 +604,21 @@ rollback, stop concurrent deployments, baseline edits, and Settings policy edits
 disable/control automated rollback. Nothing locks the editor or deployment configuration for you.
 
 While still on new code, reload Settings, discard any unsaved draft, and copy the managed rules;
-protect the copy as sensitive data. If Settings is unavailable, read the same rules directly:
+protect the copy as sensitive data. If Settings is unavailable, a signed-in Owner or Administrator
+can open `/api/settings/admission-policy` on the web app for the same snapshot, or you can read the
+rules from the database:
 
 ```bash
 npx wrangler d1 execute <D1-name> --remote --json \
   --command "SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1"
 ```
 
-The copy does not include the deployment baseline: separately retrieve the actual serving baseline,
-normalize and union each list with the managed rules, and deploy that complete union with unsafe
-mode false. Verify the deployed union, provider compatibility, and intended login eligibility.
-Immediately before old-code rollback, reload Settings again and confirm the managed rules and the
-deployed union are unchanged. Stop if either drifted.
+Both direct reads report the policy `revision`; record it with the copy. The copy does not include
+the deployment baseline: separately retrieve the actual serving baseline, normalize and union each
+list with the managed rules, and deploy that complete union with unsafe mode false. Verify the
+deployed union, provider compatibility, and intended login eligibility. Immediately before old-code
+rollback, reload Settings (or repeat the direct read) and confirm the managed rules, any recorded
+revision, and the deployed union are unchanged. Stop if anything drifted.
 
 Only after those checks should old code serve traffic. Retain the policy table and audit history. A
 frontend-only rollback leaves backend enforcement intact; restore a compatible editor to change
