@@ -109,14 +109,6 @@ export interface NewUserIdentity {
   providerEmail?: string;
 }
 
-export interface UserUpdate {
-  displayName?: string;
-  avatarUrl?: string;
-  email?: string;
-  /** Only meaningful alongside `email`: its mailbox-ownership proof. */
-  emailVerified?: boolean;
-}
-
 // ── Row types (D1 snake_case) ───────────────────────────────────────
 
 interface UserRow {
@@ -394,41 +386,6 @@ export class UserStore {
       fill("avatar_url", profile.avatarUrl),
     ].filter((statement) => statement !== null);
     if (statements.length > 0) await this.db.batch(statements);
-  }
-
-  async updateUser(userId: string, updates: UserUpdate): Promise<void> {
-    const sets: string[] = [];
-    const values: (string | number | null)[] = [];
-
-    if (updates.displayName !== undefined) {
-      sets.push("display_name = ?");
-      values.push(updates.displayName);
-    }
-    if (updates.avatarUrl !== undefined) {
-      sets.push("avatar_url = ?");
-      values.push(updates.avatarUrl);
-    }
-    if (updates.email !== undefined) {
-      // A blank email normalizes to null — treated as absent, never stored.
-      // Verification travels with the email: it reflects the new address's
-      // proof (attesting provider or not), never the old address's state.
-      const email = normalizeEmail(updates.email);
-      sets.push("email = ?");
-      values.push(email);
-      sets.push("email_verified = ?");
-      values.push(email !== null && updates.emailVerified === true ? 1 : 0);
-    }
-
-    if (sets.length === 0) return;
-
-    sets.push("updated_at = ?");
-    values.push(Date.now());
-    values.push(userId);
-
-    await this.db
-      .prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`)
-      .bind(...values)
-      .run();
   }
 
   // ── Private ─────────────────────────────────────────────────────
