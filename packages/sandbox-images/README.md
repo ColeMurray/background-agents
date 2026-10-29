@@ -19,11 +19,11 @@ npm run sandbox:images -- plan --provider all
 
 `toolchain.json` owns tool versions and archive checksums. `targets.json` owns native substrate and
 runtime-user differences. `locks/` contains frozen npm closures and hash-checked Python tool
-exports. Runtime requirements are exported from `sandbox-runtime/uv.lock` when a bundle is packed,
-so they are never committed. Runtime environments are calculated directly from target configuration.
-Ordinary builds do not resolve new dependency versions. To intentionally refresh distro packages,
-change `osRefresh`. OS packages remain substrate-dependent; builds are not byte-for-byte
-attestations.
+exports. Runtime requirements are exported from `sandbox-runtime/uv.lock` into the bundle's
+`runtime-requirements.txt` when it is packed, so they are never committed. Runtime environments are
+calculated directly from target configuration. Ordinary builds do not resolve new dependency
+versions. To intentionally refresh distro packages, change `osRefresh`. OS packages remain
+substrate-dependent; builds are not byte-for-byte attestations.
 
 Each image owns its launch paths: its own `/opt/openinspect/bin` heads the launch `PATH`, so a
 substrate's preinstalled copy of a pinned tool cannot shadow the verified one. Infrastructure Python

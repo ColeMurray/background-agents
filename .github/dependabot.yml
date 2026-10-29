@@ -42,11 +42,12 @@ updates:
         patterns:
           - "*"
 
-  # Python. sandbox-runtime and sandbox-images/locks/python-tools are excluded.
-  # python-tools' uv.lock feeds the hash-checked locks/python-tools.txt export
-  # that `sandbox:images lock` must regenerate, and its pyproject.toml is
-  # generated from toolchain.json. sandbox-runtime's requirements are exported
-  # from its uv.lock at pack time, so nothing committed depends on it. e2b-infra
+  # Python. sandbox-images/locks/python-tools is excluded: its uv.lock feeds the
+  # hash-checked locks/python-tools.txt export that `sandbox:images lock` must
+  # regenerate, and its pyproject.toml is generated from toolchain.json.
+  # sandbox-runtime is not listed yet. Its requirements are exported from its
+  # uv.lock at pack time, so a uv.lock-only bump no longer fails
+  # `sandbox:images lock --check`; enabling it is a separate change. e2b-infra
   # and daytona-infra are excluded until PR CI installs and tests their locked
   # SDKs; Terraform consumes those lockfiles during apply.
   - package-ecosystem: uv

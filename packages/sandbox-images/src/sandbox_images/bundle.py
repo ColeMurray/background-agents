@@ -191,8 +191,6 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
     """Create a fresh context for each caller; no shared cache to reconcile."""
     root = root.resolve()
     update_locks(root, check=True)
-    # Exported at pack time rather than committed, so a uv.lock-only bump
-    # cannot leave a stale copy behind.
     runtime_requirements = export_requirements(root / RUNTIME_PACKAGE)
     plan = plan_image(root, provider)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -202,7 +200,7 @@ def pack_bundle(root: Path, provider: str, output_root: Path) -> PackedBundle:
             target = destination / source.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target, follow_symlinks=False)
-        (destination / IMAGE_PACKAGE / "locks/runtime.txt").write_text(runtime_requirements)
+        (destination / "runtime-requirements.txt").write_text(runtime_requirements)
         (destination / "build-config.json").write_text(json.dumps(plan) + "\n")
         toolchain = read_json(root / IMAGE_PACKAGE / "toolchain.json")
         variables = {

@@ -167,9 +167,8 @@ def test_boat_hash_covers_launcher_builder_and_deployment(checkout, source):
 
 def test_pack_exports_runtime_requirements_from_uv_lock(checkout, tmp_path):
     lock = checkout / "packages/sandbox-runtime/uv.lock"
-    assert not (checkout / "packages/sandbox-images/locks/runtime.txt").exists()
     packed = pack_bundle(checkout, "e2b", tmp_path / "bundles")
-    requirements = (packed.directory / "packages/sandbox-images/locks/runtime.txt").read_text()
+    requirements = (packed.directory / "runtime-requirements.txt").read_text()
     pinned = re.search(r'name = "cryptography"\nversion = "([^"]+)"', lock.read_text())
     assert pinned
     assert f"cryptography=={pinned[1]} \\\n    --hash=sha256:" in requirements

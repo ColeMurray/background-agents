@@ -2,7 +2,7 @@
 set -euo pipefail
 python_bin=/opt/openinspect/python/bin/python
 /opt/openinspect/uv/uv pip install --python "$python_bin" --require-hashes \
-  -r "$OI_BUNDLE/packages/sandbox-images/locks/runtime.txt"
+  -r "$OI_BUNDLE/runtime-requirements.txt"
 /opt/openinspect/uv/uv venv --python "$python_bin" /opt/openinspect/python-tools
 /opt/openinspect/uv/uv pip install --python /opt/openinspect/python-tools/bin/python --require-hashes \
   -r "$OI_BUNDLE/packages/sandbox-images/locks/python-tools.txt"
