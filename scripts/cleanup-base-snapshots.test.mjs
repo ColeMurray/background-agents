@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   cleanup,
+  CleanupDeletionError,
   planCleanup,
   validatePolicy,
   managedNamePattern,
@@ -176,6 +177,33 @@ test("inventory failure prevents deletion and delete failure stops the batch", a
     /provider failure/
   );
   assert.equal(deletes, 1);
+});
+
+test("a mid-batch delete failure reports completed and remaining deletions", async () => {
+  const attempted = [];
+  const failure = cleanup(
+    {
+      list: async () => Array.from({ length: 5 }, (_, i) => artifact(i)),
+      delete: async (snapshot) => {
+        attempted.push(snapshot.id);
+        if (snapshot.id === "snap-2") throw new Error("provider failure");
+      },
+    },
+    policy,
+    { apply: true, nowMs: NOW_MS }
+  );
+  await assert.rejects(failure, (error) => {
+    assert.ok(error instanceof CleanupDeletionError);
+    assert.match(error.message, new RegExp(`snap-2 \\(${name(2)}\\).*1 of 3.*provider failure`));
+    assert.deepEqual(error.report.deleted, [{ id: "snap-1", name: name(1) }]);
+    assert.deepEqual(error.report.failed, { id: "snap-2", name: name(2) });
+    assert.deepEqual(
+      error.report.remaining.map((item) => item.id),
+      ["snap-2", "snap-3"]
+    );
+    return true;
+  });
+  assert.deepEqual(attempted, ["snap-1", "snap-2"]);
 });
 
 test("every protected managed name must resolve before preview or deletion", async () => {
@@ -470,13 +498,14 @@ test("clients reject missing credentials and insecure non-local URLs", () => {
   );
 });
 
-test("cleanup bounds accumulated base snapshots while preserving the deployed base", async (t) => {
-  // Ten distinct source builds have left ten immutable artifacts in the provider.
-  const prefix = "openinspect-daytona";
-  const baseName = (i) => `${prefix}-m2-${i.toString(16).padStart(16, "0")}`;
-  const snapshots = Array.from({ length: 10 }, (_, i) => ({
+const daytonaPrefix = "openinspect-daytona";
+const daytonaName = (i) => `${daytonaPrefix}-m2-${i.toString(16).padStart(16, "0")}`;
+
+/** Serves `count` accumulated Daytona base artifacts, three per inventory page. */
+async function serveDaytonaSnapshots(t, count, { failDeleteId } = {}) {
+  const snapshots = Array.from({ length: count }, (_, i) => ({
     id: `snap-${i}`,
-    name: baseName(i),
+    name: daytonaName(i),
     createdAt: new Date(Date.UTC(2020, 0, i + 1)).toISOString(),
     state: "active",
   }));
@@ -496,6 +525,10 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
       );
     } else if (req.method === "DELETE" && req.url.startsWith("/api/snapshots/")) {
       const reference = decodeURIComponent(req.url.split("/").at(-1));
+      if (reference === failDeleteId) {
+        res.writeHead(500).end("provider failure");
+        return;
+      }
       deleted.push(reference);
       const index = snapshots.findIndex((snapshot) => snapshot.id === reference);
       if (index !== -1) snapshots.splice(index, 1);
@@ -506,33 +539,42 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
+  return { snapshots, deleted, apiUrl: `http://127.0.0.1:${server.address().port}/api` };
+}
+
+async function writePolicy(t, policy) {
   const directory = await mkdtemp(join(tmpdir(), "base-retention-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const policyPath = join(directory, "policy.json");
-  await writeFile(
-    policyPath,
-    JSON.stringify({
-      provider: "daytona",
-      prefix,
-      protectedReferences: [baseName(0)],
-      keepLatest: 2,
-      minAgeMs: 0,
-    })
-  );
+  await writeFile(policyPath, JSON.stringify(policy));
+  return policyPath;
+}
+
+async function runCli(apiUrl, args) {
+  const child = spawn(process.execPath, ["dist/cleanup-base-snapshots.mjs", ...args], {
+    env: { ...process.env, DAYTONA_API_KEY: "test-token", DAYTONA_API_URL: apiUrl },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (data) => (stdout += data));
+  child.stderr.on("data", (data) => (stderr += data));
+  const status = await new Promise((resolve) => child.on("close", resolve));
+  return { status, stdout, stderr };
+}
+
+test("cleanup bounds accumulated base snapshots while preserving the deployed base", async (t) => {
+  // Ten distinct source builds have left ten immutable artifacts in the provider.
+  const { snapshots, deleted, apiUrl } = await serveDaytonaSnapshots(t, 10);
+  const policyPath = await writePolicy(t, {
+    provider: "daytona",
+    prefix: daytonaPrefix,
+    protectedReferences: [daytonaName(0)],
+    keepLatest: 2,
+    minAgeMs: 0,
+  });
   async function run(args) {
-    const child = spawn(process.execPath, ["dist/cleanup-base-snapshots.mjs", ...args], {
-      env: {
-        ...process.env,
-        DAYTONA_API_KEY: "test-token",
-        DAYTONA_API_URL: `http://127.0.0.1:${server.address().port}/api`,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (data) => (stdout += data));
-    child.stderr.on("data", (data) => (stderr += data));
-    const status = await new Promise((resolve) => child.on("close", resolve));
+    const { status, stdout, stderr } = await runCli(apiUrl, args);
     assert.equal(status, 0, stderr);
     return JSON.parse(stdout);
   }
@@ -545,6 +587,28 @@ test("cleanup bounds accumulated base snapshots while preserving the deployed ba
   assert.deepEqual(new Set(deleted), new Set(Array.from({ length: 7 }, (_, i) => `snap-${i + 1}`)));
   assert.deepEqual(
     snapshots.map((snapshot) => snapshot.name),
-    [baseName(0), baseName(8), baseName(9)]
+    [daytonaName(0), daytonaName(8), daytonaName(9)]
   );
+});
+
+test("the CLI names completed and remaining deletions when a delete fails", async (t) => {
+  const { deleted, apiUrl } = await serveDaytonaSnapshots(t, 5, { failDeleteId: "snap-2" });
+  const policyPath = await writePolicy(t, {
+    provider: "daytona",
+    prefix: daytonaPrefix,
+    protectedReferences: [daytonaName(0)],
+    keepLatest: 1,
+    minAgeMs: 0,
+  });
+  const { status, stdout, stderr } = await runCli(apiUrl, ["--policy", policyPath, "--apply"]);
+  assert.equal(status, 1);
+  assert.deepEqual(deleted, ["snap-1"]);
+  const report = JSON.parse(stdout);
+  assert.deepEqual(report.deleted, [{ id: "snap-1", name: daytonaName(1) }]);
+  assert.deepEqual(report.failed, { id: "snap-2", name: daytonaName(2) });
+  assert.deepEqual(
+    report.remaining.map((item) => item.id),
+    ["snap-2", "snap-3"]
+  );
+  assert.match(stderr, /Deleting snap-2 .* failed after 1 of 3 planned deletions/);
 });

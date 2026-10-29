@@ -144,17 +144,52 @@ export function planCleanup(
   return result;
 }
 
+interface CleanupReport extends CleanupPlan {
+  apply: boolean;
+  deleted: BaseSnapshotReference[];
+}
+
+interface PartialCleanupReport extends CleanupReport {
+  failed: BaseSnapshotReference;
+  /** Planned deletions that did not complete, starting with the failed one. */
+  remaining: BaseSnapshotReference[];
+}
+
+/** A deletion failed mid-batch; the report records what was already deleted. */
+export class CleanupDeletionError extends Error {
+  readonly report: PartialCleanupReport;
+
+  constructor(report: PartialCleanupReport, cause: unknown) {
+    super(
+      `Deleting ${report.failed.id} (${report.failed.name}) failed after ` +
+        `${report.deleted.length} of ${report.delete.length} planned deletions: ` +
+        (cause instanceof Error ? cause.message : String(cause)),
+      { cause }
+    );
+    this.name = "CleanupDeletionError";
+    this.report = report;
+  }
+}
+
 export async function cleanup(
   client: BaseSnapshotClient,
   policy: BaseSnapshotPolicyInput,
   { apply = false, nowMs = Date.now() }: { apply?: boolean; nowMs?: number } = {}
-) {
+): Promise<CleanupReport> {
   // Finish listing and validating every page before the first mutation.
   const plan = planCleanup(await client.list(), policy, nowMs);
   const deleted: BaseSnapshotReference[] = [];
   if (apply) {
     for (const snapshot of plan.delete) {
-      await client.delete(snapshot);
+      try {
+        await client.delete(snapshot);
+      } catch (error) {
+        const remaining = plan.delete.slice(deleted.length);
+        throw new CleanupDeletionError(
+          { ...plan, apply, deleted, failed: snapshot, remaining },
+          error
+        );
+      }
       deleted.push(snapshot);
     }
   }

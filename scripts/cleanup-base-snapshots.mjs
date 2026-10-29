@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { createSnapshotClient } from "./lib/base-snapshot-client.ts";
-import { cleanup, validatePolicy } from "./lib/base-snapshot-retention.ts";
+import { cleanup, CleanupDeletionError, validatePolicy } from "./lib/base-snapshot-retention.ts";
 
 async function main() {
   const { values } = parseArgs({
@@ -19,6 +19,8 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
+    // Record what a failed batch already deleted and what remains.
+    if (error instanceof CleanupDeletionError) console.log(JSON.stringify(error.report, null, 2));
     console.error(error.message);
     process.exitCode = 1;
   });

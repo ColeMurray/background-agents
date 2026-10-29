@@ -134,11 +134,13 @@ static policy cannot prove a snapshot remains unreferenced during a deployment. 
 separately from Terraform's build/destroy steps, which execute before workers switch bases.
 
 Listing completes before deletion begins, including every provider page. Malformed responses or
-unmatched protection abort cleanup. A delete error stops the batch and exits nonzero; earlier
-deletions remain applied and a subsequent run can retry safely. Daytona deletion is asynchronous.
-Vercel discovery uses retained named sandbox records; snapshots whose source sandbox record has
-already been removed need provider-native inventory/manual review. Modal retention is outside this
-command's scope; E2B templates also use a separate provider lifecycle.
+unmatched protection abort cleanup. A delete error stops the batch and exits nonzero; stdout then
+carries the partial report, with `deleted`, the `failed` reference, and the `remaining` planned
+deletions starting with the failed one. Earlier deletions remain applied, and a subsequent run can
+retry safely because an already-deleted artifact counts as success. Daytona deletion is
+asynchronous. Vercel discovery uses retained named sandbox records; snapshots whose source sandbox
+record has already been removed need provider-native inventory/manual review. Modal retention is
+outside this command's scope; E2B templates also use a separate provider lifecycle.
 
 The `filesystem` phase also runs `opencode models --refresh` for the runtime user, so sessions
 without a prepared image still see models newer than the pinned OpenCode release. It is best-effort:
