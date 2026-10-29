@@ -11,9 +11,6 @@ interface CreateParticipantData {
   scmLogin?: string | null;
   scmName?: string | null;
   scmEmail?: string | null;
-  scmAccessTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
   role: ParticipantRole;
   joinedAt: number;
 }
@@ -25,9 +22,6 @@ interface UpdateParticipantData {
   scmLogin?: string | null;
   scmName?: string | null;
   scmEmail?: string | null;
-  scmAccessTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
 }
 
 /** Persistence for participants scoped to one session. */
@@ -54,8 +48,8 @@ export class ParticipantRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email, role, joined_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
       data.canonicalUserId ?? null,
@@ -63,9 +57,6 @@ export class ParticipantRepository {
       data.scmLogin ?? null,
       data.scmName ?? null,
       data.scmEmail ?? null,
-      data.scmAccessTokenEncrypted ?? null,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt ?? null,
       data.role,
       data.joinedAt
     );
@@ -78,40 +69,36 @@ export class ParticipantRepository {
          scm_user_id = COALESCE(?, scm_user_id),
          scm_login = COALESCE(?, scm_login),
          scm_name = COALESCE(?, scm_name),
-         scm_email = COALESCE(?, scm_email),
-         scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
-         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
-         scm_token_expires_at = COALESCE(?, scm_token_expires_at)
+         scm_email = COALESCE(?, scm_email)
        WHERE id = ?`,
       data.canonicalUserId ?? null,
       data.scmUserId ?? null,
       data.scmLogin ?? null,
       data.scmName ?? null,
       data.scmEmail ?? null,
-      data.scmAccessTokenEncrypted ?? null,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt ?? null,
       participantId
     );
   }
 
-  updateParticipantTokens(
+  /** Replace an authoritative SCM snapshot, including cleared identity fields. */
+  updateParticipantIdentity(
     participantId: string,
     data: {
-      scmAccessTokenEncrypted: string;
-      scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
+      canonicalUserId: string | null;
+      scmUserId: string | null;
+      scmLogin: string | null;
+      scmName: string | null;
+      scmEmail: string | null;
     }
   ): void {
     this.sql.exec(
-      `UPDATE participants SET
-         scm_access_token_encrypted = ?,
-         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
-         scm_token_expires_at = ?
-       WHERE id = ?`,
-      data.scmAccessTokenEncrypted,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt,
+      `UPDATE participants SET canonical_user_id = ?, scm_user_id = ?, scm_login = ?,
+         scm_name = ?, scm_email = ? WHERE id = ?`,
+      data.canonicalUserId,
+      data.scmUserId,
+      data.scmLogin,
+      data.scmName,
+      data.scmEmail,
       participantId
     );
   }

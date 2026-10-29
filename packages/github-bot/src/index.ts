@@ -42,10 +42,6 @@ function getDeliveryDedupeKey(deliveryId: string): string {
   return `delivery:${deliveryId}`;
 }
 
-function ttlSecondsFromMs(ttlMs: number): number {
-  return Math.ceil(ttlMs / 1_000);
-}
-
 app.get("/health", (c) => c.json({ status: "healthy", service: "open-inspect-github-bot" }));
 
 app.post("/webhooks/github", async (c) => {
@@ -77,7 +73,7 @@ app.post("/webhooks/github", async (c) => {
     }
 
     await cacheStore.put(dedupeKey, DELIVERY_STATUS_PROCESSING, {
-      expirationTtl: ttlSecondsFromMs(DELIVERY_PROCESSING_TTL_MS),
+      ttlMs: DELIVERY_PROCESSING_TTL_MS,
     });
   } else {
     log.warn("webhook.delivery_id_missing", { event_type: event });
@@ -126,7 +122,7 @@ app.post("/webhooks/github", async (c) => {
 
         try {
           await cacheStore.put(dedupeKey, DELIVERY_STATUS_PROCESSED, {
-            expirationTtl: ttlSecondsFromMs(DELIVERY_DEDUPE_TTL_MS),
+            ttlMs: DELIVERY_DEDUPE_TTL_MS,
           });
         } catch (err) {
           log.warn("webhook.dedupe_finalize_failed", {
@@ -160,6 +156,16 @@ app.post("/webhooks/github", async (c) => {
   return c.json({ ok: true });
 });
 
+/** Skips that already posted a PR comment explaining why no session started. */
+const COMMENTED_SKIP_REASONS: ReadonlySet<string> = new Set([
+  "not_member",
+  "target_team_missing_grant",
+  "team_archived",
+  "invalid_inline_flags",
+  "model_preferences_unavailable",
+  "harness_model_incompatible",
+]);
+
 async function handleWebhook(
   env: Env,
   log: Logger,
@@ -188,11 +194,26 @@ async function handleWebhook(
   };
 
   const start = Date.now();
+  const cacheStore = createKvCacheStore(env.GITHUB_KV);
+  const dispatchKey = deliveryId ? `delivery-dispatch:${deliveryId}` : null;
   let result: HandlerResult | undefined;
   let dispatchFailure: { error: unknown } | undefined;
 
   try {
-    result = await dispatchHandler(env, log, event, p, payload, traceId);
+    if (dispatchKey && (await cacheStore.get(dispatchKey)) === DELIVERY_STATUS_PROCESSED) {
+      result = { outcome: "skipped", skip_reason: "dispatch_completed" };
+    } else {
+      result = await dispatchHandler(env, log, event, p, payload, traceId);
+      if (
+        dispatchKey &&
+        (result.outcome === "processed" || COMMENTED_SKIP_REASONS.has(result.skip_reason))
+      ) {
+        // Checkpoint completed external effects; preflight skips must be reevaluated.
+        await cacheStore.put(dispatchKey, DELIVERY_STATUS_PROCESSED, {
+          ttlMs: DELIVERY_DEDUPE_TTL_MS,
+        });
+      }
+    }
   } catch (err) {
     dispatchFailure = { error: err };
     log.info("webhook.handled", {
@@ -222,15 +243,19 @@ async function handleWebhook(
   // Forwarding and built-in dispatch are independent; both must run before a
   // failure reaches the waitUntil cleanup path. Use the passthrough parse so
   // nested lifecycle fields are not stripped by the summary schema.
+  let forwardingFailure: { error: unknown } | undefined;
   if (event) {
     const normalizationPayload = actionResult.success ? actionResult.data : {};
-    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
+    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload, deliveryId);
     if (normalizedEvent !== null) {
       try {
         const url = "https://internal/internal/github-event";
         const body = JSON.stringify(normalizedEvent);
         const response = await signedControlPlaneFetch(env, { method: "POST", url, body, traceId });
         if (!response.ok) {
+          forwardingFailure = {
+            error: new Error(`GitHub event forwarding failed: ${response.status}`),
+          };
           log.warn("webhook.github_event_forward_failed", {
             trace_id: traceId,
             delivery_id: deliveryId,
@@ -239,6 +264,7 @@ async function handleWebhook(
           });
         }
       } catch (err) {
+        forwardingFailure = { error: err };
         log.warn("webhook.github_event_forward_error", {
           trace_id: traceId,
           delivery_id: deliveryId,
@@ -250,6 +276,7 @@ async function handleWebhook(
   }
 
   if (dispatchFailure !== undefined) throw dispatchFailure.error;
+  if (forwardingFailure !== undefined) throw forwardingFailure.error;
 }
 
 function dispatchHandler(

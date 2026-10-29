@@ -6,10 +6,18 @@ import type { SessionMessageQueue } from "../message-queue";
 import type { ExecutionStopCoordinator } from "../execution-stop-coordinator";
 import type { MessageRepository } from "../message-repository";
 import type { SessionTerminalMessageProjection } from "../terminal-message-projection";
+import { applySandboxRecovery } from "../sandbox-recovery";
+
+/** A prompt the lifecycle alarm interrupted; the watchdog names the cause when it has one. */
+const SANDBOX_INTERRUPTED_ERROR =
+  "Execution interrupted because the sandbox stopped or became unavailable.";
 
 export interface AlarmHandlerDeps {
-  preserveBeforeWatchdogs?: () => Promise<"continue" | "hold_watchdogs">;
-  repository: MessageRepository;
+  preserveBeforeWatchdogs?: (allowCaptureRetry: boolean) => Promise<"continue" | "hold_watchdogs">;
+  repository: Pick<
+    MessageRepository,
+    "getProcessingMessageWithStartedAt" | "getNextPendingMessage"
+  >;
   messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage" | "failPendingMessage">;
   executionStop: Pick<
     ExecutionStopCoordinator,
@@ -18,6 +26,8 @@ export interface AlarmHandlerDeps {
   lifecycleManager: SandboxAlarm;
   terminalMessageProjection: Pick<SessionTerminalMessageProjection, "flushPending">;
   alarmScheduler: AlarmScheduler;
+  /** Wakes queued work for a live runtime that nothing else will; idempotent. */
+  redriveIdleQueue?: () => Promise<void>;
   /** Resolved per use so it honors settings persisted after construction. */
   getExecutionTimeoutMs: () => number;
   now: () => number;
@@ -41,7 +51,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
     async handle(): Promise<void> {
       // Graceful shutdown must not wait behind a remote index projection or a
       // generic stop timeout. Recheck below if projection I/O crosses D.
-      await deps.preserveBeforeWatchdogs?.();
+      await deps.preserveBeforeWatchdogs?.(true);
       let projectionFailure: { error: unknown } | undefined;
       try {
         await deps.terminalMessageProjection.flushPending();
@@ -50,7 +60,8 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
         // Rethrow after recovery so transient storage failures still retry.
         projectionFailure = { error };
       }
-      if ((await deps.preserveBeforeWatchdogs?.()) === "hold_watchdogs") {
+      // Recheck shutdown deadlines without starting another retry in this delivery.
+      if ((await deps.preserveBeforeWatchdogs?.(false)) === "hold_watchdogs") {
         if (projectionFailure) throw projectionFailure.error;
         return;
       }
@@ -89,21 +100,19 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
       // is the one that was waiting when the alarm fired.
       const bootPrompt = deps.repository.getNextPendingMessage();
       const lifecycleResult = await deps.lifecycleManager.handleAlarm();
+      const heartbeatLost =
+        typeof lifecycleResult === "object" && lifecycleResult.kind === "heartbeat_lost"
+          ? lifecycleResult
+          : null;
       if (lifecycleResult !== "no_action") {
-        await deps.messageQueue.failStuckProcessingMessage();
+        await deps.messageQueue.failStuckProcessingMessage(
+          heartbeatLost?.reason ?? SANDBOX_INTERRUPTED_ERROR
+        );
       }
-      if (lifecycleResult === "sandbox_terminated") {
-        await deps.executionStop.resumeAfterSandboxTermination();
-      }
-      if (
-        bootPrompt &&
-        typeof lifecycleResult === "object" &&
-        lifecycleResult.kind === "boot_budget_exceeded"
-      ) {
-        // The boot was for that prompt; it fails with the same words the user
-        // sees, and nothing re-drives it onto a fresh sandbox.
-        await deps.messageQueue.failPendingMessage(bootPrompt.id, lifecycleResult.reason);
-      }
+      await applySandboxRecovery(deps, bootPrompt, lifecycleResult);
+      // Last, so the watchdogs have already fenced any runtime they found
+      // stale: a lost queue kick is repeated only for a live runtime.
+      if (lifecycleResult === "no_action") await deps.redriveIdleQueue?.();
       if (projectionFailure) throw projectionFailure.error;
     },
   };

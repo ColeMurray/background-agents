@@ -16,6 +16,7 @@ import {
   SourceControlProviderError,
   type SourceControlProvider,
   type SourceControlAuthContext,
+  type CredentialScope,
   type GitPushAuthContext,
   type GitPushSpec,
   type PullRequestSnapshot,
@@ -153,6 +154,7 @@ export interface PullRequestServiceDeps {
   /** DO-instance-scoped in-flight claims — must outlive individual requests. */
   claims: PullRequestCreationClaims;
   sourceControlProvider: SourceControlProvider;
+  resolveCredentialScope: (sessionId: string) => Promise<CredentialScope>;
   log: Logger;
   generateId: () => string;
   pushBranchToRemote: (pushSpec: GitPushSpec) => Promise<PushBranchResult>;
@@ -238,8 +240,10 @@ export class SessionPullRequestService {
       const draft = scmSettings.alwaysUseDraftMode === true || (input.draft ?? false);
 
       let pushAuth: GitPushAuthContext;
+      let credentialScope: CredentialScope;
       try {
-        pushAuth = await this.deps.sourceControlProvider.generatePushAuth();
+        credentialScope = await this.deps.resolveCredentialScope(sessionId);
+        pushAuth = await this.deps.sourceControlProvider.generatePushAuth(credentialScope);
         this.deps.log.info("Generated fresh push auth token");
       } catch (error) {
         this.deps.log.error("Failed to generate push auth", {
@@ -308,6 +312,7 @@ export class SessionPullRequestService {
         headMatches,
         targetRepo,
         sessionId,
+        credentialScope,
         {
           sanitizedHeadBranch,
           generatedHeadBranch,
@@ -496,6 +501,7 @@ export class SessionPullRequestService {
     matches: PrArtifactHeadMatch[],
     targetRepo: RepoIdentity,
     sessionId: string,
+    credentialScope: CredentialScope,
     head: {
       sanitizedHeadBranch: string;
       generatedHeadBranch: string;
@@ -533,12 +539,15 @@ export class SessionPullRequestService {
       // opening a duplicate is not.
       let live: PullRequestSnapshot | null = null;
       try {
-        live = await this.deps.sourceControlProvider.getPullRequest({
-          owner: targetRepo.repoOwner,
-          name: targetRepo.repoName,
-          number: candidate.prNumber,
-          repositoryExternalId: candidate.repositoryExternalId ?? undefined,
-        });
+        live = await this.deps.sourceControlProvider.getPullRequest(
+          {
+            owner: targetRepo.repoOwner,
+            name: targetRepo.repoName,
+            number: candidate.prNumber,
+            repositoryExternalId: candidate.repositoryExternalId ?? undefined,
+          },
+          credentialScope
+        );
       } catch (error) {
         this.deps.log.warn("Could not read live PR state; using the stored artifact's", {
           pr_number: candidate.prNumber,

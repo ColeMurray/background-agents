@@ -12,6 +12,7 @@ import type * as AuthenticateModule from "../auth/authenticate";
 import { HttpError, resolveRepoOrError } from "./shared";
 import { PERMISSION_IDS } from "@open-inspect/shared/rbac";
 import { createTestRequestHandler } from "../router.test-support";
+import { ModelPreferencesStore } from "../db/model-preferences";
 import { automationRoutes } from "./automations";
 import {
   mocks,
@@ -75,6 +76,12 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
+vi.mock("../db/team-settings", () => ({
+  TeamSettingsStore: vi.fn().mockImplementation(function () {
+    return { get: vi.fn(async () => ({ requireTeamOnCreate: false })) };
+  }),
+}));
+
 vi.mock("../auth/model-provider-account-default-adapters", () => ({
   modelProviderAccountAdapterRegistry: {
     get: (...args: unknown[]) => mockProviderAdapterGet(...args),
@@ -96,6 +103,7 @@ vi.mock("../auth/crypto", () => ({
 }));
 
 const mockSlackChannelStore = {
+  hasCompatibleBindings: vi.fn(async () => true),
   bindChannelStatements: vi.fn(),
   getWatchedSlackChannels: vi.fn(),
 };
@@ -142,6 +150,103 @@ describe("automation create route", () => {
       scheduleTz: "UTC",
       instructions: "Run tests",
     };
+
+    it("creates a one-shot schedule at a future timestamp without a cron expression", async () => {
+      const scheduleOnceAt = Date.now() + 3_600_000;
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", {
+        body: { ...body, scheduleOnceAt },
+      });
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trigger_type: "schedule",
+          schedule_cron: null,
+          schedule_once_at: scheduleOnceAt,
+          next_run_at: scheduleOnceAt,
+          enabled: 1,
+        })
+      );
+    });
+
+    it("accepts launch retries on a one-shot schedule", async () => {
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", {
+        body: { ...body, scheduleOnceAt: Date.now() + 3_600_000, maxRetries: 2 },
+      });
+      expect(response.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 2, schedule_once_at: expect.any(Number) })
+      );
+    });
+
+    it.each([
+      { scheduleOnceAt: Date.now() - 1 },
+      { scheduleOnceAt: "tomorrow" },
+      { scheduleOnceAt: Date.now() + 3_600_000, scheduleCron: "0 9 * * *" },
+      { scheduleOnceAt: Date.now() + 3_600_000, triggerType: "webhook" },
+    ])("rejects an invalid one-shot schedule: %j", async (schedule) => {
+      const { scheduleCron: _cron, ...body } = validBody;
+      const response = await callRoute("POST", "/automations", { body: { ...body, ...schedule } });
+      expect(response.status).toBe(400);
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
+    it("saves native max and effective OpenAI pins without rollout configuration", async () => {
+      const preferences = vi
+        .spyOn(ModelPreferencesStore.prototype, "getEnabledModels")
+        .mockResolvedValue(["openai/gpt-5.6-sol"]);
+      const handle = createTestRequestHandler([automationRoutes]);
+      const request = automationRequest((request, env, tasks) => handle(request, env, tasks));
+      mockProviderAccountStore.getById.mockResolvedValue(null);
+      try {
+        const response = await request("POST", "/automations", {
+          body: {
+            ...validBody,
+            harness: "codex",
+            model: "openai/gpt-5.6-sol",
+            reasoningEffort: "max",
+            providerSelections: {
+              openai: { mode: "api_key" },
+              anthropic: { mode: "provider_account", accountId: "a".repeat(32) },
+            },
+          },
+        });
+        expect(response.status).toBe(201);
+        expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            harness: "codex",
+            model: "openai/gpt-5.6-sol",
+            reasoning_effort: "max",
+          })
+        );
+        expect(mockProviderAccountStore.getById).not.toHaveBeenCalled();
+        expect(mockProviderAuthStore.bindInserts).toHaveBeenCalledWith(
+          expect.any(String),
+          { openai: { mode: "api_key" } },
+          expect.any(Number)
+        );
+      } finally {
+        preferences.mockRestore();
+      }
+    });
+
+    it("denies repository targets before SCM lookup or persistence", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        permissions: PERMISSION_IDS.filter((permission) => permission !== "repositories.use"),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({
+        error: "Forbidden",
+        code: "permission_required",
+        permission: "repositories.use",
+      });
+      expect(resolveRepoOrError).not.toHaveBeenCalled();
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
 
     it("rejects a Slack channel condition with the wrong operator", async () => {
       const res = await callRoute("POST", "/automations", {
@@ -652,6 +757,54 @@ describe("automation create route", () => {
         "generated-id",
         [],
         expect.any(Number)
+      );
+    });
+
+    it("stores the launch retry limit of a scheduled automation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: { ...validBody, maxRetries: 3 },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 3 })
+      );
+    });
+
+    it("rejects a launch retry limit on a non-schedule trigger", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Inbound",
+          instructions: "Handle the payload.",
+          triggerType: "webhook",
+          maxRetries: 1,
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: "maxRetries above 0 is only valid for schedule triggers",
+      });
+      expect(mockBatch).not.toHaveBeenCalled();
+    });
+
+    it("accepts a zero launch retry limit on a non-schedule trigger", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Inbound",
+          instructions: "Handle the payload.",
+          triggerType: "webhook",
+          maxRetries: 0,
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ max_retries: 0 })
       );
     });
 

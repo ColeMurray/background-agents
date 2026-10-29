@@ -62,6 +62,106 @@ per-hop `request_id`.
 To trace a full request: filter by `trace_id` across all three services, or narrow by `session_id` +
 `message_id` for a specific prompt run.
 
+## Latency and Usage Baselines
+
+Measure distributions before changing providers, warm pools, or idle timeouts. These are server-side
+latency signals, not browser-render timings. Reuse the existing `prompt.complete` fields rather than
+treating provider allocation or a connected WebSocket as user readiness.
+
+### Timing boundaries
+
+| Signal                                   | Start and end                                                                                                 | Interpretation                                                                                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prompt.complete.total_duration_ms`      | Message creation to control-plane receipt of accepted `execution_complete`                                    | Queue plus processing; excludes browser delivery/rendering and completion callbacks                                                                                                              |
+| `prompt.complete.queue_duration_ms`      | Message creation to its stored processing start                                                               | Includes boot waiting when the prompt arrived before readiness                                                                                                                                   |
+| `prompt.complete.processing_duration_ms` | Stored processing start to completion receipt                                                                 | Includes dispatch preparation/transport, not just model execution                                                                                                                                |
+| `sandbox.ready.generation_to_ready_ms`   | Control-plane generation reservation/resume (`sandbox.created_at`) to receipt of the accepted runtime `ready` | Includes startup work and transport delay after reservation; excludes earlier admission work. Provider bookkeeping or preservation holds can still delay prompt dispatch                         |
+| `sandbox.boot_progress.elapsed_ms`       | Runtime-local phase scope start to completed/failed phase                                                     | Existing sync/setup/start/skills/memory/harness measurements, relayed without subtracting clocks                                                                                                 |
+| `bridge.harness_attach.duration_seconds` | Entry to early-connect attachment through local readiness publication, or failure/cancellation                | Monotonic Python time; includes harness construction/open, session-resume attempt, signing retries and ready-send attempt. Excludes waiting for the supervisor's harness phase and relay polling |
+| `http.request.sql_total_ms`              | Sum of caller-observed `first`/`run`/`all`/`batch` attempts                                                   | Includes failed attempts. A batch is one record; concurrent query durations may overlap                                                                                                          |
+
+The readiness boundaries use only control-plane timestamps. Attachment durations use only the
+bridge's monotonic clock. Never subtract a runtime event's epoch-seconds `timestamp` from a
+control-plane timestamp, or add nested/overlapping provider, supervisor, phase and readiness
+durations. TypeScript durations are milliseconds; the new Python attachment duration is seconds.
+Existing Python `duration_ms` logs and wire `elapsedMs` retain their explicit millisecond units.
+
+`WARMING` returned by Modal means allocation/access discovery, not readiness. `sandbox.startup`
+finishes supervisor work, not bridge attachment. Cached `repo_image` and `snapshot_restore` boots
+still synchronize repositories and run start hooks; they skip setup hooks. Snapshot sync fetches
+without resetting the preserved checkout. Cached sync failures may warn and continue, so compare
+warning/failure rates alongside successful latency. `ready_sent=false` on successful attachment
+means local readiness was reached but delivery was buffered, not acknowledged by the control plane.
+Even `ready_sent=true` is not a receipt acknowledgment; use `sandbox.ready` for that boundary.
+
+### Correlation and coverage
+
+- Use `session_id` plus `message_id` for prompt completion, and `session_id`, `sandbox_id`, plus
+  `generation_created_at_ms` for control-plane readiness. The generation timestamp distinguishes
+  in-place resumes that retain the logical sandbox ID; it is not a provider allocation timestamp.
+- Readiness timing is emitted only after the existing guarded readiness transition. Ordinary ready
+  replay/reconnects do not emit another sample. For exported logs, retain the first accepted
+  readiness per generation; later recovery transitions are not new allocations.
+- Boot phases retain the existing sequence high-water-mark guard. Join by sandbox and boot sequence,
+  not sequence alone. The relay is best-effort and resends only the latest phase on reconnect;
+  missing phases are unknown, not zero-duration work.
+- Attachment emits once per attempt, including errors and cancellation, and is not rerun on a socket
+  reconnect. A bridge process restart can perform another attempt in the same sandbox; keep those
+  retries rather than treating them as independent boots. Legacy late-connect mode does not use this
+  attachment timer.
+- Use only duration-bearing `prompt.complete` events. `outcome=already_stopped` includes replay and
+  other nonmatching completions and carries no timing. Cancellation/timeout paths do not all emit
+  this event, and a projection failure after committing completion can lose the timed log. Logs are
+  not an exactly-once accounting ledger; report missing observations and failures.
+- First assistant text, first tool activity, and client-rendered output are not measured by these
+  signals. Do not label completion or readiness as time-to-first-token or browser-visible latency.
+
+### Operator workflow
+
+For Cloudflare deployments, the existing log query tool preserves these fields under `source`:
+
+```bash
+node scripts/cf-logs.ts --session SESSION_ID --json
+node scripts/cf-logs.ts --search sandbox.ready --json
+node scripts/cf-logs.ts --search prompt.complete --json
+```
+
+Use the deployed runtime's log export for supervisor/bridge records; `cf-logs.ts` does not fetch
+sandbox stdout. Join `sandbox.startup.boot_mode` (`fresh`, `repo_image`, `snapshot_restore`) to
+readiness and phases by session/sandbox identity. Exclude `build` mode and keep missing/ambiguous
+path matches as unknown, especially across retained-runtime resumes. Do not infer a cache hit from a
+snapshot merely existing in the database. Use runtime `prompt.start` records (message and sandbox
+correlation) to associate completions with a sandbox, not just the most recent startup for the
+session. Where generation attribution is ambiguous, leave it unknown; already-ready prompts form a
+separate cohort and should not inherit startup wait.
+
+For the same observation window, compare sample count, p50/p95/p99, missing-sample count and failure
+rate by startup path and harness/provider. Start with queue versus processing duration, then
+readiness and individual phase/attachment durations to explain long queue waits. Keep retry attempts
+visible. Use low-cardinality cohort dimensions only; session, message, sandbox, repository and
+generation identifiers belong in logs/traces, never metric labels. Do not export prompt text, tool
+arguments, environment variables, credentials or signed URLs into measurement datasets.
+
+### Usage is not infrastructure billing
+
+Reuse the persisted `step_usage` records and existing budget/session cost projections instead of
+summing raw replayable `step_finish` logs. Stable `stepId` records are upserted (including usage
+corrections); legacy timestamp fallback has weaker identity. Token fields and reported costs can be
+null when unavailable. Preserve unknown values, keep subtask attribution, and do not add a
+cumulative `messageCostUsd` to per-step costs. Model/harness-reported USD is not a provider invoice.
+
+The HTTP SQL summary reports engine duration/rows only when the engine returned them. Failed
+operations now contribute caller time/count without inventing engine time or rows; `first()` also
+has no engine metadata. Neither absence nor a thrown write proves zero billed work.
+
+No new infrastructure dollar estimate or residency counter is introduced here. Existing bridge
+connection durations measure transport connectivity, not allocation lifetime. Allocation-to-ready
+time, configured idle/timeout limits, and a stop request do not establish actual residency or billed
+cost. Use provider-confirmed allocation/termination or billing exports for those questions, and keep
+orphaned/retained allocations and missing termination observations explicit. Compare reliable
+reported usage per completed prompt with latency cohorts, separately from provider billing; do not
+convert sandbox residency into dollars without an authoritative billing model.
+
 ## Error Shape
 
 All services use the same error fields:
@@ -139,8 +239,8 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 | `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                                         | Prompt run finished                   |
 | `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`               | Completion callback delivery result   |
 | `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`                         | Linear start-callback delivery result |
-| `sandbox.boot_progress`      | info        | `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                                             | Boot phase reported by the runtime    |
-| `sandbox.ready`              | info        | `harness`                                                                                                                           | Runtime harness up; sandbox is ready  |
+| `sandbox.boot_progress`      | info        | `sandbox_id`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                               | Boot phase reported by the runtime    |
+| `sandbox.ready`              | info        | `sandbox_id`, `generation_created_at_ms`, `generation_to_ready_ms`, `harness`                                                       | Accepted runtime readiness transition |
 
 `prompt.dispatch` with `outcome="deferred"` and `reason="sandbox_booting"` means a bridge is
 attached but its boot has not reached `ready`: nothing is spawned and nothing is sent, and the
@@ -151,24 +251,27 @@ per `boot_seq`; the copy the bridge resends on reconnect is dropped at debug lev
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
 Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` to `sandbox.spawn`
-outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
+outcomes, `sandbox.restored` to `sandbox.restore` outcomes, and `sandbox.timeout` to
+`sandbox.inactivity_timeout` (now emitted for every provider).
 
-| Event                          | Level       | Key Fields                                                                                                              | Description                                                             |
-| ------------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `sandbox.spawn`                | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed                                                         |
-| `sandbox.restore`              | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed                                                       |
-| `sandbox.snapshot`             | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
-| `sandbox.snapshot_saved`       | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
-| `sandbox.heartbeat_stale`      | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed                                                        |
-| `sandbox.timeout`              | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached                                              |
-| `sandbox.connecting_timeout`   | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
-| `sandbox.boot_budget`          | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
-| `sandbox.fatal_runtime_error`  | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
-| `sandbox.failed_reconnected`   | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
-| `sandbox.circuit_breaker_open` | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
+| Event                           | Level       | Key Fields                                                                                                              | Description                                                             |
+| ------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `sandbox.spawn`                 | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed                                                         |
+| `sandbox.restore`               | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed                                                       |
+| `sandbox.snapshot`              | info        | `reason`, `modal_object_id`                                                                                             | Snapshot attempt started                                                |
+| `sandbox.snapshot_saved`        | info        | `image_id`, `reason`                                                                                                    | Snapshot saved                                                          |
+| `sandbox.heartbeat_unconfirmed` | warn        | `last_heartbeat_ms`, `threshold_ms`, `grace_ends_at_ms`, `sandbox_status`                                               | Heartbeat missed; a ready sandbox is kept while its bridge reconnects   |
+| `sandbox.heartbeat_stale`       | warn        | `last_heartbeat_ms`, `threshold_ms`, `sandbox_status`                                                                   | Heartbeat missed (past the reconnect grace if ready); sandbox retired   |
+| `sandbox.inactivity_timeout`    | info        | `spawn_source`, `timeout_ms`, `idle_ms`                                                                                 | Inactivity stop decided                                                 |
+| `sandbox.connecting_timeout`    | warn        | `elapsed_ms`, `timeout_ms`                                                                                              | Bridge never connected within 240 s of creation                         |
+| `sandbox.boot_budget`           | warn        | `elapsed_ms`, `timeout_ms`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `warning`                   | Connected sandbox outlived `SANDBOX_BOOT_TIMEOUT_MS`; generation fenced |
+| `sandbox.fatal_runtime_error`   | warn        | `sandbox_status`, `error`                                                                                               | Runtime reported a fatal error; sandbox failed                          |
+| `sandbox.failed_reconnected`    | info        | `sandbox_id`                                                                                                            | Watchdog-failed boot connected late; resumed as `connecting`            |
+| `sandbox.circuit_breaker_open`  | warn        | `failure_count`, `wait_time_ms`                                                                                         | Spawn refused after repeated boot failures                              |
 
 Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable identifier is in
-`event`.
+`event`. On both heartbeat events, `last_heartbeat_ms` is the heartbeat's age in milliseconds, not a
+timestamp.
 
 #### Provider Clients
 
@@ -198,16 +301,16 @@ Where `msg` is prose (`"Boot budget exceeded"`, `"Heartbeat stale"`), the stable
 
 #### Supervisor (`component: "supervisor"`)
 
-| Event                          | Level   | Key Fields                                                                                                                                                                                       | Description                                                       |
-| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `sandbox.startup`              | info    | `repo_owner`, `repo_name`, `boot_mode`, `restored_from_snapshot`, `from_repo_image`, `git_sync_success`, `setup_success`, `start_success`, `harness`, `opencode_ready`, `duration_ms`, `outcome` | One per sandbox boot, once the harness is up                      |
-| `supervisor.start`             | info    | `repo_owner`, `repo_name`                                                                                                                                                                        | Supervisor process started                                        |
-| `supervisor.error`             | error   | `error_type`, `error_message`, `error_stack`                                                                                                                                                     | Unhandled supervisor error                                        |
-| `supervisor.fatal`             | error   | `error_message`, `boot_phase`                                                                                                                                                                    | Fatal error, sandbox will exit                                    |
-| `supervisor.boot_warning`      | warning | `scope`, `warning_message`, `repo_owner`, `repo_name`                                                                                                                                            | Non-fatal hook failure, relayed as a `warning` event              |
-| `supervisor.boot_cancelled`    | info    | `reason`                                                                                                                                                                                         | Boot cancelled by a `shutdown` or a fenced token                  |
-| `bridge.deterministic_failure` | error   | `exit_code`, `cause`                                                                                                                                                                             | Harness could not open; reported as a fatal `harness` phase       |
-| `bridge.crash`                 | error   | `exit_code`, `restart_count`                                                                                                                                                                     | Bridge exited abnormally; restarted with backoff, during boot too |
+| Event                          | Level   | Key Fields                                                                                                                                                                                       | Description                                                         |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `sandbox.startup`              | info    | `repo_owner`, `repo_name`, `boot_mode`, `restored_from_snapshot`, `from_repo_image`, `git_sync_success`, `setup_success`, `start_success`, `harness`, `opencode_ready`, `duration_ms`, `outcome` | Supervisor startup complete; bridge attachment may still be pending |
+| `supervisor.start`             | info    | `repo_owner`, `repo_name`                                                                                                                                                                        | Supervisor process started                                          |
+| `supervisor.error`             | error   | `error_type`, `error_message`, `error_stack`                                                                                                                                                     | Unhandled supervisor error                                          |
+| `supervisor.fatal`             | error   | `error_message`, `boot_phase`                                                                                                                                                                    | Fatal error, sandbox will exit                                      |
+| `supervisor.boot_warning`      | warning | `scope`, `warning_message`, `repo_owner`, `repo_name`                                                                                                                                            | Non-fatal hook failure, relayed as a `warning` event                |
+| `supervisor.boot_cancelled`    | info    | `reason`                                                                                                                                                                                         | Boot cancelled by a `shutdown` or a fenced token                    |
+| `bridge.deterministic_failure` | error   | `exit_code`, `cause`                                                                                                                                                                             | Harness could not open; reported as a fatal `harness` phase         |
+| `bridge.crash`                 | error   | `exit_code`, `restart_count`                                                                                                                                                                     | Bridge exited abnormally; restarted with backoff, during boot too   |
 
 #### Bridge (`component: "bridge"`)
 
@@ -220,7 +323,7 @@ phase completes, then attaches the harness and sends `ready`.
 | `bridge.disconnect`                    | info, warning | `reason`, `ws_close_code`, `connection_duration_seconds`, `total_connected_duration_seconds`, `connection_count`, `reconnect_count`, `reconnect_attempt_count` | WebSocket disconnected with lifetime aggregates                                                                                                                                                                                                                                                 |
 | `bridge.reconnect`                     | info          | `attempt`, `reconnect_attempt_count`, `delay_s`                                                                                                                | Reconnection attempt                                                                                                                                                                                                                                                                            |
 | `bridge.run_complete`                  | info          | `outcome`, `connection_count`, `reconnect_count`, `reconnect_attempt_count`, `total_connected_duration_seconds`                                                | Bridge process exited with aggregate connection stats                                                                                                                                                                                                                                           |
-| `bridge.harness_attached`              | info          | `harness`                                                                                                                                                      | Harness attached after the `harness` phase; `ready` sent                                                                                                                                                                                                                                        |
+| `bridge.harness_attach`                | info          | `harness`, `outcome`, `duration_seconds`, `ready_sent`                                                                                                         | Early-connect attachment attempt, including failure/cancellation; replaces `bridge.harness_attached`                                                                                                                                                                                            |
 | `bridge.harness_attach_failed`         | error         | `error_type`, `error_message`, `error_stack`                                                                                                                   | Harness attach failed; the bridge exits and the supervisor restarts it, reporting `Bridge crashed N times` only once the restart budget is spent. A deterministic `HarnessStartError` skips the retries and is reported at once as a fatal `harness` phase — see `bridge.deterministic_failure` |
 | `bridge.command_refused_while_booting` | warning       | `cmd_type`                                                                                                                                                     | Command arrived before `ready`: `snapshot` and `refresh_diff` are dropped, `push` is answered with `push_error`                                                                                                                                                                                 |
 | `prompt.start`                         | info          | `message_id`, `model`                                                                                                                                          | Prompt processing started                                                                                                                                                                                                                                                                       |
@@ -437,7 +540,10 @@ Fencing revokes a generation for good: the sandbox token hash is blanked, the so
 exits cleanly, and the supervisor logs `supervisor.boot_cancelled` and stops the sandbox. A fenced
 `failed` row never becomes `ready`, even if a late `ready` arrives. A connect-watchdog failure
 fences only when the provider can stop the sandbox; otherwise the boot may still connect later,
-which is logged as `sandbox.failed_reconnected` and resumes as `connecting`.
+which is logged as `sandbox.failed_reconnected` and resumes as `connecting`. A fenced
+connect-watchdog failure re-drives the pending prompt onto a replacement sandbox right away. If
+those timeouts open the circuit breaker, or the provider stop fails (a fenced generation is replaced
+only after a confirmed stop), that prompt fails instead.
 
 ### "Why did a sandbox spawn fail?"
 

@@ -5,7 +5,8 @@ prompt task decoupling.
 Forwarder-level buffering/flush/eviction mechanics are covered in
 test_event_forwarder.py; here we test only what the bridge owns: binding and
 unbinding the forwarder around a connection, delivery of events produced
-while disconnected, and prompt tasks surviving WS disconnects.
+while disconnected, prompt tasks surviving WS disconnects, and the turn
+outcome when assistant text cannot be delivered.
 """
 
 import asyncio
@@ -17,7 +18,8 @@ import pytest
 from websockets import State
 
 from sandbox_runtime.bridge import AgentBridge
-from tests.conftest import MockResponse, wire_opencode_transport
+from sandbox_runtime.event_size import MAX_EVENT_BYTES, event_size_bytes
+from tests.conftest import MockResponse, ScriptedHarness, wire_opencode_transport
 
 
 class MockHttpClient:
@@ -204,6 +206,101 @@ class TestPromptTaskDecoupling:
         assert parsed["type"] == "execution_complete"
         assert parsed["messageId"] == "msg-1"
         assert parsed["success"] is True
+
+
+class TestAssistantTextDelivery:
+    """A turn succeeds only if its assistant text can reach the control plane."""
+
+    UNDELIVERED = (
+        "The agent's response exceeded the event size limit and was not delivered in full."
+    )
+
+    @staticmethod
+    async def _run(
+        bridge: AgentBridge, *events: dict[str, Any], ws: FakeWs | None = None
+    ) -> dict[str, Any]:
+        """Run one scripted turn, with the forwarder bound to ``ws`` if given."""
+
+        async def stream(message_id: str, _text: str):
+            for event in events:
+                yield {**event, "messageId": message_id}
+
+        bridge.boot_attach.harness = ScriptedHarness(stream)
+        bridge._configure_git_identity = AsyncMock()
+        if ws is not None:
+            await bridge.event_forwarder.bind(ws)
+        return await bridge._handle_prompt(
+            {
+                "messageId": "msg-1",
+                "content": "summarize the repository",
+                "author": {"gitIdentity": {"mode": "agent-only"}},
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_text_past_the_event_limit_fails_the_turn(self, bridge: AgentBridge):
+        # Token content is cumulative: every event carries the whole text so
+        # far, so once it passes the limit the rest of the answer only ever
+        # travels in events the forwarder refuses to send.
+        opening = "Reading the repository."
+        answer = f"{opening}\n\n{'x' * MAX_EVENT_BYTES}\n\nFinal answer."
+        ws = FakeWs()
+        bridge.activity.record_prompt_diagnostics = MagicMock()
+
+        completion = await self._run(
+            bridge,
+            {"type": "token", "content": opening},
+            {"type": "token", "content": answer},
+            ws=ws,
+        )
+
+        sent = [json.loads(data) for data in ws.sent]
+        assert [event["content"] for event in sent if event["type"] == "token"] == [opening]
+        assert completion["success"] is False
+        assert completion["error"] == self.UNDELIVERED
+        (summary,) = bridge.activity.record_prompt_diagnostics.call_args.args
+        assert (summary["source_outcome"], summary["error_category"]) == (
+            "success",
+            "text_undelivered",
+        )
+
+    @pytest.mark.asyncio
+    async def test_text_the_envelope_pushes_past_the_limit_fails_the_turn(
+        self, bridge: AgentBridge
+    ):
+        token = {"type": "token", "messageId": "msg-1", "content": "", "timestamp": 1.0}
+        # Exactly at the limit until the forwarder stamps sandboxId on it.
+        token["content"] = "x" * (MAX_EVENT_BYTES - event_size_bytes(token))
+        ws = FakeWs()
+
+        completion = await self._run(bridge, token, ws=ws)
+
+        assert ws.sent == []
+        assert completion["success"] is False
+        assert completion["error"] == self.UNDELIVERED
+
+    @pytest.mark.asyncio
+    async def test_harness_error_outranks_undelivered_text(self, bridge: AgentBridge):
+        completion = await self._run(
+            bridge,
+            {"type": "token", "content": "x" * MAX_EVENT_BYTES},
+            {"type": "error", "error": "rate limited"},
+            ws=FakeWs(),
+        )
+
+        assert completion["success"] is False
+        assert completion["error"] == "rate limited"
+
+    @pytest.mark.asyncio
+    async def test_text_buffered_while_disconnected_does_not_fail_the_turn(
+        self, bridge: AgentBridge
+    ):
+        completion = await self._run(bridge, {"type": "token", "content": "Done."})
+
+        assert completion["success"] is True
+        ws = FakeWs()
+        await bridge.event_forwarder.bind(ws)
+        assert [json.loads(data)["content"] for data in ws.sent] == ["Done."]
 
 
 if __name__ == "__main__":

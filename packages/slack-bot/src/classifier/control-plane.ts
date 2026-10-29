@@ -15,10 +15,9 @@ export const LOCAL_CACHE_TTL_MS = 60 * 1000;
 
 /**
  * Expiration for the shared KV caches (repos, routing rules, environments,
- * watched channels), in seconds — the unit Cloudflare KV's `expirationTtl`
- * expects.
+ * watched channels), in milliseconds per the TypeScript duration convention.
  */
-export const KV_CACHE_TTL_SECONDS = 300;
+export const KV_CACHE_TTL_MS = 300_000;
 
 /**
  * Issue an authenticated GET to the control plane through the service
@@ -28,11 +27,17 @@ export async function controlPlaneFetch(
   env: Env,
   path: string,
   traceId?: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  userId?: string
 ): Promise<Response> {
   return signedControlPlaneFetch(
     env,
-    { method: "GET", url: `https://internal${path}`, traceId },
+    {
+      method: "GET",
+      url: `https://internal${path}`,
+      traceId,
+      actor: userId ? `slack:${userId}` : undefined,
+    },
     {
       headers: { Accept: "application/json" },
       ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
@@ -59,9 +64,10 @@ export class ControlPlaneRequestError extends Error {
 export async function fetchControlPlaneJson(
   env: Env,
   path: string,
-  traceId?: string
+  traceId?: string,
+  userId?: string
 ): Promise<unknown> {
-  const response = await controlPlaneFetch(env, path, traceId);
+  const response = await controlPlaneFetch(env, path, traceId, undefined, userId);
   if (!response.ok) {
     throw new ControlPlaneRequestError(path, response.status);
   }

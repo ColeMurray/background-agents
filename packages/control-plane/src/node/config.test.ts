@@ -10,15 +10,22 @@ const REQUIRED = {
 };
 
 describe("readEnvConfig", () => {
-  it("takes every EnvConfig field from the source and nothing else", () => {
+  it("takes host-independent config and ignores Worker-only settings and other variables", () => {
     const config = readEnvConfig({
       ...REQUIRED,
       LOG_LEVEL: "debug",
       SANDBOX_PROVIDER: "e2b",
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS: "60000",
+      SESSION_DO_LOCATION_HINT: "wnam",
       PATH: "/usr/bin",
       DATA_DIR: "/var/lib/oi",
     });
-    expect(config).toEqual({ ...REQUIRED, LOG_LEVEL: "debug", SANDBOX_PROVIDER: "e2b" });
+    expect(config).toEqual({
+      ...REQUIRED,
+      LOG_LEVEL: "debug",
+      SANDBOX_PROVIDER: "e2b",
+      SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS: "60000",
+    });
   });
 
   it("treats an empty variable as unset", () => {

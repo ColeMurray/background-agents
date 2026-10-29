@@ -5,6 +5,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from modal.exception import NotFoundError as ModalNotFoundError
+from modal.exception import SandboxTimeoutError
 from modal.exception import TimeoutError as ModalTimeoutError
 
 from sandbox_runtime.types import SandboxStatus
@@ -187,7 +188,12 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
     return service
 
 
+VCS_IDENTITY = {"clone_host": "github.com", "clone_username": "x-access-token"}
+
+
 async def _call(endpoint, request: dict) -> dict:
+    if endpoint is web_api.api_create_build_sandbox:
+        request = {**VCS_IDENTITY, **request}
     return await endpoint.get_raw_f()(
         request,
         authorization="Bearer test",
@@ -276,9 +282,9 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
         repositories=REPOSITORIES,
         callback_url="https://worker.test/image-builds/build-complete",
         failure_callback_url="https://worker.test/image-builds/build-failed",
+        clone_host="github.com",
+        clone_username="x-access-token",
         clone_token="clone-token",
-        clone_host=None,
-        clone_username=None,
         user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=2400,
@@ -852,6 +858,22 @@ async def test_generic_stop_succeeds_when_provider_object_is_already_absent(monk
 
     assert result == {"success": True, "data": {"terminated": True}}
     from_id.aio.assert_awaited_once_with("modal-session-1")
+
+
+@pytest.mark.asyncio
+async def test_generic_stop_succeeds_when_provider_sandbox_timed_out(monkeypatch):
+    terminate = AsyncMock(side_effect=SandboxTimeoutError())
+    from_id = MagicMock()
+    from_id.aio = AsyncMock(
+        return_value=SimpleNamespace(terminate=SimpleNamespace(aio=terminate), returncode=124)
+    )
+    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.from_id", from_id)
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call_generic_stop({"sandbox_id": "modal-session-1"})
+
+    assert result == {"success": True, "data": {"terminated": True}}
+    terminate.assert_awaited_once_with(wait=True)
 
 
 @pytest.mark.asyncio

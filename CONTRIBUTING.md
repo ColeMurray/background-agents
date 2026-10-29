@@ -77,6 +77,13 @@ options, including Radix's hidden native selects, while preserving accessibility
 label queries when selecting labeled inputs. Investigate slow operations before increasing test
 timeouts or adding retries.
 
+For coverage commands, the recorded baseline, and test-reduction tradeoffs, see
+[Coverage-Guided Test Reduction](docs/TEST_REDUCTION.md). Control-plane coverage combines the Node
+and workerd suites; unit-only coverage is not the measure of retained integration coverage. The
+unfiltered `Coverage` workflow enforces production-only TypeScript and separate Python
+statement/branch floors. Repository administrators should require its `Coverage` check in main
+rules.
+
 ### Commit Messages
 
 Use clear, descriptive commit messages:

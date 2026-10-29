@@ -18,6 +18,8 @@ import { SidebarIcon } from "@/components/ui/icons";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useActiveTeam } from "@/hooks/use-active-team";
+import { serializeSessionListQuery } from "@open-inspect/shared/session-list-query";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -102,8 +104,13 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     onOpen: sidebar.open,
   });
 
+  const { activeTeamId, scope, loading: teamLoading, error: teamError } = useActiveTeam();
+  const teamContext = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
+  const teamParams = serializeSessionListQuery(teamContext).toString();
+  const recentSessionsKey = `${COMMAND_MENU_SESSIONS_KEY}${teamParams ? `&${teamParams}` : ""}`;
+
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
-    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null,
+    isCommandMenuOpen && !teamLoading && !teamError ? recentSessionsKey : null,
     fetchSessionListPage
   );
 
@@ -210,6 +217,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           onNavigate={handleNavigate}
           onNewSession={handleNewSession}
           sessions={sessionsResponse?.sessions ?? []}
+          teamContext={teamContext}
         />
       </AppShellActionsContext.Provider>
     </SidebarContext.Provider>

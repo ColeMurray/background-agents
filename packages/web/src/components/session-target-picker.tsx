@@ -23,6 +23,8 @@ export function SessionTargetPicker({
   loadingBranches,
   repos,
   loadingRepos,
+  repositoryGrantError,
+  selectionError,
   disabled,
 }: SessionTargetPickerProps & { disabled: boolean }) {
   return (
@@ -50,6 +52,18 @@ export function SessionTargetPicker({
         <ChevronDownIcon className="w-3 h-3" />
       </Combobox>
 
+      {repositoryGrantError && (
+        <p role="alert" className="max-w-full text-xs text-destructive">
+          {repositoryGrantError}
+        </p>
+      )}
+
+      {selectionError && (
+        <p role="alert" className="max-w-full text-xs text-destructive">
+          {selectionError}
+        </p>
+      )}
+
       {/* Ad-hoc repository set editor */}
       {sessionTarget?.kind === "repos" && (
         <RepositoryMultiSelect
@@ -67,6 +81,17 @@ export function SessionTargetPicker({
         />
       )}
 
+      {selectionError && sessionTarget?.kind === "repos" && (
+        <button
+          type="button"
+          onClick={() => onMultiSelectionChange([])}
+          disabled={disabled || loadingRepos}
+          className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Choose repositories again
+        </button>
+      )}
+
       {/* Branch selector */}
       {sessionTarget?.kind === "repo" && (
         <Combobox
@@ -81,7 +106,7 @@ export function SessionTargetPicker({
           filterFn={(option, query) => option.label.toLowerCase().includes(query)}
           direction="down"
           dropdownWidth="w-56"
-          disabled={disabled || loadingBranches}
+          disabled={disabled || loadingBranches || loadingRepos || !!selectionError}
           triggerClassName="flex max-w-full items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed transition"
         >
           <span className="max-w-[9rem] truncate">

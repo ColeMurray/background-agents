@@ -2,98 +2,390 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## September 29, 2026
+## October 29, 2026
 
-### Added
+**Saved MCP credentials are listed by name.** Editing an MCP server used to show only that
+credentials existed, and saving a new value silently deleted every saved environment variable or
+header you didn't retype. The edit form now lists each saved name with its value hidden: leave a row
+blank to keep its value, enter a new value to replace it, or remove the row to delete it. Names are
+returned only to people with `mcp_servers.manage`; read-only users see neither names nor values, and
+values are never returned to anyone. API clients can send `keepCredentialKeys` with
+`PUT /mcp-servers/:id` for the same per-name edits; without it, sent credentials still replace the
+saved set.
 
-`TEAMS_ENFORCEMENT` controls active-user session item routes (`/sessions/:id` and its subpaths)
-using the persisted session row (`off`, `shadow` by default, or `on`). On those routes, private
-visibility applies in every mode; team visibility and the delete ownership rule apply when `on`.
+## October 28, 2026
 
-WebSocket subscribe and per-command session checks now follow the current session row. Private
-sessions stay restricted in every enforcement mode; team access follows the resolver when
-`TEAMS_ENFORCEMENT=on`, including lifecycle access after membership or scope changes. Workspace-wide
-session lists and bulk export follow in subsequent changes; routes to change a session's team or
-visibility are not yet available.
+**Session connections recover automatically.** Transient disconnects now retry without an attempt
+limit, with capped backoff and random jitter, rather than waiting for a click on **Reconnect** after
+a long outage. Each retry waits between half and all of its exponential delay, up to 30 seconds, so
+tabs affected by the same outage do not keep retrying in lockstep. Retries pause while the tab is
+hidden or the browser is offline and resume immediately once the tab is visible and online again.
+Existing connections stay open when a tab is hidden, but an expired authorization lease waits for
+visibility before reconnecting; a hidden session page may therefore stop maintaining sandbox
+presence while you use a separate editor or terminal. Session-expired connections fetch a fresh
+credential, and temporary credential-service failures retry instead of showing an authentication
+error. Actual authentication failures and server-overload closes still require user action.
 
-Session lists, the inbox, children lists, bulk export, and analytics now filter by persisted row
-visibility. Private sessions remain restricted in every mode; only Owners and administrators receive
-their unattributed, scope-filtered cost total in analytics. The WebSocket path follows in a later
-change; no route can yet make a session private or team-owned.
+## October 27, 2026
+
+**GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
+cancelled consent screen, return to the login page with an error and a retry option. If the GitHub
+App lacks **Email addresses: Read-only**, the page names the permission to check and the control
+plane logs GitHub's status. Rate limits show a temporary failure instead.
+
+**Slack automations can trigger on bot messages.** Slack Message automations used to ignore every
+message from a bot or integration, so alerts from monitoring or CI tools could never start a run.
+Turn on **Trigger on bot messages** and add a **Slack User** condition listing the bot IDs (`B…`)
+allowed to trigger the automation; saving is refused without one. That list limits people too, so
+add anyone else who should still trigger it. Only a message's `text` is matched. Bots can start at
+most 10 runs of an automation per hour and never continue an existing session, and Open-Inspect's
+own messages never trigger anything. See [Bot messages](docs/AUTOMATIONS.md#bot-messages).
+
+**Personal memory follows its owner's prompts.** Your personal memories now serve only your own
+prompts, whatever the session's visibility. On someone else's prompt, an Autofix turn, or between
+prompts, the agent can't search, read, or save them, and once someone else has prompted a session it
+stops searching them there for good; the personal directives and catalog loaded when the session
+started still shape it. New team- and workspace-visible sessions you prompt yourself now save the
+personal facts the agent learns right away, until someone else prompts. Automation runs, manual ones
+included, and sessions started from Slack channels, Linear, or GitHub no longer include personal
+memories; Slack DMs work like the web. A child session spawned on someone else's prompt leaves out
+the parent owner's personal memories. Turning off **Use my personal memories in my sessions**, or
+suspending the account, now reaches existing sessions too. Only the owner sees personal items in a
+session's memory sidebar, and reads of personal memories are audited as `memory.personal_read`.
+Sessions prompted earlier keep the personal memories they loaded but stop searching them. See
+[Persistent session memory](docs/MEMORY.md).
+
+## October 26, 2026
+
+**Codex sub-agents appear as tasks.** Most Codex models can spawn sub-agents, but their activity was
+dropped and a prompt could finish while they were still running. Each sub-agent now shows as a task
+with its tool calls grouped beneath it and its final message as the result, as on Claude Agent and
+OpenCode. The prompt finishes only after its sub-agents do, and their usage counts toward the
+prompt's tokens and cost. Sub-agents can use Open-Inspect tools. Nesting is limited to one level,
+and at most four threads, the parent included, run at once.
+
+**Fewer memory proposals.** Agents no longer weigh a memory at the end of every task; saving nothing
+is now the expected outcome. They save when you ask them to remember something, correct them, state
+a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact the
+repository doesn't record and that would change what the next session does first. Work summaries,
+fixes already in the code, sandbox quirks, and guesses are skipped. See
+[Persistent session memory](docs/MEMORY.md).
+
+**Placement settings for the web app and sessions.** Two optional Terraform inputs let you move
+parts of the request path closer to your users and D1. `web_serverless_region` moves the Vercel web
+functions (default `iad1`) and takes effect after the web app is redeployed.
+`session_do_location_hint` asks Cloudflare to create new session Durable Objects in a chosen region,
+such as `weur` or `apac`; existing sessions stay where they are. Both default to current behavior.
+See [Co-locating the request path](terraform/README.md#co-locating-the-request-path).
+
+## October 25, 2026
+
+**Boat saved snapshot API.** Base builds, prebuilt image builds, and image cleanup now use Boat's
+`/saved-snapshots` endpoints. Existing snapshots work without migration, and snapshot names and
+Terraform bindings are unchanged. The next deployment rebuilds the base snapshot once because its
+build inputs changed.
+
+**Shorter idle time for unattended sandboxes.** Automation runs, GitHub bot runs, and agent-created
+child sessions now default to stopping their sandboxes after 2 minutes of inactivity. User, Slack,
+and Linear sessions keep the 10-minute default. Operators can configure the shorter timeout with
+`SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS`. A connected session page keeps the existing timer
+extensions; direct terminal, VS Code, or VNC connections alone do not. Running turns stay active
+through runtime heartbeats, and follow-up prompts resume the existing stopped session.
+
+**One-shot scheduled automations.** A schedule automation can now **Run once** at a future date and
+time instead of following a cron expression. The automation stays enabled while its runs are active
+or retrying, then disables itself. To run a paused one-shot whose time has passed, give it a new
+future time and resume it. Pause or delete it to cancel a pending start. Requires D1 migration 0091.
+
+**Launch retries for scheduled runs.** Schedule automations can set **Retries** (none by default, up
+to 5) to relaunch a run that failed before its prompt reached a session, for example during a D1
+stall. The first retry waits 2 minutes, and the wait doubles for each later attempt. Runs that fail
+after starting, configuration errors such as a model the harness can't run, and **Trigger Now** runs
+are never retried. A waiting run counts as active, and a run that uses up its retries counts as one
+failure toward auto-pause. Requires D1 migration 0090.
+
+**Review memories in bulk.** **Settings › Memories** and **Settings › Shared memories** can select
+up to 100 records and approve, reject, archive, or restore them in one action. Memories are never
+hard-deleted, so bulk removal archives them or rejects proposals. Shared memories now open on an
+**All** view across every repository and environment you can access. Each record links to its own
+scope, and you pick a concrete scope before creating a memory.
+
+## October 24, 2026
+
+**Codex on every sandbox provider.** The Codex harness is no longer limited to Modal and Modal VM;
+Daytona, E2B, Vercel, and Boat deployments can run Codex sessions, automations, and child sessions
+too. The harness now launches the image's pinned Codex CLI rather than whatever `codex` sits in
+`/usr/local/bin`, which Boat replaces at boot. Rebuild your base image or snapshot if it predates
+the Codex CLI, including a pinned `vercel_base_snapshot_id`. Prebuilt repository images older than
+runtime v77 are rebuilt automatically; until then, Codex sessions start without them while other
+harnesses keep using them.
+
+**Codex sessions report their cost.** Codex turns used to report a cost of zero. Each model request
+is now priced from the models.dev catalog that the image already caches for OpenCode, so session
+totals, analytics, and `maxSessionCostUsd` include Codex spend. A model missing from the image's
+catalog is still reported as zero.
+
+**Mermaid diagrams in assistant messages.** Completed Mermaid code blocks in assistant replies
+render as diagrams that follow the light or dark theme. The source stays available behind a
+disclosure, and a diagram that fails to render falls back to code.
+
+**Duplicate an automation.** A **Duplicate** button on an automation's detail page opens the create
+form filled in from that automation, named `<name> (copy)`. Webhook keys aren't copied, since new
+keys are issued, and the Sentry client secret must be entered again. Environments you can't use are
+left out, with a notice.
+
+## October 23, 2026
+
+**Faster sandbox boots.** The runtime now fetches managed skills and session memory side by side
+instead of one after the other. On Boat, the control plane re-reads a starting sandbox as soon as
+the previous read has answered rather than every two seconds, watches the launcher for one second
+instead of five after starting it, and names the sandbox while it hosts its ports rather than
+before. Together these take a few seconds off every boot. Boat also now starts the runtime from the
+create request itself, as Modal and Daytona do, instead of through a start command issued once the
+control plane notices the machine is up; a resume still uses the start command.
+
+**Boat tunnel URLs reach the runtime again.** With the create-request launch, the tunnel env file
+was written into the workspace before the machine was up, where Boat's snapshot mount hid it, and
+every boot waited 30 seconds for a file it could not see before running `start.sh` without tunnel
+URLs. The create now stages the file under `/tmp` and the setup script copies it into the workspace
+before the launcher starts.
+
+**One runtime per Boat sandbox after a quick resume.** A resume soon after a stop can get the parked
+machine back with its runtime still running. The launcher's single-instance lock lived under the
+home directory, which Boat remounts when a lazy restore finishes, so the resumed launcher did not
+see the lock the first boot held and started a second runtime. The two then took turns on the
+session's connection every few seconds, and a turn could be reported complete twice. The lock now
+lives in `/tmp`, so the resumed launcher finds the runtime running and leaves it be.
+
+**Fewer steps to start a Boat sandbox.** Boat's create request now takes the sandbox's name, its
+visibility and the ports to route, so the control plane sends them with the create instead of
+renaming, unsharing and hosting each port afterwards. A sandbox billed to an organization is private
+before it has a machine, so it is never shared, not even for a moment. Boat also holds a file write
+to a starting sandbox until the sandbox is ready, so the tunnel env file now goes straight into the
+workspace instead of being staged under `/tmp` for the setup script to copy.
+
+## October 22, 2026
+
+**Prebuilt images on Boat.** Repository and environment prebuilds now work on the Boat provider. A
+build runs `setup.sh` once in a sandbox deployed from the base snapshot and its disk is saved as a
+Boat named snapshot; sessions deploy from that image and skip setup. The build sandbox receives the
+scope's secrets only after it is private, through a file no snapshot keeps, so an image never
+carries them. Images count toward the account's named-snapshot allowance. See
+[Pre-Built Images](docs/IMAGE_PREBUILD.md#boat-prebuilds).
+
+**Merge duplicate member accounts.** Owners and Administrators can merge two accounts that belong to
+the same person from **Settings › Workspace access**, for example a Slack-created account alongside
+a GitHub sign-in with a different email. This used to require running
+`scripts/merge-split-users.ts`. A dry-run review lists everything that moves, changes, or is
+discarded before you confirm, and the merge is recorded in the audit log. The new
+`workspace.members.merge` permission can be granted to custom roles, which also need
+`workspace.members.read` to review a merge. Merging Owner accounts requires an Owner.
+
+## October 20, 2026
+
+**Boat sandbox provider.** [Boat](https://boat.dev) joins Modal, Daytona, Vercel, and E2B as a
+selectable sandbox provider (`sandbox_provider = "boat"`). Sessions run in full Ubuntu VMs deployed
+from a Terraform-built named snapshot; idle sessions are stopped (disk snapshotted, machine
+released) and resume on a new machine with their files intact. Sessions pick the smallest Boat
+machine size that fits their CPU and memory settings. See
+[Boat Sandbox Provider](docs/BOAT_SANDBOX_PROVIDER.md).
+
+**OpenComputer sandbox provider removed.** The remaining providers are Modal, Modal VM, Daytona,
+Vercel, E2B, and Boat. A deployment still set to `sandbox_provider = "opencomputer"` fails Terraform
+validation, so switch providers before upgrading. The `opencomputer_*` Terraform variables and the
+control plane's `ANTHROPIC_API_KEY` binding are gone; `anthropic_api_key` still feeds sandboxes and
+the classifier bots. D1 migration 0089 deletes OpenComputer image build records.
+
+## October 19, 2026
+
+**Autofix acts on approvals with inline comments.** An approved pull request review that starts at
+least one inline comment thread now resumes the PR's owning session, so suggestions attached to an
+approval get addressed. Approvals with only a summary or only thread replies are still skipped. If
+you allowlist third-party review bots, expect more Autofix runs.
+
+**Exclude labels in PR automations.** The automation form's **Label** condition can now match **none
+of** the chosen labels, so a review automation can skip pull requests carrying a given label.
+
+## October 15, 2026
+
+**Rich child session status.** When an agent checks on its child sessions, the timeline shows each
+child's linked metadata, status, and final response rendered as Markdown instead of raw text. The
+full tool output stays available behind a disclosure.
+
+## October 14, 2026
+
+**Codex harness.** Sessions can run on OpenAI's Codex as a third harness beside OpenCode and Claude
+Agent. Choose it in the composer, in automations, and in the Slack, GitHub, and Linear harness
+settings. Codex runs OpenAI models only and authenticates with an OpenAI API key or a ChatGPT
+account connected under **Settings > Provider Accounts**; the legacy `OPENAI_OAUTH_*` secrets are
+not used. A model, reasoning effort, or credential Codex can't use is rejected instead of being
+replaced with a default. Some efforts, such as `max` on GPT-5.6 Sol, are available only on Codex.
+Requires D1 migration 0087 and a sandbox image rebuild.
+
+**Mark all as read.** Hover the **Needs attention** heading in the sidebar or on a team overview
+page to mark every unread session in it as read, including pages not yet loaded. Only sessions
+matching the current filters are marked.
+
+**Skip draft pull requests in automations.** PR opened and PR updated automations can set **Draft**
+to **Not draft** to skip drafts before a session starts. The new **PR ready for review** event runs
+them when a draft is marked ready without a new push. See
+[GitHub event triggers](docs/AUTOMATIONS.md#github-event-triggers).
+
+**Classify on Amazon Bedrock.** The Slack and Linear target classifiers can call Claude through
+Amazon Bedrock. Set `classification_model` to `bedrock/<aws-region>/<inference-profile-id>` and
+`classification_bedrock_api_key`; no Anthropic key is needed. Coding sessions are unchanged. See
+[Classify on Amazon Bedrock](docs/GETTING_STARTED.md#classify-on-amazon-bedrock-optional).
+
+**Slack model and target safeguards.** A new Slack request whose model has been disabled is refused
+with recovery steps in the thread instead of running on a different model, and App Home marks a
+disabled personal model for replacement. When the classifier guesses a target, that guess is now the
+first quick-pick button, and a guess of **No repository** always asks first, since a thread started
+without a repository can't be retargeted.
+
+## October 13, 2026
+
+**Continue a session from webhooks.** Inbound webhook payloads can include a `sessionKey`. Later
+deliveries with the same key become follow-ups in the session the first one started, the way Slack
+thread replies do. Follow-ups that arrive while that run is still starting are held and delivered in
+order. If the session can't take a follow-up, the webhook returns an error instead of starting a new
+session. The 7-day continuation window now counts from the session's last activity, for Slack
+automations too. Requires D1 migration 0086. See
+[Continuing a session](docs/AUTOMATIONS.md#continuing-a-session).
+
+**Markdown preview in the Changes panel.** Changed Markdown files get a **Preview** view beside
+Unified and Split that renders the whole resulting document.
+
+**GitHub and Linear refuse incompatible launches.** When the configured harness can't run the
+resolved model, the GitHub and Linear bots now reply with an explanation and create no session, as
+Slack does, instead of falling back to OpenCode. A settings level that explicitly selects a
+restricted harness needs a compatible default model at that same level. Existing settings without
+one must be fixed before any other edits can be saved. See
+[Choosing a harness](docs/CLAUDE_AGENT.md#choosing-a-harness).
+
+## October 12, 2026
+
+**Slack replies render Markdown.** Agent replies in Slack now render headings, bold text, lists, and
+links instead of showing raw Markdown. `@here` and `@channel` broadcasts are stripped from replies.
+
+**Search shared memories.** **Settings > Shared memories** has a search box covering titles,
+descriptions, and content, and a searchable repository and environment picker.
+
+## October 8, 2026
+
+**Claude Agent for Slack sessions.** Choose OpenCode or Claude Agent for new Slack sessions under
+**Settings > Integrations > Slack**, and let each user override it in the Slack app's **Home** tab.
+OpenCode stays the default. Claude Agent requires a Slack default model it can run. A request whose
+model the harness cannot run is refused with advice in the thread instead of starting a session. On
+Claude Agent, Slack sessions follow the Claude **Automated authentication** setting, so they can use
+a connected Claude subscription. Existing threads keep their harness. See
+[Claude Agent](docs/CLAUDE_AGENT.md#slack-sessions).
+
+## October 7, 2026
+
+**Claude Agent for GitHub sessions.** Choose OpenCode or Claude Agent for GitHub-triggered sessions
+under **Settings > Integrations > GitHub**, globally or per repository. OpenCode stays the default.
+See [GitHub settings](docs/integrations/GITHUB.md#models-and-instructions).
+
+## October 5, 2026
+
+**Burstable Modal VM resources.** `modal-vm` sandboxes reserve less CPU and memory by default and
+can burst up to new `cpuLimitCores` and `memoryLimitMib` caps, set globally, per repository, or per
+environment. Modal bills the larger of the request and actual usage, so lightly used VMs cost less.
+Bursting depends on spare host capacity. Existing explicit requests are unchanged. See
+[Modal VM setup](docs/MODAL_DOCKER.md#runtime-and-resources).
+
+## October 4, 2026
+
+**GitHub model overrides.** Start a GitHub `@mention` with `!model` or `!reasoning`, the same flags
+Slack uses, to pick the model and reasoning effort for that session. Upgrade the GitHub bot and
+control plane together. See
+[GitHub integration](docs/integrations/GITHUB.md#model-and-reasoning-overrides).
+
+**Claude Agent for Linear sessions.** Choose OpenCode or Claude Agent for Linear-triggered sessions
+under **Settings > Integrations > Linear**, globally or per repository. Linear activities now name
+the harness. On Claude Agent, Linear sessions follow the Claude **Automated authentication**
+setting. See [Linear sessions](docs/CLAUDE_AGENT.md#linear-sessions).
+
+**Webhook invocation status.** Inbound webhook responses now include an `invocationId`. Check its
+status and runs with the same webhook key at
+`GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`. A retry with the same
+`idempotencyKey` returns the original ID. See [Inbound webhooks](docs/AUTOMATIONS.md#responses).
+
+**Autofix replies in review threads.** Autofix now replies to each inline review comment in its own
+thread and resolves the thread once the comment is addressed, instead of posting one summary
+comment.
+
+## October 3, 2026
+
+**Persistent memory.** Personal, repository, and environment memories carry facts and directives
+between sessions. Agents in both harnesses search, read, and propose memories. Only personal facts
+written in a root session that has stayed private and owner-only become active immediately; all
+other agent writes wait for approval. Manage personal memories under **Settings > Memories** and
+repository and environment memories under **Settings > Shared memories**; each session's sidebar
+lists the memories it loaded. Requires D1 migration 0084 and a sandbox image rebuild. See
+[Persistent session memory](docs/MEMORY.md).
+
+## October 2, 2026
+
+**Analytics redesign.** The analytics page is now an overview plus Usage, Cost, Pull requests, and
+People tabs. The range, scope, and tab are kept in the URL. A new **Session origins** breakdown
+shows where sessions start and who they are attributed to.
+
+**Saved prompt drafts.** Unsent prompts survive page reloads. Each session and the new-session
+composer keep their own draft.
+
+**Teams.** Group members into teams that own sessions, environments, automations, and secrets, with
+repository grants and Slack and Linear channel bindings managed from **Settings > Teams**. GitHub
+work routes to teams by numeric repository ID: upgrade the GitHub bot and control plane together,
+and reselect repositories on older GitHub event automations so they keep matching events. Sandbox
+GitHub tokens now cover only the session's repositories. See
+[Authentication and Authorization](docs/AUTH.md).
+
+**Classifier reasoning effort.** Set `classification_reasoning_effort` to send a reasoning effort to
+OpenAI classification models used by the Slack and Linear bots. Leaving it blank keeps the model
+default.
+
+## October 1, 2026
+
+**Brokered credentials for Modal restores.** Restored Modal sandboxes now fetch git credentials from
+the control plane like fresh ones, so Modal no longer needs the `github-app` secret. You can delete
+it after upgrading.
+
+**Session page redesign.** The session sidebar is split into Info, Changes, Tasks, and Tools tabs,
+with captured media under **Artifacts** in Info. Changed files open in the main column beside the
+sidebar, which leaves room for split diffs.
 
 ## September 28, 2026
 
-### Added
-
 **Claude Sonnet 5.5.** Adds `anthropic/claude-sonnet-5-5` to the model picker and integrations, with
-adaptive thinking controls from low through max. Claude Agent SDK 0.2.161 bundles Claude Code
-2.1.284, which supports the new model.
+adaptive thinking controls from low through max.
 
-OpenCode sessions using a connected ChatGPT subscription now report estimated model costs through
-the existing session cost display and spending limit. These are API-price equivalents, not
-additional subscription charges or an OpenAI invoice; estimates remain zero if catalog pricing is
-unavailable.
-
-Workspace settings now includes Teams. Administrators can create teams, manage members and leads,
-edit team defaults, and archive or restore teams. Team leads can manage their own teams where
-permitted.
+**ChatGPT subscription cost estimates.** OpenCode sessions using a connected ChatGPT subscription
+now report API-equivalent cost estimates in the session cost display and spending limit.
 
 ## September 27, 2026
 
-### Changed
+**Trace export schema 2.** Messages, events, and usage are now exported oldest first, and
+single-session downloads include only the requested session. See the
+[trace export reference](docs/TRACE_EXPORT.md).
 
-Trace export now emits published schema 2: messages, events and usage are all oldest first, and
-session trace byte-budget errors use `trace_budget_exceeded`. Single-session downloads export only
-the requested session; `scope` on that route now returns 400. Whole runs remain available through
-the paginated bulk export.
+**Docker-capable Modal sandboxes.** Operators can select the `modal-vm` backend deployment-wide for
+Docker support; `modal` remains the default. See [Modal VM setup](docs/MODAL_DOCKER.md).
 
-### Added
-
-Operators can select `modal-vm` deployment-wide for Docker-capable Modal sandboxes, with separate
-prepared images and filesystem snapshot recovery. The existing `modal` backend remains the default;
-switching backends does not migrate existing sessions or images. See
-[Modal VM setup](docs/MODAL_DOCKER.md).
-
-The analytics dashboard now shows harness metrics, automation performance in automation and all
-scopes, complete runs, and pull-request cost per merged PR by model and harness.
-
-The analytics dashboard now lets operators select human, agent, automation or all sessions and
-compare token usage, cost by model and provider billing in the selected scope.
-
-Analytics responses now include session token totals and cache hit ratio, pull-request cost by model
-and harness, and the top 20 scoped runs in the dashboard snapshot. Run titles may be null.
-
-Session analytics API now accepts `scope=human|agent|automation|all` (default `human`) on the
-dashboard, summary, timeseries, and breakdown routes, and supports `by=model`, `by=harness`,
-`by=spawnSource`, `by=automation`, and `by=provider` breakdowns. Provider rows include the number of
-sessions billed through a matching provider account.
-
-The [trace export reference](docs/TRACE_EXPORT.md) includes a JSON Schema and instructions for
-manually downloading paginated runs through the web app.
+**Scoped analytics.** The analytics dashboard and API can filter human, agent, automation, or all
+sessions, with breakdowns by model, harness, provider, and automation, token totals, cache hit
+ratio, and cost per merged PR.
 
 ## September 26, 2026
 
-### Added
-
-Bulk session export accepts `include` as a comma-separated list of `messages`, `events`, and
-`usage`, so one session line can carry the prompt, the persisted timeline events, and per-step token
-usage. Each session's included collections are read in one storage snapshot and share one 4 MiB byte
-budget and one page cap, and any include limits the request to 5 sessions per page. Messages keep
-their existing newest-first order; events and usage are listed in timeline order.
+**Richer bulk session export.** Bulk export can now include each session's messages, timeline
+events, and per-step token usage through the `include` parameter.
 
 ## September 25, 2026
 
-### Added
-
-Bulk session export now includes run identity, harness, model provider, repository membership, pull
-request lifecycle, and projected token totals on session lines. Schema 1 consumers must ignore
-unknown fields; `source` is unchanged and also appears as `spawnSource`.
-
-### Changed
-
-Bulk session export now requires `sessions.export` instead of `sessions.read`. Owners,
-Administrators, and users granted the permission through a custom role may export; Viewers, Members,
-and bot services cannot.
+**Bulk export metadata and permission.** Exported session lines now include run identity, harness,
+model provider, repositories, pull request lifecycle, and token totals. Bulk export now requires the
+`sessions.export` permission, granted to Owners and Administrators by default.
 
 ## September 23, 2026
 

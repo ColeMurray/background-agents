@@ -23,7 +23,7 @@ module "docs_site" {
   install_command = "cd ../.. && npm install"
   build_command   = "next build"
 
-  custom_domain = var.docs_custom_domain
+  custom_domain = local.docs_custom_domain
 
   # The site reads no deployment state: every URL it renders is a constant in
   # packages/docs/src/lib/site.ts.

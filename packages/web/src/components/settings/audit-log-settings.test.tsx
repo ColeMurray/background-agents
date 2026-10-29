@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyAdmissionRules } from "@open-inspect/shared/admission-settings";
 import { AuditLogSettings } from "./audit-log-settings";
 
 expect.extend(matchers);
@@ -22,7 +23,45 @@ const hook = vi.hoisted(() => ({
   retry: vi.fn(),
 }));
 
-vi.mock("@/hooks/use-audit-events", () => ({ useAuditEvents: () => hook }));
+const filters = vi.hoisted(() => ({
+  audit: vi.fn(),
+  teams: vi.fn(),
+  memberships: vi.fn(),
+  allowed: true,
+  teamsLoading: false,
+  teamsError: null as Error | null,
+}));
+vi.mock("@/hooks/use-audit-events", () => ({
+  useAuditEvents: (...args: unknown[]) => {
+    filters.audit(...args);
+    return hook;
+  },
+}));
+vi.mock("@/hooks/use-current-user-authorization", () => ({
+  useCurrentUserAuthorization: () => ({ hasPermission: () => filters.allowed }),
+}));
+vi.mock("@/hooks/use-teams", () => ({
+  useTeams: (enabled: boolean) => {
+    filters.teams(enabled);
+    return {
+      teams: [
+        { id: "team_one", name: "Design", archivedAt: null },
+        { id: "team_two", name: "Engineering", archivedAt: null },
+        { id: "team_archived", name: "Archived team", archivedAt: 1 },
+      ],
+      loading: filters.teamsLoading,
+      error: filters.teamsError,
+    };
+  },
+  useMeTeams: () => {
+    filters.memberships();
+    return {
+      teams: [{ id: "team_one", name: "Design", archivedAt: null }],
+      loading: false,
+      error: null,
+    };
+  },
+}));
 
 const scrollIntoView = vi.fn();
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -86,6 +125,12 @@ function renderSingle(event: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  filters.allowed = true;
+  filters.teamsLoading = false;
+  filters.teamsError = null;
+  filters.audit.mockReset();
+  filters.teams.mockReset();
+  filters.memberships.mockReset();
   Object.assign(hook, {
     events: [],
     loading: false,
@@ -104,9 +149,88 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("AuditLogSettings", () => {
+  it("lets a workspace Owner filter audit events by a team they are not a member of", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(true);
+    expect(filters.memberships).not.toHaveBeenCalled();
+    await user.click(screen.getByLabelText("Team"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_two", enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("Engineering");
+
+    await user.click(screen.getByLabelText("Team"));
+    await user.click(await screen.findByRole("option", { name: "All teams" }));
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toHaveTextContent("All teams");
+  });
+
+  it("includes archived teams in the audit filter", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogSettings />);
+    await user.click(screen.getByRole("combobox", { name: "Team" }));
+    await user.click(await screen.findByRole("option", { name: "Archived team" }));
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: "team_archived", enabled: true });
+  });
+
+  it("disables the team filter while teams load or fail to load", () => {
+    filters.teamsLoading = true;
+    const { rerender } = render(<AuditLogSettings />);
+    expect(screen.getByLabelText("Team")).toBeDisabled();
+
+    filters.teamsLoading = false;
+    filters.teamsError = new Error("failed");
+    rerender(<AuditLogSettings />);
+    expect(screen.getByLabelText("Team")).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Unable to load team filters.");
+  });
+
+  it("withholds the feed and filters without the existing audit permission", () => {
+    filters.allowed = false;
+    render(<AuditLogSettings />);
+    expect(screen.queryByRole("combobox", { name: "Team" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.memberships).not.toHaveBeenCalled();
+  });
+
+  it("gates all-team options and the feed as audit permission changes", () => {
+    filters.allowed = false;
+    const { rerender } = render(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+
+    filters.allowed = true;
+    rerender(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(true);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: true });
+    expect(screen.getByRole("combobox", { name: "Team" })).toBeInTheDocument();
+
+    filters.allowed = false;
+    rerender(<AuditLogSettings />);
+    expect(filters.teams).toHaveBeenLastCalledWith(false);
+    expect(filters.audit).toHaveBeenLastCalledWith({ teamId: undefined, enabled: false });
+    expect(screen.queryByRole("combobox", { name: "Team" })).not.toBeInTheDocument();
+  });
+
   it("shows a team creation as an applied operation", () => {
     const article = renderSingle(createEvent("applied", { action: "team.created" }));
     expect(article.getByText("Team created")).toBeInTheDocument();
+    expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["team.grant_added", "Team repository grant added"],
+    ["team.grant_removed", "Team repository grant removed"],
+    ["team.secret_set", "Team secret set"],
+    ["team.secret_deleted", "Team secret deleted"],
+    ["team.binding_added", "Team channel binding added"],
+    ["team.binding_removed", "Team channel binding removed"],
+    ["automation.executor_changed", "Automation executor changed"],
+  ])("labels %s as an operation in the workspace audit viewer", (action, label) => {
+    const article = renderSingle(createEvent("applied", { action }));
+    expect(article.getByText(label)).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
 
@@ -115,6 +239,86 @@ describe("AuditLogSettings", () => {
     expect(article.getByText("Private session break-glass read")).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
   });
+
+  it.each([
+    {
+      action: "workspace.admission_policy_updated",
+      label: "Sign-in allowlist updated",
+      metadata: {
+        requested: { expectedRevision: 3 },
+        currentRevision: 3,
+        resultRevision: 4,
+        deploymentHash: "deployment-hash",
+        before: { ...emptyAdmissionRules(), allowedEmails: ["old@example.com"] },
+        after: { ...emptyAdmissionRules(), allowedEmails: ["new@example.com"] },
+      },
+      visibleFields: [
+        '"expectedRevision": 3',
+        '"resultRevision": 4',
+        '"old@example.com"',
+        '"new@example.com"',
+      ],
+    },
+    {
+      action: "workspace.admission_policy_maintenance",
+      label: "Sign-in allowlist maintenance",
+      metadata: {
+        before: { revision: 4, writesFrozen: 1 },
+        requested: { expectedRevision: 4, writesFrozen: 0 },
+        after: { revision: 5, writesFrozen: 0 },
+      },
+      visibleFields: [
+        '"expectedRevision": 4',
+        '"revision": 5',
+        '"writesFrozen": 1',
+        '"writesFrozen": 0',
+      ],
+    },
+  ])(
+    "recognizes $action and exposes readable policy metadata",
+    async ({ action, label, metadata, visibleFields }) => {
+      const card = renderSingle(
+        createEvent("applied", {
+          action,
+          resourceType: "admission_policy",
+          resourceId: "workspace",
+          targetUserIdSnapshot: null,
+          metadata,
+        })
+      );
+
+      expect(card.getByRole("heading", { name: label })).toBeInTheDocument();
+      expect(card.getByText("Applied")).toHaveClass("text-success");
+      expect(card.queryByText("Unrecognized")).not.toBeInTheDocument();
+      expect(card.queryByText("HTTP response")).not.toBeInTheDocument();
+      expect(card.getByText("admission_policy / workspace")).toBeInTheDocument();
+
+      await userEvent.click(card.getByText("Structured details"));
+      const details = card.getByText(/"metadata":/);
+      expect(details).toBeVisible();
+      for (const field of visibleFields) expect(details).toHaveTextContent(field);
+      expect(JSON.parse(details.textContent ?? "").metadata).toEqual(metadata);
+    }
+  );
+
+  it.each(["applied", "no_op", "denied", "rejected"] as const)(
+    "renders a shadow denial as informational Would deny despite stored result %s",
+    (operationResult) => {
+      const article = renderSingle(
+        createEvent(operationResult, {
+          action: "session.shadow_denied",
+          resourceType: "session",
+          reasonCode: "shadow_denied:not_member",
+          metadata: { before: {}, requested: {}, after: {}, channel: "ws" },
+        })
+      );
+      expect(article.getByText("Session read shadow observation")).toBeInTheDocument();
+      expect(article.getByText("Would deny")).toHaveClass("bg-info-muted", "text-info");
+      expect(article.queryByText("Denied")).not.toBeInTheDocument();
+      expect(article.getByText("shadow_denied:not_member")).toBeInTheDocument();
+      expect(article.queryByText("HTTP response")).not.toBeInTheDocument();
+    }
+  );
 
   it("renders outcomes, stable summaries, timestamps, and expandable structured details", async () => {
     hook.events = [
@@ -201,7 +405,10 @@ describe("AuditLogSettings", () => {
     hook.loading = true;
     render(<AuditLogSettings />);
 
-    expect(screen.getByText("Loading audit events...")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Loading audit events" })).toHaveTextContent(
+      "Loading audit events..."
+    );
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
   });
 
   it("keeps pagination mounted while loading a later page", () => {
@@ -249,11 +456,14 @@ describe("AuditLogSettings", () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
   });
 
-  it("explains what an authorization decision does and does not prove", () => {
+  it("explains how decisions and shadow observations differ from operation outcomes", () => {
     render(<AuditLogSettings />);
 
     expect(
       screen.getByText(/They do not confirm that the requested change took effect/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Would deny describe hypothetical denials, not enforced denials/)
     ).toBeInTheDocument();
   });
 

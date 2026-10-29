@@ -59,9 +59,9 @@ type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnect
 
 /**
  * A pending reconnect is a wait, not a dead connection: say so rather than
- * showing "Disconnected" while the backoff timer runs. That backoff spans
- * minutes (MAX_RECONNECT_ATTEMPTS in use-session-transport), which is far too
- * long for the interface to say nothing.
+ * showing "Disconnected" while the backoff timer runs. Transient failures
+ * retry until one succeeds (see use-session-transport), so the wait can last
+ * as long as the outage, which is far too long for the interface to say nothing.
  */
 const CONNECTION_PRESENTATION: Record<
   ConnectionState,
@@ -97,6 +97,7 @@ const BOOT_PHASE_DETAILS: Record<BootPhaseName, { started: string; completed: st
   sync: { started: "Cloning the repository", completed: "Cloned the repository" },
   setup: { started: "Running setup.sh", completed: "Finished setup.sh" },
   start: { started: "Running start.sh", completed: "Finished start.sh" },
+  memory: { started: "Loading memories", completed: "Memories loaded" },
   skills: { started: "Installing skills", completed: "Installed skills" },
   harness: { started: "Starting the agent", completed: "Started the agent" },
 };
@@ -133,12 +134,15 @@ export type SessionHeaderProps = {
   reconnecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
-  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
+  /** The desktop sidebar toggle; focus returns here when a closed diff has no other target. */
+  desktopDetailsButtonRef?: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
   onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
+  /** Opens the details overlay on the section that lists captured media. */
+  onOpenMobileMedia: () => void;
   actions: SessionActionProps;
   optimisticTitle?: string;
   renameSession: (title: string) => Promise<boolean>;
@@ -155,12 +159,13 @@ export function SessionHeader({
   reconnecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
-  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
+  desktopDetailsButtonRef,
   onToggleDetails,
   onToggleDesktopDetails,
   onOpenMobileDetails,
+  onOpenMobileMedia,
   actions,
   optimisticTitle,
   renameSession,
@@ -190,7 +195,7 @@ export function SessionHeader({
   };
 
   const handleRenameSubmit = async () => {
-    if (!sessionState) {
+    if (!sessionState || !capabilities.lifecycle) {
       setIsRenaming(false);
       return;
     }
@@ -235,7 +240,7 @@ export function SessionHeader({
         <div className="flex min-w-0 flex-1 items-center gap-3">
           {!isOpen && <CollapsedSidebarControls />}
           <div className="min-w-0 flex-1">
-            {isRenaming ? (
+            {isRenaming && capabilities.lifecycle ? (
               <input
                 autoFocus
                 aria-label="Session title"
@@ -287,7 +292,7 @@ export function SessionHeader({
             sandbox={sandbox}
             triggerRef={actionsButtonRef}
             onOpenDetails={onOpenMobileDetails}
-            onOpenMedia={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileMedia}
           />
           <div className="hidden items-center gap-1 md:flex">
             {capabilities.read && (
@@ -307,22 +312,21 @@ export function SessionHeader({
               repositoryCount={sessionState?.repositories?.length ?? 0}
             />
           </div>
-          {showDesktopDetailsToggle && (
-            <button
-              type="button"
-              onClick={onToggleDesktopDetails}
-              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-              aria-controls="session-details-sidebar"
-              aria-expanded={isDesktopDetailsOpen}
-            >
-              {isDesktopDetailsOpen ? (
-                <RightSidebarOpenIcon className="h-4 w-4" />
-              ) : (
-                <RightSidebarIcon className="h-4 w-4" />
-              )}
-            </button>
-          )}
+          <button
+            type="button"
+            ref={desktopDetailsButtonRef}
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            {isDesktopDetailsOpen ? (
+              <RightSidebarOpenIcon className="h-4 w-4" />
+            ) : (
+              <RightSidebarIcon className="h-4 w-4" />
+            )}
+          </button>
         </div>
       </div>
       <MobileStatusStrip

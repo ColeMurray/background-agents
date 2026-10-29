@@ -16,6 +16,14 @@ import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
 import { checkSessionAccess } from "@open-inspect/shared";
+import { SessionCollaboratorStore } from "../db/session-collaborators";
+import { TeamMembershipStore } from "../db/team-memberships";
+import {
+  effectiveSessionCapabilities,
+  teamsEnforcementMode,
+  viewerFromContext,
+} from "../authorization/session-admission";
+import { resolverDecides } from "../authorization/teams-enforcement";
 import type { SubscriptionProviderId } from "@open-inspect/shared/types/provider-accounts";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
@@ -163,7 +171,7 @@ async function handleParticipantProfiles(
 
 async function handleSessionSnapshot(
   _request: Request,
-  _env: Env,
+  env: Env,
   params: SessionParams,
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -175,12 +183,34 @@ async function handleSessionSnapshot(
 
   const parsed = sessionSnapshotSchema.safeParse(await response.json().catch(() => null));
   if (!parsed.success) return error("Invalid session snapshot", 502);
-  const admission = ctx.sessionAdmission;
-  const sandboxAllowed =
-    admission && (admission.row.visibility === "private" || ctx.teamsEnforcementMode === "on")
-      ? checkSessionAccess(admission.viewer, admission.row, "sandbox").allowed
-      : ctx.authorization?.permissions.includes("sessions.sandbox_access");
+  const row = ctx.sessionAdmission?.row ?? (await new SessionIndexStore(ctx.db).get(sessionId));
+  if (!row) return error("Session not found", 404);
+  const viewer =
+    ctx.sessionAdmission?.viewer ??
+    viewerFromContext(
+      ctx,
+      ctx.authorization
+        ? (ctx.sessionMemberships ??= await new TeamMembershipStore(ctx.db).listForUser(
+            ctx.authorization.userId
+          ))
+        : new Map()
+    );
+  const collaborators =
+    ctx.sessionAdmission?.row.collaboratorIds ??
+    (await new SessionCollaboratorStore(ctx.db).listUserIds(sessionId));
+  const accessRow = { ...row, ownerUserId: row.userId ?? null, collaboratorIds: collaborators };
+  const sandboxAllowed = resolverDecides(teamsEnforcementMode(ctx, env), accessRow, "sandbox")
+    ? checkSessionAccess(viewer, accessRow, "sandbox").allowed
+    : ctx.authorization?.permissions.includes("sessions.sandbox_access");
   const snapshot = sandboxAllowed ? parsed.data : redactSessionSnapshotSandboxAccess(parsed.data);
+  snapshot.session = {
+    ...snapshot.session,
+    ownerUserId: row.userId ?? null,
+    ownerTeamId: row.ownerTeamId,
+    visibility: row.visibility,
+    collaborators: [...collaborators],
+    capabilities: effectiveSessionCapabilities(viewer, accessRow, teamsEnforcementMode(ctx, env)),
+  };
   const headers = new Headers(response.headers);
   headers.delete("Content-Length");
   return Response.json(snapshot, { headers });

@@ -6,8 +6,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { hashToken } from "../auth/crypto";
-import { permissionsForBuiltInRole } from "@open-inspect/shared/rbac";
-import type { SessionAccessRow, SessionViewer } from "@open-inspect/shared";
+import { createCloudflareBackgroundTasks } from "../cloudflare/background-tasks";
 import type { Logger } from "../logger";
 import type { BackgroundTasks } from "../platform-ports";
 import {
@@ -123,10 +122,11 @@ function createHarness(opts: {
   };
   const broadcast = vi.fn();
   const submitted: string[] = [];
+  const background = createCloudflareBackgroundTasks({ waitUntil: vi.fn() }, log);
   const backgroundTasks: BackgroundTasks = {
     submit: (task, metadata) => {
       submitted.push(metadata.name);
-      void task();
+      background.submit(task, metadata);
     },
   };
   const processMessageQueue = vi.fn(async () => undefined);
@@ -556,227 +556,5 @@ describe("UpgradeDecision.attach", () => {
 
     await expect(decision.attach({} as WebSocket)).rejects.toThrow("already attached");
     expect(h.wsManager.acceptAndSetSandboxSocket).toHaveBeenCalledOnce();
-  });
-});
-
-describe("client session access", () => {
-  type UserViewer = Extract<SessionViewer, { kind: "user" }>;
-  const teamRow: SessionAccessRow = {
-    id: "session",
-    ownerUserId: "owner-user",
-    ownerTeamId: "team-b",
-    visibility: "team",
-    collaboratorIds: [],
-  };
-  const member: UserViewer = {
-    kind: "user",
-    userId: "member-user",
-    roleKey: "member",
-    suspended: false,
-    permissions: permissionsForBuiltInRole("member"),
-    memberships: new Map([["team-a", "member"]]),
-  };
-  const owner: UserViewer = {
-    ...member,
-    userId: "workspace-owner",
-    roleKey: "owner",
-    permissions: permissionsForBuiltInRole("owner"),
-  };
-
-  function accessHarness(mode: "off" | "shadow" | "on", viewer: UserViewer, row: SessionAccessRow) {
-    const authorization = {
-      userId: viewer.userId,
-      role: { key: viewer.roleKey },
-      permissions: viewer.permissions,
-      suspendedAt: null,
-    };
-    const resolution = { kind: "valid" as const, mode, authorization, viewer, row };
-    const close = vi.fn();
-    const removeClient = vi.fn();
-    const auditPrivateBreakGlass = vi.fn(async () => undefined);
-    const send = vi.fn((_ws: WebSocket, _message: { type: string; session?: unknown }) => true);
-    const snapshot = {
-      session: {
-        codeServerUrl: "https://code.example.test",
-        sandboxDashboardUrl: "https://dashboard.example.test",
-        ttydUrl: "https://terminal.example.test",
-        vncUrl: "https://vnc.example.test",
-        tunnelUrls: { app: "https://app.example.test" },
-      },
-      artifacts: [],
-      timeline: { events: [], hasMore: false, cursor: null },
-      promptQueue: [],
-    };
-    const deps = {
-      resolveSessionViewer: vi.fn(async () => resolution),
-      wsManager: {
-        close,
-        removeClient,
-        send,
-        isClientAuthenticated: vi.fn(() => false),
-        isClientSynchronizing: vi.fn(() => false),
-        setClientSynchronizing: vi.fn(),
-        activateClient: vi.fn(async (_ws: WebSocket, _info: unknown, synchronize: () => boolean) =>
-          synchronize()
-        ),
-      },
-      participantService: {
-        getByWsTokenHash: vi.fn(() => ({
-          id: "participant-1",
-          user_id: "member-user",
-          canonical_user_id: authorization.userId,
-          ws_token_created_at: Date.now(),
-          scm_login: null,
-        })),
-      },
-      snapshotReader: {
-        resolveSessionSnapshotEnrichment: vi.fn(async () => ({})),
-        readSessionSnapshot: vi.fn(() => snapshot),
-      },
-      scmProviderName: "github",
-      presenceService: { sendPresence: vi.fn(), broadcastPresence: vi.fn() },
-      schedulePullRequestRefresh: vi.fn(),
-      auditPrivateBreakGlass,
-      log: createLogger(),
-    } as unknown as SessionConnectionAuthenticatorDeps;
-    return {
-      authenticator: new SessionConnectionAuthenticator(deps),
-      close,
-      removeClient,
-      send,
-      auditPrivateBreakGlass,
-      resolveSessionViewer: deps.resolveSessionViewer,
-    };
-  }
-
-  it.each(["off", "shadow", "on"] as const)(
-    "uses the %s mode for the team rule at subscribe and on commands",
-    async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, teamRow);
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
-      expect(close).toHaveBeenCalledTimes(mode === "on" ? 1 : 0);
-      if (mode === "on") expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "collaborate")
-      ).toEqual(mode === "on" ? { kind: "revoked" } : { kind: "allowed" });
-    }
-  );
-
-  it("retains a read-only socket when only collaboration is denied", async () => {
-    const viewer: UserViewer = {
-      ...member,
-      memberships: new Map([["team-b", "member"]]),
-      permissions: ["sessions.read"],
-    };
-    const { authenticator, close, removeClient } = accessHarness("on", viewer, teamRow);
-    const socket = {} as WebSocket;
-    await authenticator.handleSubscribe(socket, { token: "token", clientId: "read-only" });
-
-    expect(
-      await authenticator.authorizeClientCommand(socket, viewer.userId, "collaborate")
-    ).toEqual({
-      kind: "denied",
-      reason: "missing_permission",
-    });
-    expect(close).not.toHaveBeenCalled();
-    expect(removeClient).not.toHaveBeenCalled();
-  });
-
-  it("closes on lost read access but not on a collaboration-only denial", async () => {
-    const memberships = new Map([["team-b", "member"]] as const);
-    const row = { ...teamRow };
-    const viewer: UserViewer = { ...member, memberships };
-    const { authenticator, close, removeClient, resolveSessionViewer } = accessHarness(
-      "on",
-      viewer,
-      row
-    );
-    const socket = {} as WebSocket;
-
-    await authenticator.handleSubscribe(socket, { token: "token", clientId: "member" });
-    expect(close).not.toHaveBeenCalled();
-    expect(
-      await authenticator.authorizeClientCommand(socket, viewer.userId, "collaborate")
-    ).toEqual({
-      kind: "allowed",
-    });
-
-    memberships.delete("team-b");
-    expect(
-      await authenticator.authorizeClientCommand(socket, viewer.userId, "collaborate")
-    ).toEqual({
-      kind: "revoked",
-    });
-    expect(removeClient).toHaveBeenCalledWith(socket);
-    expect(close).toHaveBeenCalledWith(socket, 4010, expect.any(String));
-
-    memberships.set("team-b", "member");
-    row.ownerTeamId = "team-a";
-    expect(await authenticator.authorizeClientCommand(socket, viewer.userId, "read")).toEqual({
-      kind: "revoked",
-    });
-    expect(resolveSessionViewer).toHaveBeenCalledTimes(4);
-  });
-
-  it.each(["off", "shadow", "on"] as const)(
-    "refuses private non-collaborators in %s mode",
-    async (mode) => {
-      const { authenticator, close } = accessHarness(mode, member, {
-        ...teamRow,
-        visibility: "private",
-      });
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
-      expect(close).toHaveBeenCalledWith({}, 4010, expect.any(String));
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, member.userId, "read")
-      ).toEqual({
-        kind: "revoked",
-      });
-    }
-  );
-
-  it.each(["off", "shadow", "on"] as const)(
-    "redacts sandbox URLs for an Owner break-glass read in %s, permits lifecycle but not collaboration",
-    async (mode) => {
-      const { authenticator, send, close, auditPrivateBreakGlass } = accessHarness(mode, owner, {
-        ...teamRow,
-        visibility: "private",
-      });
-      await authenticator.handleSubscribe({} as WebSocket, { token: "token", clientId: "client" });
-
-      expect(close).not.toHaveBeenCalled();
-      const subscribed = send.mock.calls.find(([, message]) => message.type === "subscribed")?.[1];
-      expect(subscribed).toBeDefined();
-      expect(subscribed).not.toHaveProperty("session.codeServerUrl");
-      expect(subscribed).not.toHaveProperty("session.sandboxDashboardUrl");
-      expect(subscribed).not.toHaveProperty("session.ttydUrl");
-      expect(subscribed).not.toHaveProperty("session.vncUrl");
-      expect(subscribed).not.toHaveProperty("session.tunnelUrls");
-      expect(auditPrivateBreakGlass).toHaveBeenCalledExactlyOnceWith(
-        owner.userId,
-        expect.objectContaining({ id: "session", visibility: "private" })
-      );
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, owner.userId, "collaborate")
-      ).toEqual({ kind: "denied", reason: "not_collaborator" });
-      expect(
-        await authenticator.authorizeClientCommand({} as WebSocket, owner.userId, "lifecycle")
-      ).toEqual({ kind: "allowed" });
-      expect(auditPrivateBreakGlass).toHaveBeenCalledOnce();
-    }
-  );
-
-  it("refuses a break-glass subscription if its audit write fails", async () => {
-    const { authenticator, auditPrivateBreakGlass, close, send } = accessHarness("on", owner, {
-      ...teamRow,
-      visibility: "private",
-    });
-    auditPrivateBreakGlass.mockRejectedValue(new Error("D1 unavailable"));
-    const socket = {} as WebSocket;
-
-    await authenticator.handleSubscribe(socket, { token: "token", clientId: "owner" });
-
-    expect(close).toHaveBeenCalledWith(socket, 1011, "Authorization temporarily unavailable");
-    expect(send).not.toHaveBeenCalled();
   });
 });

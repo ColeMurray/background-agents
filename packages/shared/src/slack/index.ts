@@ -50,7 +50,12 @@ export {
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
-export { splitIntoSlackSections, SECTION_TEXT_MAX_CHARS, MAX_RESPONSE_SECTIONS } from "./sections";
+export {
+  splitIntoSlackSections,
+  SECTION_TEXT_MAX_CHARS,
+  MARKDOWN_BLOCK_MAX_CHARS,
+  MAX_RESPONSE_SECTIONS,
+} from "./sections";
 export {
   classifyThreadSpeaker,
   compareSlackTimestamps,

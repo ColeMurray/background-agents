@@ -74,12 +74,17 @@ export const sessionTraceExportSchema = z.discriminatedUnion("ok", [
 ]);
 export type SessionTraceExport = z.infer<typeof sessionTraceExportSchema>;
 
+/** `GET /internal/prompt-request?clientRequestId=…` response. */
+export const promptRequestLookupSchema = z.object({ queued: z.boolean() });
+export type PromptRequestLookup = z.infer<typeof promptRequestLookupSchema>;
+
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
   snapshot: "/internal/snapshot",
   sandboxAccess: "/internal/sandbox-access",
   prompt: "/internal/prompt",
+  promptRequest: "/internal/prompt-request",
   autofix: "/internal/autofix",
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
@@ -107,6 +112,7 @@ export const SessionInternalPaths = {
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
   activePromptAuthor: "/internal/active-prompt-author",
+  memoryPromptContext: "/internal/memory-prompt-context",
   childSummary: "/internal/child-summary",
   parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",

@@ -281,9 +281,9 @@ async def run_deferred_start() -> int:
     return 0
 
 
-async def run_image_build_context_start(
-    build_supervisor: Callable[[asyncio.Event], ImageBuildContextSupervisor],
-    install_signal_handlers: Callable[[ImageBuildContextSupervisor], None],
+async def run_image_build_context_start[SupervisorT: ImageBuildContextSupervisor](
+    build_supervisor: Callable[[asyncio.Event], SupervisorT],
+    install_signal_handlers: Callable[[SupervisorT], None],
 ) -> int:
     """Read one launch context, compose the build environment, run the build.
 

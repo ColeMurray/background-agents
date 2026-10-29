@@ -17,6 +17,7 @@ venv/
 dist/
 build/
 .next/
+packages/web/public/mermaid-renderer.html
 out/
 
 # IDE
@@ -44,6 +45,9 @@ yarn-error.log*
 
 # Test
 coverage/
+.vitest-reports/
+.coverage
+.coverage.*
 .nyc_output/
 
 # Cloudflare

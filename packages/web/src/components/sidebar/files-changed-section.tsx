@@ -41,6 +41,14 @@ function fileSummary(file: SessionDiffFile): string {
   return `+${file.additions ?? 0} -${file.deletions ?? 0}`;
 }
 
+function fileName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
+function directoryName(path: string): string {
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
 function RepositoryGroup({
   label,
   forceOpen,
@@ -58,7 +66,10 @@ function RepositoryGroup({
         if (!forceOpen) setOpen(event.currentTarget.open);
       }}
     >
-      <summary className="mb-1.5 cursor-pointer truncate text-[11px] font-medium text-muted-foreground">
+      <summary
+        title={label}
+        className="mb-1.5 cursor-pointer text-[11px] font-medium text-muted-foreground [overflow-wrap:anywhere]"
+      >
         {label}
       </summary>
       <div className="pl-1">{children}</div>
@@ -94,6 +105,11 @@ export function FilesChangedSection({
           placeholder={`Filter ${fileCount} changed file${fileCount === 1 ? "" : "s"}`}
           className="h-8 w-full rounded-md border border-border-muted bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
+      )}
+      {normalizedQuery && !paths.some((path) => path.toLowerCase().includes(normalizedQuery)) && (
+        <p role="status" className="px-1 text-xs leading-relaxed text-muted-foreground">
+          No changed files match “{query}”.
+        </p>
       )}
       <div className="space-y-3">
         {repositories.map((repository) => {
@@ -135,8 +151,10 @@ export function FilesChangedSection({
                       data-diff-path={file.path}
                       onClick={() => onSelect(repository, file)}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded px-1.5 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        active ? "bg-accent/15 text-foreground" : "text-foreground hover:bg-muted"
+                        "flex w-full items-center gap-2 rounded-sm border-l-2 px-2 py-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        active
+                          ? "border-accent bg-accent-muted text-foreground"
+                          : "border-transparent text-foreground hover:bg-muted"
                       )}
                     >
                       <span
@@ -145,7 +163,14 @@ export function FilesChangedSection({
                       >
                         {STATUS_LABELS[file.status]}
                       </span>
-                      <span className="min-w-0 flex-1 truncate">{labels[file.path]}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{fileName(file.path)}</span>
+                        {file.path.includes("/") && (
+                          <span className="mt-1 block truncate text-[10px] text-muted-foreground">
+                            {directoryName(file.path)}
+                          </span>
+                        )}
+                      </span>
                       {file.renderState === "renderable" ? (
                         <span className="flex shrink-0 gap-1 font-mono text-[10px]">
                           <span className="text-success">+{file.additions ?? 0}</span>

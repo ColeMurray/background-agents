@@ -3,10 +3,13 @@
 import { useCallback, useState, useMemo } from "react";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
+import { useResourceTeams } from "@/hooks/use-resource-teams";
+import { ResourceTeamField } from "@/components/resource-team-field";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { reconcileProviderSelectionsForHarness } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { SUBSCRIPTION_PROVIDER_IDS } from "@open-inspect/shared/types/provider-accounts";
+import { MAX_AUTOMATION_NAME_LENGTH } from "@open-inspect/shared/types/automations";
 import { useProviderAccounts } from "@/hooks/use-provider-accounts";
 import { ProviderAuthControls } from "@/components/provider-auth-controls";
 import { setProviderSelection } from "@/lib/provider-selection";
@@ -14,6 +17,7 @@ import { FieldDescription } from "./automation-form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAutomationTargets } from "./use-automation-targets";
+import { sameEnvironmentIds } from "./automation-target-selection";
 import { AutomationAgentFields } from "./automation-agent-fields";
 import { AutomationTargetPicker } from "./automation-target-picker";
 import { AutomationInstructionsField } from "./automation-instructions-field";
@@ -24,7 +28,9 @@ import {
 import {
   createAutomationFormDraft,
   evaluateAutomationForm,
+  automationOwnerSelectable,
   requiresRepositoryContext,
+  withoutOwnerBoundConditions,
   type AutomationAgentDraft,
   type AutomationFormValues,
 } from "./automation-form-policy";
@@ -36,11 +42,22 @@ interface AutomationFormProps {
   initialValues?: Partial<AutomationFormValues>;
   onSubmit: (values: AutomationFormValues) => void;
   submitting: boolean;
+  requireTeam?: boolean;
 }
 
-export function AutomationForm({ mode, initialValues, onSubmit, submitting }: AutomationFormProps) {
-  const { repos, loading: loadingRepos } = useRepos();
-  const { environments, loading: loadingEnvironments } = useEnvironments();
+export function AutomationForm({
+  mode,
+  initialValues,
+  onSubmit,
+  submitting,
+  requireTeam = false,
+}: AutomationFormProps) {
+  const [teamId, setTeamId] = useState(initialValues?.teamId ?? null);
+  const scope = useResourceTeams("automation");
+  const allowWorkspace = scope.allowWorkspace && !requireTeam;
+  const scopeValid = mode === "edit" || automationOwnerSelectable(teamId, scope, requireTeam);
+  const { repos, loading: loadingRepos } = useRepos(true, teamId);
+  const { environments, loading: loadingEnvironments } = useEnvironments({ ownerTeamId: teamId });
   const { enabledModels, enabledModelOptions, loading: loadingModels } = useEnabledModels();
   const providerAccounts = useProviderAccounts();
   const initialDraft = useMemo(() => createAutomationFormDraft(initialValues), [initialValues]);
@@ -69,6 +86,16 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     repos,
   });
   const { selectedEnvironmentIds, buildRepositoriesPayload } = targets;
+  const environmentsUsable =
+    (mode === "edit" &&
+      sameEnvironmentIds(selectedEnvironmentIds, initialValues?.environmentIds ?? [])) ||
+    selectedEnvironmentIds.length === 0 ||
+    (!loadingEnvironments &&
+      selectedEnvironmentIds.every((id) =>
+        environments.some(
+          (environment) => environment.id === id && environment.capabilities?.canUse === true
+        )
+      ));
 
   // The model we display and submit, and whether it may be submitted. The
   // selector only lists enabled models the harness can run, so a disabled
@@ -105,6 +132,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const formEvaluation = evaluateAutomationForm({
     mode,
     originalTrigger: initialDraft.trigger,
+    originalScheduleOnceAt: initialValues?.scheduleOnceAt,
     modelAvailability: modelSelection.availability,
     resolvedModel,
     draft: {
@@ -131,15 +159,34 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     !formEvaluation.valid && formEvaluation.reason === "slack-channel-required"
       ? "Slack triggers require at least one Slack Channel condition."
       : "";
+  const slackBotAllowListError =
+    !formEvaluation.valid && formEvaluation.reason === "slack-bot-allow-list-required"
+      ? "Add a Slack User condition that includes the bots allowed to trigger this automation."
+      : "";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEvaluation.valid) return;
-    onSubmit(formEvaluation.values);
+    if (!formEvaluation.valid || !scopeValid || !environmentsUsable || submitting) return;
+    onSubmit({ ...formEvaluation.values, ...(mode === "create" ? { teamId } : {}) });
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      <ResourceTeamField
+        {...scope}
+        teamId={teamId}
+        disabled={submitting || mode === "edit"}
+        allowWorkspace={mode === "edit" || allowWorkspace}
+        onChange={(nextTeamId) => {
+          if (submitting || mode === "edit") return;
+          setTeamId(nextTeamId);
+          targets.resetTargets();
+          setTrigger((current) => ({
+            ...current,
+            conditions: withoutOwnerBoundConditions(current.conditions),
+          }));
+        }}
+      />
       <AutomationTriggerTypeField mode={mode} value={trigger} onChange={setTrigger} />
 
       {/* Name */}
@@ -156,7 +203,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={isSchedule ? "Daily code review" : "Review new PRs"}
-          maxLength={200}
+          maxLength={MAX_AUTOMATION_NAME_LENGTH}
           required
         />
       </div>
@@ -212,6 +259,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         onChange={setTrigger}
         eventTypeError={eventTypeError}
         slackChannelError={slackChannelError}
+        slackBotAllowListError={slackBotAllowListError}
         conditionErrors={conditionErrors}
       />
 
@@ -223,7 +271,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Submit */}
       <div className="flex justify-end gap-2">
-        <Button type="submit" disabled={submitting || !formEvaluation.valid}>
+        <Button
+          type="submit"
+          disabled={submitting || !formEvaluation.valid || !scopeValid || !environmentsUsable}
+        >
           {submitting
             ? mode === "create"
               ? "Creating..."

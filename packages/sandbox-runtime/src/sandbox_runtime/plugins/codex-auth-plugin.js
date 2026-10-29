@@ -55,7 +55,8 @@ function catalogCost(raw) {
 
 async function openAiCatalogModels() {
   const source = process.env.OPENCODE_MODELS_URL || DEFAULT_MODELS_URL;
-  // Matches ModelsDev.Service in pinned OpenCode 1.18.29; our image refreshes this cache.
+  // The supervisor sets OPENCODE_MODELS_PATH to the persisted shared catalog.
+  // The fallback matches standalone OpenCode's default cache location.
   const cachePath =
     process.env.OPENCODE_MODELS_PATH ||
     (source === DEFAULT_MODELS_URL
@@ -93,6 +94,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.6-luna",
   "gpt-6-astra",
   "gpt-6-sol",
+  "gpt-6.1-sol",
   "gpt-6-luna",
   "gpt-5.1-codex",
 ]);

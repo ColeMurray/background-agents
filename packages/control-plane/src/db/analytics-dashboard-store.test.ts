@@ -43,7 +43,12 @@ describe("AnalyticsDashboardStore", () => {
               },
             ],
           };
-        if (index === 18)
+        if (index === 8)
+          return {
+            ...emptyResult(),
+            results: [{ source: "agent", user_key: "user-1", display_name: "Ada", sessions: 2 }],
+          };
+        if (index === 19)
           return {
             ...emptyResult(),
             results: [
@@ -101,15 +106,20 @@ describe("AnalyticsDashboardStore", () => {
     });
 
     expect(batch).toHaveBeenCalledTimes(1);
-    expect(statements).toHaveLength(19);
-    expect(batchedStatements).toHaveLength(19);
+    expect(statements).toHaveLength(20);
+    expect(batchedStatements).toHaveLength(20);
     expect(batchedStatements.every((statement) => statements.includes(statement))).toBe(true);
-    expect(queries[18]).toContain("root.spawn_source IN (?)");
-    expect(statements[18].bind).toHaveBeenCalledWith(
+    expect(queries[19]).toContain("root.spawn_source IN (?)");
+    expect(statements[19].bind).toHaveBeenCalledWith(
       1_699_395_200_000,
       1_700_000_000_000,
       "agent",
       DASHBOARD_RUNS_LIMIT
+    );
+    expect(batchedStatements[8].bind).toHaveBeenCalledWith(
+      1_699_395_200_000,
+      1_700_000_000_000,
+      "agent"
     );
     expect(response).toMatchObject({
       generatedAt: 1_700_000_000_000,
@@ -120,6 +130,7 @@ describe("AnalyticsDashboardStore", () => {
         endAt: 1_700_000_000_000,
       },
       summary: { totalSessions: 0, totalPrs: 0 },
+      sessionOrigins: [{ source: "agent", userKey: "user-1", displayName: "Ada", sessions: 2 }],
       breakdowns: {
         repository: { entries: [] },
         user: { entries: [] },

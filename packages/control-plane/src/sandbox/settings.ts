@@ -109,31 +109,16 @@ export function normalizeSandboxSettings(
     result.maxTotalChildSessions = maxTotalChildSessions;
   }
 
-  if (settings.cpuCores !== undefined) {
-    if (settings.cpuCores === null) {
-      result.cpuCores = null;
-    } else if (
-      typeof settings.cpuCores !== "number" ||
-      !Number.isFinite(settings.cpuCores) ||
-      settings.cpuCores <= 0
-    ) {
-      reject("cpuCores must be a positive number");
+  for (const key of ["cpuCores", "cpuLimitCores", "memoryMib", "memoryLimitMib"] as const) {
+    const value = settings[key];
+    if (value === null) {
+      result[key] = null;
     } else {
-      result.cpuCores = settings.cpuCores;
-    }
-  }
-
-  if (settings.memoryMib !== undefined) {
-    if (settings.memoryMib === null) {
-      result.memoryMib = null;
-    } else if (
-      typeof settings.memoryMib !== "number" ||
-      !Number.isInteger(settings.memoryMib) ||
-      settings.memoryMib <= 0
-    ) {
-      reject("memoryMib must be a positive integer");
-    } else {
-      result.memoryMib = settings.memoryMib;
+      const normalized =
+        key === "cpuCores" || key === "cpuLimitCores"
+          ? normalizePositiveNumberSetting(value, key, reject)
+          : normalizePositiveIntegerSetting(value, key, reject);
+      if (normalized !== undefined) result[key] = normalized;
     }
   }
 

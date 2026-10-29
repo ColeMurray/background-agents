@@ -2,12 +2,13 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import {
   DEFAULT_KEYBOARD_SHORTCUTS,
   type KeyboardShortcutBinding,
 } from "@open-inspect/shared/types/keyboard-shortcuts";
+import { readStoredPromptDraft } from "@/lib/prompt-drafts";
 import { usePromptInput } from "./use-prompt-input";
 
 expect.extend(matchers);
@@ -17,6 +18,11 @@ const mocks = vi.hoisted(() => ({
   sendTyping: vi.fn(),
   clearAttachments: vi.fn(),
   uploadAll: vi.fn(),
+  userId: "user-1",
+}));
+
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: { user: { id: mocks.userId } }, status: "authenticated" }),
 }));
 
 vi.mock("@/hooks/use-session-attachments", () => ({
@@ -35,13 +41,15 @@ vi.mock("@/hooks/use-session-attachments", () => ({
 
 function PromptHarness({
   canSubmit,
+  sessionId = "session-1",
   sendShortcut = DEFAULT_KEYBOARD_SHORTCUTS["send-prompt"],
 }: {
   canSubmit: boolean;
+  sessionId?: string;
   sendShortcut?: KeyboardShortcutBinding;
 }) {
   const prompt = usePromptInput(
-    "session-1",
+    sessionId,
     mocks.sendPrompt,
     mocks.sendTyping,
     "model-1",
@@ -67,9 +75,13 @@ beforeEach(() => {
   mocks.sendTyping.mockReset();
   mocks.clearAttachments.mockReset();
   mocks.uploadAll.mockReset();
+  mocks.userId = "user-1";
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 describe("usePromptInput", () => {
   it("accepts draft edits but blocks the send shortcut before the session is ready", () => {
@@ -119,5 +131,225 @@ describe("usePromptInput", () => {
     fireEvent.keyDown(input, { key: "Enter", code: "Enter", shiftKey });
 
     expect(mocks.sendPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("restores an unsent draft for the same session after a reload", async () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Draft before reload" },
+    });
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("Draft before reload")
+    );
+  });
+
+  it("keeps drafts separate per session", () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Draft for session one" },
+    });
+    unmount();
+
+    render(<PromptHarness canSubmit sessionId="session-2" />);
+
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("");
+  });
+
+  it("clears the stored draft once the prompt is sent", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: true });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(input).toHaveValue(""));
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("");
+  });
+
+  it("keeps the stored draft when the prompt fails to send", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "disconnected" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("Ship it")
+    );
+  });
+
+  it("does not restore another user's draft", () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Private draft" },
+    });
+    unmount();
+
+    mocks.userId = "user-2";
+    render(<PromptHarness canSubmit />);
+
+    expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue("");
+  });
+
+  it("does not carry an in-memory draft into another account without a remount", async () => {
+    const { rerender } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Private draft" },
+    });
+
+    mocks.userId = "user-2";
+    rerender(<PromptHarness canSubmit />);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
+  });
+
+  it("keeps drafts in tab-scoped storage", () => {
+    render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Tab draft" },
+    });
+
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")?.prompt).toBe(
+      "Tab draft"
+    );
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("does not erase a newer draft when an earlier send completes after a remount", async () => {
+    let resolveSend: (result: { ok: true }) => void = () => {};
+    mocks.sendPrompt.mockReturnValue(new Promise((resolve) => (resolveSend = resolve)));
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const firstInput = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(firstInput, { target: { value: "First prompt" } });
+    fireEvent.keyDown(firstInput, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("First prompt"));
+    fireEvent.change(input, { target: { value: "Newer draft" } });
+    resolveSend({ ok: true });
+    await Promise.resolve();
+
+    await waitFor(() =>
+      expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")).toEqual({
+        prompt: "Newer draft",
+        pendingRequest: null,
+      })
+    );
+    expect(input).toHaveValue("Newer draft");
+  });
+
+  it("starts empty instead of inheriting the previous draft when the session changes", async () => {
+    const { rerender } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Session one draft" },
+    });
+
+    rerender(<PromptHarness canSubmit sessionId="session-2" />);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-2")).toBeNull();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:session-1")?.prompt).toBe(
+      "Session one draft"
+    );
+  });
+
+  it("does not restore a draft whose request ID could not be saved", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    vi.restoreAllMocks();
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+  });
+
+  it("reuses the unconfirmed request ID when retrying the restored draft after a reload", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Ship it" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Prompt" }), {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    const firstRequestId = mocks.sendPrompt.mock.calls[0][4];
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("Ship it"));
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(mocks.sendPrompt.mock.calls[1][4]).toBe(firstRequestId);
+  });
+
+  it("uses a new request ID once the restored draft is edited", async () => {
+    mocks.sendPrompt.mockResolvedValue({ ok: false, reason: "timeout" });
+    const { unmount } = render(<PromptHarness canSubmit />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
+      target: { value: "Ship it" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Prompt" }), {
+      key: "Enter",
+      code: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledOnce());
+    const firstRequestId = mocks.sendPrompt.mock.calls[0][4];
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    await waitFor(() => expect(input).toHaveValue("Ship it"));
+    fireEvent.change(input, { target: { value: "Ship it now" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(mocks.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(mocks.sendPrompt.mock.calls[1][4]).not.toBe(firstRequestId);
+  });
+
+  it("drops the stored draft instead of restoring a stale one when saving fails", async () => {
+    const { unmount } = render(<PromptHarness canSubmit />);
+    const input = screen.getByRole("textbox", { name: "Prompt" });
+    fireEvent.change(input, { target: { value: "Partial" } });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.change(input, { target: { value: "Partial draft that no longer fits" } });
+    expect(input).toHaveValue("Partial draft that no longer fits");
+    vi.restoreAllMocks();
+    unmount();
+
+    render(<PromptHarness canSubmit />);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Prompt" })).toHaveValue(""));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:session-1")).toBeNull();
   });
 });

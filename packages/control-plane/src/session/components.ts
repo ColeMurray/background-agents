@@ -22,13 +22,15 @@
  */
 
 import { resolveAppName } from "@open-inspect/shared/app-name";
+import { HarnessAdmissionError, validateHarnessExecution } from "../harness-admission";
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { sandboxPromptBlockReason } from "@open-inspect/shared/types/sandbox-shutdown";
-import { generateId, hashToken, encryptToken } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import { getUserAuth } from "../auth/user/runtime";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
 import { createSandboxProviderFromEnv } from "../sandbox/provider-factory";
-import type { SandboxProvider } from "../sandbox/provider";
+import { providerResumesAfterStop, type SandboxProvider } from "../sandbox/provider";
 import { resolveExecutionBudgetMs } from "../sandbox/execution-budget";
 import { createImageBuildLookup } from "../image-builds/lookup";
 import { resolveImageBuildAdmission } from "../image-builds/provider-policy";
@@ -42,22 +44,29 @@ import {
   type SandboxStorage,
   type SessionContextReader,
   type IdGenerator,
-  type ImageBuildLookup,
-  type McpServerLookup,
-  type SlackAgentNotifyLookup,
   type SandboxShutdownLifecycle,
 } from "../sandbox/lifecycle/manager";
-import { resolveBootBudgetTimeoutMs } from "../sandbox/lifecycle/decisions";
+import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
+// The composition root supplies launch integration ports, not consumer-facing launch mechanics.
+// eslint-disable-next-line no-restricted-imports
+import type { McpServerLookup, SlackAgentNotifyLookup } from "../sandbox/lifecycle/launch-context";
+// The composition root shares the internal access collaborator with shutdown and lifecycle only.
+// eslint-disable-next-line no-restricted-imports
+import { SandboxAccess } from "../sandbox/lifecycle/sandbox-access";
+import { resolveLifecycleTimeouts } from "../sandbox/lifecycle/timeout-settings";
 import { McpServerStore } from "../db/mcp-servers";
 import { UserStore } from "../db/user-store";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { TeamMembershipStore } from "../db/team-memberships";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionCollaboratorStore } from "../db/session-collaborators";
 import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
-import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
+import { resolveSessionCredentialScope } from "../source-control/session-scope";
+import { readCachedInstallationRepositories } from "../repos/cache";
+import { requireRepoSecretsEncryptionKey } from "../env-validation";
 import type { Env, ClientInfo } from "../types";
 import type { SessionRow } from "./types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -96,7 +105,7 @@ import { resolveCurrentGitHubAccessToken } from "./identity";
 import { CallbackNotificationService } from "./callback-notification-service";
 import { UserEnvResolver } from "./user-env-resolver";
 import { resolveSessionRepoId } from "./repo-id-resolution";
-import { Scheduler } from "../scheduler/scheduler";
+import { createScheduler } from "../scheduler/factory";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionBudgetService } from "./budget-service";
@@ -116,6 +125,7 @@ import { SessionEventStream } from "./event-stream";
 import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { MemoryPromptContextHandler } from "./http/handlers/memory-prompt-context.handler";
 import { ChildSummaryHandler } from "./http/handlers/child-summary.handler";
 import { SessionInitHandler } from "./http/handlers/session-init.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
@@ -156,8 +166,11 @@ import { createSessionRuntimeClientForTrace } from "./runtime-client";
 import { SessionTitleService } from "./title-service";
 import { parseArtifactMetadata } from "./artifact-metadata";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
-import { parseTeamsEnforcementMode } from "../authorization/teams-enforcement";
-import { auditSocketPrivateBreakGlass } from "../authorization/session-socket-audit";
+import { parseTeamsEnforcementMode, resolverDecides } from "../authorization/teams-enforcement";
+import {
+  auditSocketPrivateBreakGlass,
+  auditSocketShadowDenied,
+} from "../authorization/session-socket-audit";
 import type { TeamRole } from "@open-inspect/shared/types/teams";
 import type { SessionWebSocket } from "../platform-ports";
 
@@ -205,12 +218,16 @@ export interface SessionComponents {
    */
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
+  /** The live provider object, shared by the lifecycle manager and shutdown coordinator. */
+  sandboxProvider: SandboxProvider;
+  access: SandboxAccess;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
   presenceService: PresenceService;
   sandboxEventProcessor: SessionSandboxEventProcessor;
   pushService: SandboxPushService;
   sessionLifecycleHandler: SessionLifecycleHandler;
+  callbackService: CallbackNotificationService;
 }
 
 /**
@@ -269,7 +286,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Secrets-at-rest encryption is not optional. Every consumer below takes
   // the validated key, so no fallback path can persist a secret in plaintext.
   const repoSecretsEncryptionKey = requireRepoSecretsEncryptionKey(env);
-  const tokenEncryptionKey = requireTokenEncryptionKey(env);
 
   // The session-scoped logger, created before anything can capture a logger
   // at all. Its `session_id` is injected per emit through the latched
@@ -322,6 +338,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // Shared single instances/closures — every consumer below takes these
   // rather than re-deriving its own copy.
   const sessionIndexStore = new SessionIndexStore(db);
+  const teamChannelBindingStore = new TeamChannelBindingStore(db);
+  const resolveCredentialScope = (sessionId: string) =>
+    resolveSessionCredentialScope(db, sessionId, () => readCachedInstallationRepositories(env));
   const teamMembershipStore = new TeamMembershipStore(db);
   const sessionCollaboratorStore = new SessionCollaboratorStore(db);
   const sessionPullRequestStore = new SessionPullRequestStore(db);
@@ -370,7 +389,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const participantService = new ParticipantService({
     repository: participantRepository,
     getProcessingMessageAuthor: () => messageRepository.getProcessingMessageAuthor(),
-    env,
     log,
     generateId: () => generateId(),
     resolveCurrentGitHubAccessToken:
@@ -387,10 +405,14 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         : undefined,
   });
 
-  const scheduler = new Scheduler(db, env, backgroundTasks);
+  const scheduler = createScheduler(db, env, backgroundTasks);
   const callbackService = new CallbackNotificationService({
     repository: sessionCoreRepository,
     messageRepository,
+    slackPostScope: {
+      getSession: (sessionId) => sessionIndexStore.get(sessionId),
+      getChannelBinding: (channelId) => teamChannelBindingStore.get("slack", channelId),
+    },
     env,
     completeAutomationRun: (completion) => scheduler.runComplete(completion),
     log,
@@ -431,11 +453,23 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   const diffsHandler = new SessionDiffsHandler(diffService);
   const eventStream = new SessionEventStream(eventRepository);
 
-  // Tier 5 — the lifecycle manager.
-  const sandboxProvider = createSandboxProviderFromEnv(
-    env,
-    resolveSandboxBackendName(env.SANDBOX_PROVIDER)
+  // Tier 5: access precedes shutdown and the lifecycle manager, so retirement has no manager cycle.
+  const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
+  const sandboxProvider = createSandboxProviderFromEnv(env, sandboxBackend);
+  const lifecycleSockets = new LifecycleSocketAdapter(wsManager);
+  const accessLog = createSessionScopedLogger(
+    createLogger("lifecycle-manager"),
+    getPublicSessionId
   );
+  const access = new SandboxAccess({
+    storage: sandboxRepository,
+    broadcaster: messenger,
+    sockets: lifecycleSockets,
+    canResumeAfterStop: () => providerResumesAfterStop(sandboxProvider),
+    getLogger: () => accessLog,
+    sandboxDashboardUrlBuilder: (providerObjectId) =>
+      resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId),
+  });
   // Tier 6 — the message queue.
   const getExecutionTimeoutMs = () => resolveExecutionTimeoutMs(sessionCoreRepository, env, log);
   const messageFailures = new MessageFailureService(
@@ -455,6 +489,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messages: messageRepository,
     failures: messageFailures,
     messenger,
+    events: eventRepository,
     sockets: wsManager,
     alarm: alarmScheduler,
     background: backgroundTasks,
@@ -462,11 +497,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     // composition function has constructed and returned the complete graph.
     onLifecycleChange: () => messageQueue.processMessageQueue(),
     reconcileStatusFromMessages: () => statusService.reconcileFromMessageState(),
-    retireAccess: () => lifecycleManager.retireShutdownAccess(),
+    retireAccess: () => access.retireShutdownAccess(),
   });
   const lifecycleManager = createLifecycleManager({
     provider: sandboxProvider,
     shutdown,
+    access,
     env,
     db,
     getSessionId: getPublicSessionId,
@@ -474,12 +510,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     sessionContext: new LifecycleSessionContext(sessionCoreRepository, userEnvResolver),
     repoSecretsEncryptionKey,
     messenger,
-    wsManager,
+    lifecycleSockets,
     alarmScheduler,
-    sandboxDashboardSettings,
     backgroundTasks,
     recordWarning: (message, eventId) =>
       recordSessionWarning(eventRepository, messenger, message, eventId),
+    resumeQueuedWork: () => messageQueue.processMessageQueue(),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -507,7 +543,19 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     participantService,
     callbackService,
     statusService,
-    (model) => userEnvResolver.getProviderAuthenticationError(model),
+    async (model) => {
+      const session = sessionCoreRepository.getSession();
+      try {
+        await validateHarnessExecution(db, {
+          harness: getValidHarnessOrDefault(session?.harness),
+          model,
+        });
+      } catch (error) {
+        if (error instanceof HarnessAdmissionError) return error.message;
+        throw error;
+      }
+      return userEnvResolver.getProviderAuthenticationError(model);
+    },
     messageFailures,
     lifecycleManager,
     sessionIndexStore,
@@ -526,7 +574,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     send: (ws, msg) => wsManager.send(ws, msg),
     getSandboxSocket: () => wsManager.getSandboxSocket(),
     isSpawning: () => lifecycleManager.isSpawning(),
-    spawnSandbox: () => lifecycleManager.spawnSandbox(),
+    warmSandbox: () => lifecycleManager.spawnSandbox("warm"),
     log,
   });
 
@@ -634,7 +682,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     getExecutionTimeoutMs,
     now: () => Date.now(),
     log,
-    preserveBeforeWatchdogs: () => lifecycleManager.handleShutdownAlarm(),
+    preserveBeforeWatchdogs: (allowCaptureRetry) =>
+      lifecycleManager.handleShutdownAlarm(allowCaptureRetry),
+    redriveIdleQueue: () => lifecycleManager.redriveIdleQueue(),
   });
 
   const schedulePullRequestRefresh = (trigger: "open" | "manual"): void => {
@@ -644,7 +694,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
           sessionCoreRepository,
           artifactRepository,
           sourceControlProvider(),
-          sessionPullRequestStore
+          sessionPullRequestStore,
+          resolveCredentialScope
         ).then(({ updated, failures }) => {
           for (const artifact of updated) {
             messenger.broadcast({ type: "artifact_updated", artifact });
@@ -678,6 +729,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     messageService
   );
+  const memoryPromptContextHandler = new MemoryPromptContextHandler(
+    messageRepository,
+    sessionCoreRepository
+  );
   const childSummaryHandler = new ChildSummaryHandler(
     sessionCoreRepository,
     sandboxRepository,
@@ -709,7 +764,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     return service.refresh(sessionRow);
   };
   const getScmCredentials = (requestLog: Logger) =>
-    new ScmCredentialsService(sourceControlProvider(), requestLog).getCredentials();
+    new ScmCredentialsService(sourceControlProvider(), requestLog, () =>
+      resolveCredentialScope(getPublicSessionId())
+    ).getCredentials();
 
   const sandboxHandler = new SandboxHandler(
     messageRepository,
@@ -740,7 +797,6 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       backgroundTasks.submit(() => lifecycleManager.warmSandbox(), {
         name: "sandbox.warm",
       }),
-    (token) => encryptToken(token, tokenEncryptionKey),
     generateId
   );
   const sessionLifecycleHandler = new SessionLifecycleHandler(
@@ -776,6 +832,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         artifactRepository,
         claims: prCreationClaims,
         sourceControlProvider: sourceControlProvider(),
+        resolveCredentialScope,
         log: requestLog,
         generateId: () => generateId(),
         pushBranchToRemote: (pushSpec) => pushService.pushBranchToRemote(pushSpec),
@@ -829,7 +886,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshotReader,
     schedulePullRequestRefresh,
     scmProviderName,
-    resolveSessionViewer: async (userId) => {
+    resolveSessionViewer: async (userId, options) => {
       try {
         const mode = parseTeamsEnforcementMode(env.TEAMS_ENFORCEMENT);
         const [authorization, session] = await Promise.all([
@@ -838,13 +895,13 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
         ]);
         if (authorization.suspendedAt !== null) return { kind: "rejected" };
         if (!session) return { kind: "rejected" };
-        const [memberships, collaboratorIds] =
-          mode === "on" || session.visibility === "private"
-            ? await Promise.all([
-                teamMembershipStore.listForUser(userId),
-                sessionCollaboratorStore.listUserIds(session.id),
-              ])
-            : [new Map<string, TeamRole>(), []];
+        const enforceScope = resolverDecides(mode, session, "read");
+        const [memberships, collaboratorIds] = await Promise.all([
+          resolverDecides(mode, session, "collaborate") || options?.includeMemberships
+            ? teamMembershipStore.listForUser(userId)
+            : new Map<string, TeamRole>(),
+          enforceScope ? sessionCollaboratorStore.listUserIds(session.id) : [],
+        ]);
         return {
           kind: "valid",
           mode,
@@ -875,6 +932,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       }
     },
     auditPrivateBreakGlass: (userId, row) => auditSocketPrivateBreakGlass(db, userId, row),
+    auditShadowDenied: (userId, row, reason, connectionId) =>
+      auditSocketShadowDenied(db, userId, row, reason, connectionId),
     log,
   });
 
@@ -885,6 +944,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     snapshot: () => snapshotReader.handleSnapshot(),
     sandboxAccess: () => accessReader.handleSandboxAccess(),
     prompt: (request, _url, requestLog) => messagesHandler.enqueuePrompt(request, requestLog),
+    promptRequest: (_request, url) => messagesHandler.lookupPromptRequest(url),
     autofix: (request, _url, requestLog) => autofixHandler.handle(request, requestLog),
     stop: () => messagesHandler.stop(),
     sandboxEvent: (request) => sandboxHandler.sandboxEvent(request),
@@ -921,6 +981,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
     spawnContext: () => childSessionsHandler.getSpawnContext(),
     activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
+    memoryPromptContext: (_request, url) =>
+      memoryPromptContextHandler.getContext(url.searchParams.get("userId")),
     childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
     cancel: () => sessionLifecycleHandler.cancel(),
@@ -1004,12 +1066,15 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       scmProvider = next;
     },
     userEnvResolver,
+    sandboxProvider,
+    access,
     lifecycleManager,
     messageQueue,
     presenceService,
     sandboxEventProcessor,
     pushService,
     sessionLifecycleHandler,
+    callbackService,
   };
 
   return {
@@ -1023,6 +1088,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
             await wsManager.expireAuthorizationLeases(Date.now());
             await alarmScheduler.rehydrate();
             await lifecycleManager.rearmRejectedStartupCleanupAlarm();
+            await lifecycleManager.rearmCaptureSettlement();
+            await lifecycleManager.replayPendingFatalReport();
+            await lifecycleManager.redriveIdleQueue();
             await terminalMessageProjection.rearm();
           },
           {
@@ -1036,7 +1104,9 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
+  resumeQueuedWork: () => Promise<void>;
   shutdown: SandboxShutdownLifecycle;
+  access: SandboxAccess;
   provider: SandboxProvider;
   env: Env;
   db: SqlDatabase;
@@ -1047,9 +1117,8 @@ interface LifecycleManagerDeps {
   sessionContext: SessionContextReader;
   repoSecretsEncryptionKey: string;
   messenger: SessionMessenger;
-  wsManager: SessionWebSocketManager;
+  lifecycleSockets: LifecycleSocketAdapter;
   alarmScheduler: RehydratableAlarmScheduler;
-  sandboxDashboardSettings: SandboxDashboardSettings;
   backgroundTasks: BackgroundTasks;
 }
 
@@ -1058,6 +1127,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const {
     provider,
     shutdown,
+    access,
     env,
     db,
     getSessionId,
@@ -1065,18 +1135,10 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     sessionContext,
     repoSecretsEncryptionKey,
     messenger,
-    wsManager,
+    lifecycleSockets,
     alarmScheduler,
-    sandboxDashboardSettings,
     backgroundTasks,
   } = deps;
-  // Both throw on a misconfigured deployment — deliberately at graph
-  // construction, so every session request fails at initialization instead of
-  // the error surfacing later at the first spawn.
-  const sandboxBackend = resolveSandboxBackendName(env.SANDBOX_PROVIDER);
-
-  const lifecycleWsManager = new LifecycleSocketAdapter(wsManager);
-
   // ID generator adapter
   const idGenerator: IdGenerator = {
     generateId: () => generateId(),
@@ -1109,29 +1171,10 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     },
   };
 
-  const sandboxDashboardUrlBuilder =
-    sandboxBackend === "modal" || sandboxBackend === "modal-vm"
-      ? (providerObjectId: string) =>
-          resolveSandboxDashboardUrl(sandboxDashboardSettings, providerObjectId)
-      : undefined;
-
-  // A malformed budget must not take every session down at construction the
-  // way a missing provider does; it falls back to the default and says so.
-  const bootBudget = resolveBootBudgetTimeoutMs(env.SANDBOX_BOOT_TIMEOUT_MS, {
-    connectingTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
-    defaultTimeoutMs: DEFAULT_LIFECYCLE_CONFIG.bootBudget.timeoutMs,
-  });
-  if (bootBudget.rejectedValue !== null) {
-    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL)).warn(
-      "Ignoring SANDBOX_BOOT_TIMEOUT_MS; using the default boot budget",
-      {
-        event: "config.invalid",
-        rejected_value: bootBudget.rejectedValue,
-        must_exceed_ms: DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs,
-        timeout_ms: bootBudget.timeoutMs,
-      }
-    );
-  }
+  const timeouts = resolveLifecycleTimeouts(
+    env,
+    createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL))
+  );
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
@@ -1141,15 +1184,12 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     // is written. Latched afterwards — the manager derives log context from
     // this on every log line, and the id is immutable once row-backed.
     getSessionId,
-    inactivity: {
-      ...DEFAULT_LIFECYCLE_CONFIG.inactivity,
-      timeoutMs: parseInt(env.SANDBOX_INACTIVITY_TIMEOUT_MS || "600000", 10),
-    },
-    bootBudget: { timeoutMs: bootBudget.timeoutMs },
+    inactivity: { ...DEFAULT_LIFECYCLE_CONFIG.inactivity, ...timeouts.inactivity },
+    bootBudget: timeouts.bootBudget,
     mcpServerLookup,
     slackAgentNotifyLookup,
-    sandboxDashboardUrlBuilder,
     recordWarning: deps.recordWarning,
+    resumeQueuedWork: deps.resumeQueuedWork,
   };
 
   // The image lookup exists only for providers that support prebuilt images,
@@ -1159,7 +1199,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const imageBuildAdmission = resolveImageBuildAdmission(env);
   const imageBuildLookup: ImageBuildLookup | undefined =
     imageBuildAdmission.admitted && imageBuildAdmission.provider
-      ? createImageBuildLookup(db, imageBuildAdmission.provider)
+      ? createImageBuildLookup(db, imageBuildAdmission.provider, getSessionId)
       : undefined;
 
   return new SandboxLifecycleManager(
@@ -1167,10 +1207,11 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     storage,
     sessionContext,
     messenger,
-    lifecycleWsManager,
+    lifecycleSockets,
     alarmScheduler,
     idGenerator,
     shutdown,
+    access,
     config,
     imageBuildLookup,
     backgroundTasks

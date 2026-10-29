@@ -470,6 +470,7 @@ describe("Integration settings API", () => {
               allowUserPreferenceOverride: true,
               allowLabelModelOverride: true,
               emitToolProgressActivities: true,
+              unboundChannels: "reject",
             },
           },
         }),
@@ -495,6 +496,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -504,6 +506,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(false);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("reject");
       expect(body.config.enabledRepos).toEqual(["acme/widgets"]);
     });
 
@@ -519,6 +522,7 @@ describe("Integration settings API", () => {
           allowUserPreferenceOverride: boolean;
           allowLabelModelOverride: boolean;
           emitToolProgressActivities: boolean;
+          unboundChannels: string;
           enabledRepos: string[] | null;
         };
       }>();
@@ -528,6 +532,7 @@ describe("Integration settings API", () => {
       expect(body.config.allowUserPreferenceOverride).toBe(true);
       expect(body.config.allowLabelModelOverride).toBe(true);
       expect(body.config.emitToolProgressActivities).toBe(true);
+      expect(body.config.unboundChannels).toBe("workspace");
       expect(body.config.enabledRepos).toBeNull();
     });
 
@@ -665,6 +670,8 @@ describe("Integration settings API", () => {
           cpuCores: number | null;
           memoryMib: number | null;
           sandboxTimeoutMs: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
           enabledRepos: string[] | null;
         };
       }>();
@@ -675,6 +682,8 @@ describe("Integration settings API", () => {
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
       expect(body.config.sandboxTimeoutMs).toBeNull();
+      expect(body.config.cpuLimitCores).toBeNull();
+      expect(body.config.memoryLimitMib).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
     });
 
@@ -712,12 +721,12 @@ describe("Integration settings API", () => {
       expect(body.error).toContain("sandboxTimeoutMs must be a positive whole number of seconds");
     });
 
-    it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {
+    it("GET /integration-settings/sandbox/resolved returns configured requests and caps", async () => {
       const putRes = await serviceFetch("https://test.local/integration-settings/sandbox", {
         method: "PUT",
         body: JSON.stringify({
           settings: {
-            defaults: { cpuCores: 2, memoryMib: 4096 },
+            defaults: { cpuCores: 2, memoryMib: 4096, cpuLimitCores: 4, memoryLimitMib: 8192 },
           },
         }),
       });
@@ -731,10 +740,14 @@ describe("Integration settings API", () => {
         config: {
           cpuCores: number | null;
           memoryMib: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
         };
       }>();
       expect(body.config.cpuCores).toBe(2);
       expect(body.config.memoryMib).toBe(4096);
+      expect(body.config.cpuLimitCores).toBe(4);
+      expect(body.config.memoryLimitMib).toBe(8192);
     });
 
     it("GET /integration-settings/sandbox/resolved preserves null repo resource overrides", async () => {
@@ -742,7 +755,7 @@ describe("Integration settings API", () => {
         method: "PUT",
         body: JSON.stringify({
           settings: {
-            defaults: { cpuCores: 2, memoryMib: 4096 },
+            defaults: { cpuCores: 2, memoryMib: 4096, cpuLimitCores: 4, memoryLimitMib: 8192 },
           },
         }),
       });
@@ -753,7 +766,12 @@ describe("Integration settings API", () => {
         {
           method: "PUT",
           body: JSON.stringify({
-            settings: { cpuCores: null, memoryMib: null },
+            settings: {
+              cpuCores: null,
+              memoryMib: null,
+              cpuLimitCores: null,
+              memoryLimitMib: null,
+            },
           }),
         }
       );
@@ -767,10 +785,14 @@ describe("Integration settings API", () => {
         config: {
           cpuCores: number | null;
           memoryMib: number | null;
+          cpuLimitCores: number | null;
+          memoryLimitMib: number | null;
         };
       }>();
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
+      expect(body.config.cpuLimitCores).toBeNull();
+      expect(body.config.memoryLimitMib).toBeNull();
     });
   });
 

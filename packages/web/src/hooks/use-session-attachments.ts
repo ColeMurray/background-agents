@@ -9,6 +9,8 @@ import {
 } from "@open-inspect/shared/types/session-attachments";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { sessionActionErrorMessage } from "@/lib/session-action-error";
+import { toast } from "sonner";
 
 export type PendingAttachment = {
   id: string;
@@ -205,6 +207,15 @@ export function useSessionAttachments() {
           }
           assertCurrent();
           if (!response.ok) {
+            if (response.status === 403) {
+              const message = await sessionActionErrorMessage(
+                response,
+                `Failed to upload ${fileName}`
+              );
+              assertCurrent();
+              toast.error(message);
+              throw new Error(message);
+            }
             const message = parseUploadErrorMessage(await response.json().catch(() => null));
             throw new Error(message || `Failed to upload ${fileName}`);
           }

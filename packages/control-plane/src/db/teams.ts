@@ -1,12 +1,13 @@
 import {
   teamRowSchema,
+  teamDefaultVisibilitySchema,
   type Team,
   type TeamJoinPolicy,
-  type SessionVisibility,
+  type TeamDefaultVisibility,
 } from "@open-inspect/shared/types/teams";
 import { generateId } from "../auth/crypto";
 import { isUniqueConstraintError } from "./errors";
-import { TeamAuditStore } from "./team-audit";
+import { TeamAuditStore, type TeamAuditActor } from "./team-audit";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export class TeamSlugConflictError extends Error {
@@ -15,6 +16,9 @@ export class TeamSlugConflictError extends Error {
     this.name = "TeamSlugConflictError";
   }
 }
+
+/** Who changed the team and the state they changed it from. */
+type TeamChangeAudit = TeamAuditActor & { before: Team };
 
 function rethrowTeamWriteError(cause: unknown): never {
   if (isUniqueConstraintError(cause)) throw new TeamSlugConflictError();
@@ -46,6 +50,15 @@ export class TeamStore {
     return row ? toTeam(row) : null;
   }
 
+  async isActive(id: string): Promise<boolean> {
+    return (
+      (await this.db
+        .prepare("SELECT 1 AS ok FROM teams WHERE id = ? AND archived_at IS NULL")
+        .bind(id)
+        .first()) !== null
+    );
+  }
+
   async getBySlug(slug: string): Promise<Team | null> {
     const row = await this.db.prepare("SELECT * FROM teams WHERE slug = ?").bind(slug).first();
     return row ? toTeam(row) : null;
@@ -74,31 +87,32 @@ export class TeamStore {
     return rows.results.map(toTeam);
   }
 
-  async isActive(id: string): Promise<boolean> {
-    return (
-      (await this.db
-        .prepare("SELECT 1 AS ok FROM teams WHERE id = ? AND archived_at IS NULL")
-        .bind(id)
-        .first()) !== null
-    );
-  }
-
   private insertStatement(
     input: {
       slug: string;
       name: string;
       description?: string | null;
       joinPolicy: TeamJoinPolicy;
+      defaultVisibility?: TeamDefaultVisibility;
     },
     id: string,
     now: number
   ): SqlStatement {
     return this.db
       .prepare(
-        `INSERT INTO teams (id, slug, name, description, join_policy, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO teams (id, slug, name, description, join_policy, default_visibility, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(id, input.slug, input.name, input.description ?? null, input.joinPolicy, now, now);
+      .bind(
+        id,
+        input.slug,
+        input.name,
+        input.description ?? null,
+        input.joinPolicy,
+        teamDefaultVisibilitySchema.parse(input.defaultVisibility ?? "team"),
+        now,
+        now
+      );
   }
 
   async create(input: {
@@ -106,6 +120,7 @@ export class TeamStore {
     name: string;
     description?: string | null;
     joinPolicy: TeamJoinPolicy;
+    defaultVisibility?: TeamDefaultVisibility;
   }): Promise<Team> {
     const id = `team_${generateId()}`;
     try {
@@ -117,7 +132,13 @@ export class TeamStore {
   }
 
   async createWithLead(
-    input: { slug: string; name: string; description?: string | null; joinPolicy: TeamJoinPolicy },
+    input: {
+      slug: string;
+      name: string;
+      description?: string | null;
+      joinPolicy: TeamJoinPolicy;
+      defaultVisibility?: TeamDefaultVisibility;
+    },
     leadUserId: string,
     requestId: string
   ): Promise<Team> {
@@ -146,6 +167,7 @@ export class TeamStore {
     return (await this.getById(id))!;
   }
 
+  /** With `audit`, the change and its `team.updated` row commit or roll back together. */
   async update(
     id: string,
     fields: {
@@ -153,9 +175,10 @@ export class TeamStore {
       name?: string;
       description?: string | null;
       joinPolicy?: TeamJoinPolicy;
-      defaultVisibility?: SessionVisibility;
+      defaultVisibility?: TeamDefaultVisibility;
       defaultEnvironmentId?: string | null;
-    }
+    },
+    audit?: TeamChangeAudit
   ): Promise<Team | null> {
     if (fields.defaultEnvironmentId !== undefined && fields.defaultEnvironmentId !== null) {
       const environment = await this.db
@@ -169,18 +192,38 @@ export class TeamStore {
       name: fields.name,
       description: fields.description,
       join_policy: fields.joinPolicy,
-      default_visibility: fields.defaultVisibility,
+      default_visibility:
+        fields.defaultVisibility === undefined
+          ? undefined
+          : teamDefaultVisibilitySchema.parse(fields.defaultVisibility),
       default_environment_id: fields.defaultEnvironmentId,
     };
     const entries = Object.entries(columns).filter((entry) => entry[1] !== undefined);
     if (entries.length) {
-      try {
-        await this.db
+      const now = Date.now();
+      const statements = [
+        this.db
           .prepare(
             `UPDATE teams SET ${entries.map(([key]) => `${key} = ?`).join(", ")}, updated_at = ? WHERE id = ?`
           )
-          .bind(...entries.map((entry) => entry[1]), Date.now(), id)
-          .run();
+          .bind(...entries.map((entry) => entry[1]), now, id),
+      ];
+      if (audit) {
+        const changed = Object.entries(fields).filter((entry) => entry[1] !== undefined);
+        statements.push(
+          new TeamAuditStore(this.db).bind(
+            {
+              ...audit,
+              teamId: id,
+              action: "team.updated",
+              after: { ...audit.before, ...Object.fromEntries(changed), updatedAt: now },
+            },
+            true
+          )
+        );
+      }
+      try {
+        await this.db.batch(statements);
       } catch (cause) {
         rethrowTeamWriteError(cause);
       }
@@ -188,22 +231,43 @@ export class TeamStore {
     return this.getById(id);
   }
 
-  async archive(id: string): Promise<boolean> {
-    return await this.setArchived(id, Date.now());
+  async archive(id: string, audit?: TeamChangeAudit): Promise<boolean> {
+    return await this.setArchived(id, Date.now(), audit);
   }
 
-  async restore(id: string): Promise<boolean> {
-    return await this.setArchived(id, null);
+  async restore(id: string, audit?: TeamChangeAudit): Promise<boolean> {
+    return await this.setArchived(id, null, audit);
   }
 
-  private async setArchived(id: string, archivedAt: number | null): Promise<boolean> {
-    const result = await this.db
-      .prepare(
-        `UPDATE teams SET archived_at = ?, updated_at = ?
+  /** With `audit`, the change and its `team.archived`/`team.restored` row commit or roll back together. */
+  private async setArchived(
+    id: string,
+    archivedAt: number | null,
+    audit?: TeamChangeAudit
+  ): Promise<boolean> {
+    const now = archivedAt ?? Date.now();
+    const statements = [
+      this.db
+        .prepare(
+          `UPDATE teams SET archived_at = ?, updated_at = ?
                  WHERE id = ? AND ${archivedAt === null ? "archived_at IS NOT NULL" : "archived_at IS NULL"}`
-      )
-      .bind(archivedAt, Date.now(), id)
-      .run();
+        )
+        .bind(archivedAt, now, id),
+    ];
+    if (audit) {
+      statements.push(
+        new TeamAuditStore(this.db).bind(
+          {
+            ...audit,
+            teamId: id,
+            action: archivedAt === null ? "team.restored" : "team.archived",
+            after: { ...audit.before, archivedAt, updatedAt: now },
+          },
+          true
+        )
+      );
+    }
+    const [result] = await this.db.batch(statements);
     return (result.meta.changes ?? 0) > 0;
   }
 

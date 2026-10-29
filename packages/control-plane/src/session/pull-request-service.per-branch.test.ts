@@ -7,7 +7,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
-import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
+import type {
+  CredentialScope,
+  PullRequestSnapshot,
+  SourceControlProvider,
+} from "../source-control";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRepositoryRow, SessionRow } from "./types";
 import type { ArtifactRepository, CreateArtifactData } from "./artifact-repository";
@@ -210,6 +214,7 @@ function createTestHarness() {
   } as unknown as ArtifactRepository;
 
   const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
+  const credentialScope: CredentialScope = { kind: "repositories", repositoryIds: [123, 456] };
 
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
@@ -217,6 +222,7 @@ function createTestHarness() {
     artifactRepository,
     claims: new PullRequestCreationClaims(),
     sourceControlProvider: provider,
+    resolveCredentialScope: vi.fn(async () => credentialScope),
     log,
     generateId: () => `id-${++idCounter}`,
     pushBranchToRemote: vi.fn(async () => ({ success: true as const })),
@@ -230,6 +236,7 @@ function createTestHarness() {
     service: new SessionPullRequestService(deps),
     deps,
     provider,
+    credentialScope,
     artifacts,
     sessionPullRequests,
     setSession: (next: SessionRow | null) => {
@@ -286,6 +293,10 @@ describe("per-branch pull requests", () => {
     });
     expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
       expect.objectContaining({ targetBranch: "feature-x", force: true })
+    );
+    expect(harness.provider.getPullRequest).toHaveBeenCalledWith(
+      { owner: "acme", name: "web", number: 7, repositoryExternalId: undefined },
+      harness.credentialScope
     );
     expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
     expect(harness.artifacts.filter((artifact) => artifact.type === "pr")).toHaveLength(1);

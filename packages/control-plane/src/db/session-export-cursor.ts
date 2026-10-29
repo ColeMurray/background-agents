@@ -18,8 +18,7 @@ export interface RunsExportCursor extends CreatedAtCursor {
 }
 
 export type ParseSessionExportCursorResult =
-  | { ok: true; cursor: SessionExportCursor | null }
-  | { ok: false; error: "Invalid cursor" };
+  { ok: true; cursor: SessionExportCursor | null } | { ok: false; error: "Invalid cursor" };
 
 export function encodeSessionExportCursor(cursor: SessionExportCursor): string {
   return `${encodeCreatedAtCursor(cursor)}:${cursor.snapshotMaxRowId}`;

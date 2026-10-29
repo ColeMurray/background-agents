@@ -8,6 +8,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 
 import {
   getPermalink,
+  listChannels,
   postBlocks,
   sanitizeAgentText,
   splitIntoSlackSections,
@@ -16,8 +17,11 @@ import {
   type SlackWireDenialReason,
 } from "@open-inspect/shared/slack";
 import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
+import { z } from "zod";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { slackPostGate } from "../authorization/slack-post-gate";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 import { GITHUB_SANDBOX_FALLBACK_ROUTE, json, requireSession, type RequestContext } from "./shared";
@@ -35,13 +39,65 @@ const RAW_TEXT_INPUT_MAX_LENGTH = 12_000;
 const CHANNEL_INPUT_MAX_LENGTH = 80;
 /** Reason field cap; recorded for audit only. */
 const REASON_MAX_LENGTH = 500;
+const CHANNEL_NAME_CACHE_TTL_MS = 60_000;
+const CHANNEL_NAME_CACHE_MAX_ENTRIES = 1_000;
+const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
 
-interface ParsedBody {
-  channel: string;
-  text: string;
-  threadTs: string | undefined;
-  reason: string | undefined;
+const channelInputSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value.trim() : ""),
+  z
+    .string()
+    .min(1, `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`)
+    .max(CHANNEL_INPUT_MAX_LENGTH, `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`)
+);
+
+const textInputSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : ""),
+  z
+    .string()
+    .min(1, "text is required.")
+    .max(RAW_TEXT_INPUT_MAX_LENGTH, `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`)
+);
+
+const optionalNonEmptyStringSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.length > 0 ? value : undefined),
+  z.string().optional()
+);
+
+const reasonInputSchema = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.length > 0 ? value.slice(0, REASON_MAX_LENGTH) : undefined,
+  z.string().optional()
+);
+
+const slackNotifyBodySchema = z
+  .preprocess(
+    (value) => (Array.isArray(value) ? {} : value),
+    z.object({
+      channel: channelInputSchema,
+      text: textInputSchema,
+      thread_ts: optionalNonEmptyStringSchema,
+      reason: reasonInputSchema,
+    })
+  )
+  .transform(({ channel, text, thread_ts, reason }) => ({
+    channel,
+    text,
+    threadTs: thread_ts,
+    reason,
+  }));
+
+function cacheChannelName(token: string, channel: { id: string; name: string }, expiresAt: number) {
+  const key = JSON.stringify([token, channel.name.toLowerCase()]);
+  channelNameCache.delete(key);
+  channelNameCache.set(key, { id: channel.id, expiresAt });
+  if (channelNameCache.size > CHANNEL_NAME_CACHE_MAX_ENTRIES) {
+    const oldestKey = channelNameCache.keys().next().value;
+    if (oldestKey !== undefined) channelNameCache.delete(oldestKey);
+  }
 }
+
+type ParsedBody = z.infer<typeof slackNotifyBodySchema>;
 
 interface AuditFields {
   prompt_author_user_id: string | null;
@@ -61,7 +117,8 @@ export async function handleSlackNotify(
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;
 
-  const session = await new SessionIndexStore(ctx.db).get(sessionId);
+  const sessionStore = new SessionIndexStore(ctx.db);
+  const session = await sessionStore.get(sessionId);
   if (!session) {
     return failureResponse("invalid_input", "Session not found.");
   }
@@ -74,6 +131,12 @@ export async function handleSlackNotify(
     parent_session_id: session.parentSessionId ?? null,
     repo: repoScope,
   };
+
+  // The target binding is unknown until channel name resolution below.
+  if (session.visibility === "private") {
+    logDenial(sessionId, ctx, parsed, audit, "session_scope_denied");
+    return failureResponse("session_scope_denied", "This session cannot post to Slack.");
+  }
 
   const token = env.SLACK_BOT_TOKEN;
   if (!token) {
@@ -120,6 +183,47 @@ export async function handleSlackNotify(
     );
   }
 
+  let targetChannelId = parsed.channel;
+  if (!/^[CDG][A-Z0-9]+$/.test(targetChannelId)) {
+    const name = parsed.channel.replace(/^#/, "").toLowerCase();
+    const cacheKey = JSON.stringify([token, name]);
+    const cached = channelNameCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      targetChannelId = cached.id;
+    } else {
+      channelNameCache.delete(cacheKey);
+      const listing = await listChannels(token, { signal: request.signal });
+      if (!listing.ok) {
+        const reason = mapSlackError(listing.error);
+        logDenial(sessionId, ctx, parsed, audit, reason, listing.retryAfter);
+        return failureResponse(reason, listing.error, listing.retryAfter);
+      }
+      const expiresAt = Date.now() + CHANNEL_NAME_CACHE_TTL_MS;
+      for (const channel of listing.channels) cacheChannelName(token, channel, expiresAt);
+      const channel = listing.channels.find((candidate) => candidate.name.toLowerCase() === name);
+      if (!channel) {
+        logDenial(sessionId, ctx, parsed, audit, "channel_not_found_or_forbidden");
+        return failureResponse("channel_not_found_or_forbidden", "Slack channel was not found.");
+      }
+      // A large listing must not evict the name this request actually resolved.
+      cacheChannelName(token, channel, expiresAt);
+      targetChannelId = channel.id;
+    }
+  }
+
+  // Re-read after name resolution: only the authoritative, current row permits publication.
+  const [currentSession, channelBinding] = await Promise.all([
+    sessionStore.get(sessionId),
+    new TeamChannelBindingStore(ctx.db).get("slack", targetChannelId),
+  ]);
+  if (slackPostGate(currentSession, channelBinding)) {
+    logDenial(sessionId, ctx, parsed, audit, "session_scope_denied");
+    return failureResponse(
+      "session_scope_denied",
+      "This session cannot post to this Slack channel."
+    );
+  }
+
   const sections = splitIntoSlackSections(sanitized.text);
   const blocks = buildBlocks({
     sections,
@@ -128,7 +232,7 @@ export async function handleSlackNotify(
     webAppUrl: env.WEB_APP_URL,
   });
   // Without top-level text, Slack derives screen-reader text from the blocks.
-  const post = await postBlocks(token, parsed.channel, blocks, {
+  const post = await postBlocks(token, targetChannelId, blocks, {
     thread_ts: parsed.threadTs,
     signal: request.signal,
   });
@@ -184,40 +288,16 @@ async function parseBody(request: Request): Promise<ParsedBody | Response> {
     return failureResponse("invalid_input", "Body must be valid JSON.");
   }
 
-  if (raw === null || typeof raw !== "object") {
-    return failureResponse("invalid_input", "Body must be a JSON object.");
-  }
-  const body = raw as Record<string, unknown>;
-
-  const channelValue = typeof body.channel === "string" ? body.channel.trim() : "";
-  if (channelValue.length === 0 || channelValue.length > CHANNEL_INPUT_MAX_LENGTH) {
+  const parsed = slackNotifyBodySchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
     return failureResponse(
       "invalid_input",
-      `channel must be 1..${CHANNEL_INPUT_MAX_LENGTH} characters.`
-    );
-  }
-  const text = typeof body.text === "string" ? body.text : "";
-  if (text.length === 0) {
-    return failureResponse("invalid_input", "text is required.");
-  }
-  if (text.length > RAW_TEXT_INPUT_MAX_LENGTH) {
-    return failureResponse(
-      "invalid_input",
-      `text must be at most ${RAW_TEXT_INPUT_MAX_LENGTH} characters.`
+      issue && issue.path.length > 0 ? issue.message : "Body must be a JSON object."
     );
   }
 
-  const threadTs =
-    typeof body.thread_ts === "string" && body.thread_ts.length > 0 ? body.thread_ts : undefined;
-  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
-  const reason = rawReason ? rawReason.slice(0, REASON_MAX_LENGTH) : undefined;
-
-  return {
-    channel: channelValue,
-    text,
-    threadTs,
-    reason,
-  };
+  return parsed.data;
 }
 
 function buildBlocks(opts: {

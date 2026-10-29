@@ -1,4 +1,5 @@
 import {
+  isWorkspaceAdmin,
   resolveScopedPermission,
   type BuiltInRoleKey,
   type PermissionId,
@@ -12,16 +13,15 @@ export const SESSION_ACTIONS = [
   "lifecycle",
   "delete",
   "sandbox",
-  "move",
   "manageCollaborators",
   "changeVisibility",
 ] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
 
-export const AUTOMATION_ACTIONS = ["read", "manage", "trigger", "move"] as const;
+export const AUTOMATION_ACTIONS = ["read", "manage", "trigger"] as const;
 export type AutomationAction = (typeof AUTOMATION_ACTIONS)[number];
 
-export const ENVIRONMENT_ACTIONS = ["read", "manage", "use", "move"] as const;
+export const ENVIRONMENT_ACTIONS = ["read", "manage", "use"] as const;
 export type EnvironmentAction = (typeof ENVIRONMENT_ACTIONS)[number];
 
 export type AccessDenialReason =
@@ -33,8 +33,7 @@ export type AccessDenialReason =
   | "not_collaborator";
 export type AuditObligation = "session.private_break_glass";
 export type AccessDecision =
-  | { allowed: true; audit?: AuditObligation }
-  | { allowed: false; reason: AccessDenialReason };
+  { allowed: true; audit?: AuditObligation } | { allowed: false; reason: AccessDenialReason };
 
 export type SessionViewer =
   | {
@@ -61,7 +60,6 @@ export interface SessionCapabilities {
   canCollaborate: boolean;
   canManageLifecycle: boolean;
   canDelete: boolean;
-  canMove: boolean;
   canSandbox: boolean;
   canManageCollaborators: boolean;
   canChangeVisibility: boolean;
@@ -126,10 +124,13 @@ interface SessionFacts extends Facts {
 
 function sessionFacts(viewer: UserViewer, row: SessionAccessRow): SessionFacts {
   const isOwner = row.ownerUserId !== null && row.ownerUserId === viewer.userId;
-  const isCollaborator = row.collaboratorIds.includes(viewer.userId);
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
+  // A team-owned grant lapses with team membership, so stale collaborator rows grant nothing.
+  const isCollaborator =
+    row.collaboratorIds.includes(viewer.userId) &&
+    (row.ownerTeamId === null || teamRole !== undefined);
   const isWsOwner = viewer.roleKey === "owner";
-  const isAdmin = isWsOwner || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   const isPrivate = row.visibility === "private";
   return {
     permissions: viewer.permissions,
@@ -180,7 +181,6 @@ const SESSION_RULES = {
     reason: "not_collaborator",
   },
   delete: { permission: "sessions.delete", when: privileged, reason: "not_owner_or_lead" },
-  move: { permission: "sessions.lifecycle", when: privileged, reason: "not_owner_or_lead" },
   manageCollaborators: { when: ownerOrWsOwner, reason: "not_owner_or_lead" },
   changeVisibility: {
     when: (facts: SessionFacts) => (facts.isPrivate ? ownerOrWsOwner(facts) : privileged(facts)),
@@ -208,12 +208,12 @@ export function checkSessionAccess(
 ): AccessDecision {
   if (viewer.kind === "service") return checkServiceSessionAccess(viewer, row, action);
   const facts = sessionFacts(viewer, row);
-  return (
-    readGate(facts) ??
-    (action === "read"
-      ? permit(facts.breakGlass ? "session.private_break_glass" : undefined)
-      : decide(SESSION_RULES[action], facts))
-  );
+  const read = readGate(facts);
+  if (read) return read;
+  if (action === "read")
+    return permit(facts.breakGlass ? "session.private_break_glass" : undefined);
+  if (row.ownerTeamId !== null && facts.teamRole === undefined) return deny("not_member");
+  return decide(SESSION_RULES[action], facts);
 }
 
 export function sessionCapabilities(
@@ -228,7 +228,6 @@ export function sessionCapabilities(
     canCollaborate: permits.get("collaborate") === true,
     canManageLifecycle: permits.get("lifecycle") === true,
     canDelete: permits.get("delete") === true,
-    canMove: permits.get("move") === true,
     canSandbox: permits.get("sandbox") === true,
     canManageCollaborators: permits.get("manageCollaborators") === true,
     canChangeVisibility: permits.get("changeVisibility") === true,
@@ -251,7 +250,7 @@ function automationFacts(
   row: { ownerTeamId: string | null; executorUserId: string | null }
 ): AutomationFacts {
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
-  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   return {
     permissions: viewer.permissions,
     has: (permission) => viewer.permissions.includes(permission),
@@ -275,7 +274,6 @@ const AUTOMATION_RULES = {
   read: { permission: "automations.read" },
   manage: manageAutomation,
   trigger: { scoped: "automations.trigger", owns: ownsAutomation },
-  move: manageAutomation,
 } as const satisfies Record<AutomationAction, ActionRule<AutomationFacts>>;
 
 function checkServiceAutomationAccess(
@@ -299,6 +297,29 @@ export function checkAutomationAccess(
   return ownedGate(facts) ?? decide(AUTOMATION_RULES[action], facts);
 }
 
+/**
+ * Whether the viewer may choose a different executor. Executors cannot hand off their own
+ * automations; reassignment is a team-lead or workspace-admin decision. Route admission
+ * separately requires `manage`.
+ */
+export function checkAutomationExecutorReassignment(
+  viewer: SessionViewer,
+  row: { ownerTeamId: string | null; executorUserId: string | null }
+): AccessDecision {
+  if (viewer.kind === "service") return deny("missing_permission");
+  const facts = automationFacts(viewer, row);
+  return (
+    ownedGate(facts) ??
+    decide(
+      {
+        when: (f: AutomationFacts) => f.isAdmin || f.teamRole === "lead",
+        reason: "not_owner_or_lead",
+      },
+      facts
+    )
+  );
+}
+
 export function automationCapabilities(
   viewer: SessionViewer,
   row: { ownerTeamId: string | null; executorUserId: string | null }
@@ -307,43 +328,52 @@ export function automationCapabilities(
     canRead: checkAutomationAccess(viewer, row, "read").allowed,
     canManage: checkAutomationAccess(viewer, row, "manage").allowed,
     canTrigger: checkAutomationAccess(viewer, row, "trigger").allowed,
-    canMove: checkAutomationAccess(viewer, row, "move").allowed,
   };
 }
 
-function environmentFacts(viewer: UserViewer, row: { ownerTeamId: string | null }): OwnedFacts {
+interface EnvironmentFacts extends OwnedFacts {
+  teamOwned: boolean;
+}
+
+function environmentFacts(
+  viewer: UserViewer,
+  row: { ownerTeamId: string | null }
+): EnvironmentFacts {
   const teamRole = row.ownerTeamId === null ? undefined : viewer.memberships.get(row.ownerTeamId);
-  const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
+  const isAdmin = isWorkspaceAdmin(viewer.roleKey);
   return {
     permissions: viewer.permissions,
     has: (permission) => viewer.permissions.includes(permission),
     suspended: viewer.suspended,
     eligible: row.ownerTeamId === null || teamRole !== undefined || isAdmin,
+    teamOwned: row.ownerTeamId !== null,
     teamRole,
     isAdmin,
   };
 }
 
+// Workspace environments need only the grant; team environments also need a lead or admin.
 const manageEnvironment = {
   permission: "environments.manage",
-  when: (facts: OwnedFacts) => facts.teamRole === "lead" || facts.isAdmin,
+  when: (facts: EnvironmentFacts) => !facts.teamOwned || facts.teamRole === "lead" || facts.isAdmin,
   reason: "not_owner_or_lead",
 } as const;
 const ENVIRONMENT_RULES = {
   read: { permission: "environments.read" },
   use: { permission: "environments.use" },
   manage: manageEnvironment,
-  move: manageEnvironment,
-} as const satisfies Record<EnvironmentAction, ActionRule<OwnedFacts>>;
+} as const satisfies Record<EnvironmentAction, ActionRule<EnvironmentFacts>>;
 
+/**
+ * Services launch sessions for their bound team, or for the workspace when unbound, so they
+ * see only environments those sessions could use.
+ */
 function checkServiceEnvironmentAccess(
   viewer: ServiceViewer,
   row: { ownerTeamId: string | null },
   action: EnvironmentAction
 ): AccessDecision {
-  const eligible =
-    row.ownerTeamId === null || viewer.teamId === null || row.ownerTeamId === viewer.teamId;
-  if (!eligible) return deny("not_member");
+  if (row.ownerTeamId !== null && row.ownerTeamId !== viewer.teamId) return deny("not_member");
   return action === "read" || action === "use" ? permit() : deny("missing_permission");
 }
 
@@ -365,6 +395,5 @@ export function environmentCapabilities(
     canRead: checkEnvironmentAccess(viewer, row, "read").allowed,
     canManage: checkEnvironmentAccess(viewer, row, "manage").allowed,
     canUse: checkEnvironmentAccess(viewer, row, "use").allowed,
-    canMove: checkEnvironmentAccess(viewer, row, "move").allowed,
   };
 }

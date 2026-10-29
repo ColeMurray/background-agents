@@ -12,7 +12,11 @@
 
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type { SessionPullRequestStore } from "../db/session-pull-request-store";
-import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
+import type {
+  CredentialScope,
+  PullRequestSnapshot,
+  SourceControlProvider,
+} from "../source-control";
 import { parsePullRequestArtifactMetadata } from "./pull-request-snapshot";
 import { applyPullRequestSnapshot } from "./pull-request-snapshot-apply";
 import type { ArtifactRepository } from "./artifact-repository";
@@ -81,7 +85,8 @@ export async function refreshSessionPullRequests(
   repository: PullRequestRefreshRepository,
   artifactRepository: ArtifactRepository,
   sourceControlProvider: Pick<SourceControlProvider, "getPullRequest">,
-  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">
+  sessionPullRequests: Pick<SessionPullRequestStore, "upsert">,
+  resolveCredentialScope: (sessionId: string) => Promise<CredentialScope>
 ): Promise<PullRequestRefreshResult> {
   const updated: SessionArtifact[] = [];
   const failures: PullRequestRefreshFailure[] = [];
@@ -106,12 +111,16 @@ export async function refreshSessionPullRequests(
 
     let snapshot: PullRequestSnapshot;
     try {
-      snapshot = await sourceControlProvider.getPullRequest({
-        owner: target.repoOwner,
-        name: target.repoName,
-        number: target.prNumber,
-        repositoryExternalId: target.repositoryExternalId,
-      });
+      const scope = await resolveCredentialScope(sessionId);
+      snapshot = await sourceControlProvider.getPullRequest(
+        {
+          owner: target.repoOwner,
+          name: target.repoName,
+          number: target.prNumber,
+          repositoryExternalId: target.repositoryExternalId,
+        },
+        scope
+      );
     } catch (error) {
       failures.push({
         artifactId: artifact.id,

@@ -11,8 +11,13 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
-import type { CacheStore } from "@open-inspect/shared/cache-store";
+import { CACHE_STORE_MIN_TTL_MS, type CacheStore } from "@open-inspect/shared/cache-store";
+import { sha256Hex } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
+import {
+  repositoryCredentialScope,
+  type CredentialScope,
+} from "../source-control/credential-scope";
 
 import { base64UrlEncode } from "./encoding";
 
@@ -25,10 +30,17 @@ export const INSTALLATION_TOKEN_CACHE_MAX_AGE_MS = 50 * 60 * 1000;
 /** Require at least this much remaining lifetime before using a cached token (ms). */
 export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
-/** Upper bound for KV cache TTL (seconds). */
-const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
+/** Maximum distinct token scopes retained in the process cache. */
+export const INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES = 128;
 
-const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v1";
+const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
+
+export type TokenScope = CredentialScope;
+
+interface InstallationTokenOptions {
+  scope: TokenScope;
+  forceRefresh?: boolean;
+}
 
 interface InstallationTokenCacheBindings {
   cacheStore?: CacheStore;
@@ -60,7 +72,10 @@ function createHttpError(message: string, status: number): GitHubHttpError {
 }
 
 const installationTokenMemoryCache = new Map<string, CachedInstallationToken>();
-const installationTokenRefreshInFlight = new Map<string, Promise<CachedInstallationToken>>();
+const installationTokenRefreshInFlight = new Map<
+  string,
+  { promise: Promise<CachedInstallationToken>; options: { forceRefresh: boolean } }
+>();
 const importedPrivateKeyCache = new Map<string, Promise<CryptoKey>>();
 
 /** Fetch with an AbortController timeout. */
@@ -249,7 +264,8 @@ async function generateAppJwt(appId: string, privateKey: string): Promise<string
 async function getInstallationTokenWithMetadata(
   jwt: string,
   installationId: string,
-  userAgent: string
+  userAgent: string,
+  scope: TokenScope
 ): Promise<InstallationTokenResponse> {
   const url = `https://api.github.com/app/installations/${installationId}/access_tokens`;
 
@@ -260,7 +276,11 @@ async function getInstallationTokenWithMetadata(
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": userAgent,
+      ...(scope.kind === "repositories" ? { "Content-Type": "application/json" } : {}),
     },
+    ...(scope.kind === "repositories"
+      ? { body: JSON.stringify({ repository_ids: scope.repositoryIds }) }
+      : {}),
   });
 
   if (!response.ok) {
@@ -287,8 +307,16 @@ async function getInstallationTokenWithMetadata(
   return parsed.data;
 }
 
-function getInstallationTokenCacheKey(config: GitHubAppConfig): string {
-  return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}`;
+export async function getInstallationTokenCacheKey(
+  config: GitHubAppConfig,
+  scope: TokenScope
+): Promise<string> {
+  let scopeHash = "all";
+  if (scope.kind === "repositories") {
+    const ids = repositoryCredentialScope(scope.repositoryIds).repositoryIds;
+    scopeHash = await sha256Hex(JSON.stringify(ids));
+  }
+  return `${INSTALLATION_TOKEN_CACHE_KEY_PREFIX}:${config.appId}:${config.installationId}:${scopeHash}`;
 }
 
 function isTokenUsable(cached: CachedInstallationToken, nowEpochMs = Date.now()): boolean {
@@ -297,6 +325,20 @@ function isTokenUsable(cached: CachedInstallationToken, nowEpochMs = Date.now())
     return false;
   }
   return nowEpochMs < cached.expiresAtEpochMs - INSTALLATION_TOKEN_MIN_REMAINING_MS;
+}
+
+function cacheInstallationTokenInMemory(cacheKey: string, cached: CachedInstallationToken): void {
+  const nowEpochMs = Date.now();
+  for (const [key, token] of installationTokenMemoryCache) {
+    if (!isTokenUsable(token, nowEpochMs)) installationTokenMemoryCache.delete(key);
+  }
+  installationTokenMemoryCache.delete(cacheKey);
+  if (!isTokenUsable(cached, nowEpochMs)) return;
+  installationTokenMemoryCache.set(cacheKey, cached);
+  if (installationTokenMemoryCache.size > INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES) {
+    const oldestKey = installationTokenMemoryCache.keys().next().value;
+    if (oldestKey !== undefined) installationTokenMemoryCache.delete(oldestKey);
+  }
 }
 
 async function readInstallationTokenFromCache(
@@ -326,31 +368,28 @@ async function writeInstallationTokenToCache(
     return;
   }
 
-  const nowEpochMs = Date.now();
-  const remainingLifetimeMs = cached.expiresAtEpochMs - nowEpochMs;
-  if (remainingLifetimeMs <= 0) {
+  const remainingLifetimeMs = cached.expiresAtEpochMs - Date.now();
+  const ttlMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
+  // Under the store's shortest TTL. Such a token is already inside
+  // INSTALLATION_TOKEN_MIN_REMAINING_MS, so no cache read would serve it.
+  if (ttlMs < CACHE_STORE_MIN_TTL_MS) {
     return;
   }
 
-  const cacheBoundLifetimeMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
-  const ttlSeconds = Math.max(
-    1,
-    Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS, Math.floor(cacheBoundLifetimeMs / 1000))
-  );
-
   try {
-    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { expirationTtl: ttlSeconds });
+    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { ttlMs });
   } catch {
     // Cache failures are non-fatal.
   }
 }
 
-async function invalidateInstallationTokenCache(
+export async function invalidateInstallationTokenCache(
   env: InstallationTokenCacheBindings | undefined,
   cacheKey: string
 ): Promise<void> {
   installationTokenMemoryCache.delete(cacheKey);
-  installationTokenRefreshInFlight.delete(cacheKey);
+  const pending = installationTokenRefreshInFlight.get(cacheKey);
+  if (pending) pending.options.forceRefresh = true;
 
   if (!env?.cacheStore) {
     return;
@@ -366,14 +405,16 @@ async function invalidateInstallationTokenCache(
 async function refreshInstallationToken(
   config: GitHubAppConfig,
   env: InstallationTokenCacheBindings | undefined,
-  cacheKey: string
+  cacheKey: string,
+  scope: TokenScope
 ): Promise<CachedInstallationToken> {
   const nowEpochMs = Date.now();
   const jwt = await generateAppJwt(config.appId, config.privateKey);
   const tokenData = await getInstallationTokenWithMetadata(
     jwt,
     config.installationId,
-    resolveUserAgent(env)
+    resolveUserAgent(env),
+    scope
   );
   const cached: CachedInstallationToken = {
     token: tokenData.token,
@@ -381,41 +422,64 @@ async function refreshInstallationToken(
     cachedAtEpochMs: nowEpochMs,
   };
 
-  installationTokenMemoryCache.set(cacheKey, cached);
+  cacheInstallationTokenInMemory(cacheKey, cached);
   await writeInstallationTokenToCache(env, cacheKey, cached);
   return cached;
 }
 
 async function getOrRefreshCachedInstallationToken(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<CachedInstallationToken> {
-  const cacheKey = getInstallationTokenCacheKey(config);
-  const forceRefresh = options?.forceRefresh ?? false;
+  const scope: TokenScope =
+    options.scope.kind === "all"
+      ? options.scope
+      : repositoryCredentialScope(options.scope.repositoryIds);
+  const cacheKey = await getInstallationTokenCacheKey(config, scope);
+  const forceRefresh = options.forceRefresh ?? false;
+
+  const pending = installationTokenRefreshInFlight.get(cacheKey);
+  if (pending) {
+    if (forceRefresh) pending.options.forceRefresh = true;
+    return pending.promise;
+  }
 
   if (!forceRefresh) {
     const memoryCached = installationTokenMemoryCache.get(cacheKey);
     if (memoryCached && isTokenUsable(memoryCached)) {
+      // Re-insert to mark most recently used; expired entries are pruned on insert.
+      installationTokenMemoryCache.delete(cacheKey);
+      installationTokenMemoryCache.set(cacheKey, memoryCached);
       return memoryCached;
     }
-
-    const persistentCached = await readInstallationTokenFromCache(env, cacheKey);
-    if (persistentCached && isTokenUsable(persistentCached)) {
-      installationTokenMemoryCache.set(cacheKey, persistentCached);
-      return persistentCached;
-    }
-
-    const inFlight = installationTokenRefreshInFlight.get(cacheKey);
-    if (inFlight) {
-      return inFlight;
-    }
+    installationTokenMemoryCache.delete(cacheKey);
   }
 
-  const refreshPromise = refreshInstallationToken(config, env, cacheKey).finally(() => {
-    installationTokenRefreshInFlight.delete(cacheKey);
+  const refreshOptions = { forceRefresh };
+  const refreshPromise = (async () => {
+    if (!refreshOptions.forceRefresh) {
+      const persistentCached = await readInstallationTokenFromCache(env, cacheKey);
+      // Invalidation or a forced caller can supersede a pending cache read.
+      if (!refreshOptions.forceRefresh && persistentCached && isTokenUsable(persistentCached)) {
+        cacheInstallationTokenInMemory(cacheKey, persistentCached);
+        // Forced callers must not join work that has already selected a cache hit.
+        if (installationTokenRefreshInFlight.get(cacheKey)?.options === refreshOptions) {
+          installationTokenRefreshInFlight.delete(cacheKey);
+        }
+        return persistentCached;
+      }
+    }
+    return refreshInstallationToken(config, env, cacheKey, scope);
+  })().finally(() => {
+    if (installationTokenRefreshInFlight.get(cacheKey)?.promise === refreshPromise) {
+      installationTokenRefreshInFlight.delete(cacheKey);
+    }
   });
-  installationTokenRefreshInFlight.set(cacheKey, refreshPromise);
+  installationTokenRefreshInFlight.set(cacheKey, {
+    promise: refreshPromise,
+    options: refreshOptions,
+  });
 
   return refreshPromise;
 }
@@ -425,8 +489,8 @@ async function getOrRefreshCachedInstallationToken(
  */
 export async function getCachedInstallationToken(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<string> {
   const cached = await getOrRefreshCachedInstallationToken(config, env, options);
   return cached.token;
@@ -440,8 +504,8 @@ export async function getCachedInstallationToken(
  */
 export async function getCachedInstallationTokenWithExpiry(
   config: GitHubAppConfig,
-  env?: InstallationTokenCacheBindings,
-  options?: { forceRefresh?: boolean }
+  env: InstallationTokenCacheBindings | undefined,
+  options: InstallationTokenOptions
 ): Promise<{ token: string; expiresAtEpochMs: number }> {
   const cached = await getOrRefreshCachedInstallationToken(config, env, options);
   return { token: cached.token, expiresAtEpochMs: cached.expiresAtEpochMs };
@@ -464,7 +528,8 @@ export async function listInstallationRepositories(
   env?: InstallationTokenCacheBindings
 ): Promise<{ repos: InstallationRepository[]; timing: ListReposTiming }> {
   const tokenStart = performance.now();
-  let token = await getCachedInstallationToken(config, env);
+  const scope: TokenScope = { kind: "all" };
+  let token = await getCachedInstallationToken(config, env, { scope });
   const tokenGenerationMs = performance.now() - tokenStart;
 
   const perPage = 100;
@@ -526,8 +591,8 @@ export async function listInstallationRepositories(
       throw error;
     }
 
-    await invalidateInstallationTokenCache(env, getInstallationTokenCacheKey(config));
-    token = await getCachedInstallationToken(config, env, { forceRefresh: true });
+    await invalidateInstallationTokenCache(env, await getInstallationTokenCacheKey(config, scope));
+    token = await getCachedInstallationToken(config, env, { scope, forceRefresh: true });
     headers.Authorization = `Bearer ${token}`;
     first = await fetchPage(1);
   }
@@ -571,12 +636,13 @@ export async function getInstallationRepository(
   repo: string,
   env?: InstallationTokenCacheBindings
 ): Promise<InstallationRepository | null> {
-  const cacheKey = getInstallationTokenCacheKey(config);
+  const scope: TokenScope = { kind: "all" };
+  const cacheKey = await getInstallationTokenCacheKey(config, scope);
   let forceRefresh = false;
   let response!: Response;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await getCachedInstallationToken(config, env, { forceRefresh });
+    const token = await getCachedInstallationToken(config, env, { scope, forceRefresh });
     response = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -631,14 +697,14 @@ export async function listRepositoryBranches(
   repo: string,
   env?: InstallationTokenCacheBindings
 ): Promise<{ name: string }[]> {
-  const token = await getCachedInstallationToken(config, env);
-  const branches: { name: string }[] = [];
-  let page = 1;
+  const token = await getCachedInstallationToken(config, env, { scope: { kind: "all" } });
+  const perPage = 100;
+  const maxBranches = 500;
+  const maxPages = maxBranches / perPage;
 
-  // Paginate through branches (100 per page, cap at 500)
-  while (branches.length < 500) {
+  const fetchPage = async (page: number) => {
     const response = await fetchWithTimeout(
-      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
+      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -659,14 +725,48 @@ export async function listRepositoryBranches(
     if (!parsed.success) {
       throw new Error("Failed to list branches: invalid response");
     }
-    const data = parsed.data;
-    branches.push(...data.map((b) => ({ name: b.name })));
+    return { data: parsed.data, link: response.headers.get("Link") };
+  };
 
-    if (data.length < 100) break;
-    page++;
+  const first = await fetchPage(1);
+  const branches = [...first.data];
+  let lastPage: number | undefined;
+
+  for (const link of first.link?.split(",") ?? []) {
+    const match = link.match(/^\s*<([^>]+)>(.*)$/);
+    if (!match || !/;\s*rel\s*=\s*"last"\s*(?:;|$)/i.test(match[2])) continue;
+
+    try {
+      const value = new URL(match[1]).searchParams.get("page");
+      if (!value || !/^\d+$/.test(value)) continue;
+      const page = Number(value);
+      if (Number.isSafeInteger(page) && page >= 1) {
+        lastPage = Math.min(page, maxPages);
+        break;
+      }
+    } catch {
+      // Ignore malformed pagination links and retain sequential pagination.
+    }
   }
 
-  return branches;
+  if (lastPage !== undefined) {
+    // Use only the page number from Link, never its URL or other query parameters.
+    const pages = Array.from({ length: lastPage - 1 }, (_, index) => index + 2);
+    const results = await Promise.all(pages.map(fetchPage));
+    for (const result of results) branches.push(...result.data);
+  } else {
+    let data = first.data;
+    for (
+      let page = 2;
+      data.length >= perPage && page <= maxPages && branches.length < maxBranches;
+      page++
+    ) {
+      data = (await fetchPage(page)).data;
+      branches.push(...data);
+    }
+  }
+
+  return branches.slice(0, maxBranches);
 }
 
 /**

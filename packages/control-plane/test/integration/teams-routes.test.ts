@@ -1,51 +1,142 @@
-import { env } from "cloudflare:test";
+import { createExecutionContext, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { BUILT_IN_ROLE_REGISTRY } from "@open-inspect/shared/rbac";
-import type { Team } from "@open-inspect/shared/types/teams";
+import {
+  BUILT_IN_ROLE_REGISTRY,
+  permissionsForBuiltInRole,
+  type PermissionId,
+} from "@open-inspect/shared/rbac";
+import {
+  meTeamsResponseSchema,
+  teamSessionsResponseSchema,
+  type Team,
+} from "@open-inspect/shared/types/teams";
+import { SessionIndexStore, type SessionEntry } from "../../src/db/session-index";
+import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
+import { TeamSettingsStore } from "../../src/db/team-settings";
 import type { SqlDatabase, SqlStatement } from "../../src/db/sql-database";
-import { cleanD1Tables } from "./cleanup";
-import { seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
+import { assignCustomRole } from "./ownership-test-helpers";
+import {
+  BASE,
+  OWNER,
+  MEMBER,
+  OTHER,
+  request,
+  setRole,
+  auditEvents,
+  requestAuditEvents,
+  modeRequest,
+  setupTeamRoutes,
+} from "./team-route-helpers";
 
-const BASE = "https://test.local";
-const OWNER = "11111111111111111111111111111111";
-const MEMBER = "22222222222222222222222222222222";
-const OTHER = "33333333333333333333333333333333";
-
-async function request(path: string, method = "GET", body?: object) {
-  return serviceFetch(`${BASE}${path}`, {
-    method,
-    ...(body ? { body: JSON.stringify(body) } : {}),
+async function seedSession(id: string, teamId: string, overrides: Partial<SessionEntry> = {}) {
+  await new SessionIndexStore(env.DB).create({
+    id,
+    ownerTeamId: teamId,
+    visibility: "team",
+    userId: MEMBER,
+    title: id,
+    repoOwner: "acme",
+    repoName: "widgets",
+    baseBranch: "main",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
+    status: "completed",
+    createdAt: 100,
+    updatedAt: 100,
+    ...overrides,
   });
 }
 
-async function setRole(userId: string, role: "member" | "administrator") {
-  await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
-    .bind(BUILT_IN_ROLE_REGISTRY[role].id, userId)
-    .run();
-}
-
-async function auditEvents(teamId: string) {
-  const result = await env.DB.prepare(
-    "SELECT action, team_id, target_user_id_snapshot, metadata_json FROM authorization_audit_events WHERE resource_type = 'team' AND team_id = ? ORDER BY occurred_at, id"
-  )
-    .bind(teamId)
-    .all();
-  return result.results;
+function inboxPage(value: unknown) {
+  const parsed = teamSessionsResponseSchema.parse(value);
+  if (!("items" in parsed)) throw new Error("Expected bucket page");
+  return parsed;
 }
 
 describe("team routes", () => {
-  beforeEach(async () => {
-    await cleanD1Tables();
-    await seedActiveUser(MEMBER);
-    await seedActiveUser(OTHER);
-    await request("/me/authorization");
+  beforeEach(setupTeamRoutes);
+
+  it.each(["", "/members", "/sessions"])(
+    "does not audit an allowed team read at /teams/:id%s",
+    async (suffix) => {
+      await setRole(OWNER, "member");
+      const team = await new TeamStore(env.DB).create({
+        slug: "quiet-read",
+        name: "Quiet read",
+        joinPolicy: "invite_only",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+      if (suffix === "/sessions") await memberships.add(team.id, OWNER);
+
+      const response = await request(`/teams/${team.id}${suffix}`);
+      expect(response.status).toBe(200);
+      expect(await requestAuditEvents(response)).toEqual([]);
+    }
+  );
+
+  it("audits an allowed team capability write", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "audited-write",
+      name: "Audited write",
+      joinPolicy: "invite_only",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER, "lead");
+
+    const response = await request(`/teams/${team.id}`, "PATCH", { name: "Renamed" });
+    expect(response.status).toBe(200);
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_allowed" },
+      { action: "team.updated" },
+    ]);
+  });
+
+  it("still audits a denied team capability write", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "denied-write",
+      name: "Denied write",
+      joinPolicy: "invite_only",
+    });
+    const response = await request(`/teams/${team.id}`, "PATCH", { name: "Forbidden" });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ reason_code: "team_capability_required" });
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_denied" },
+    ]);
+  });
+
+  it.each([false, true])("still audits leaving a team (archived: %s)", async (archived) => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "audited-leave",
+      name: "Audited leave",
+      joinPolicy: "invite_only",
+    });
+    const memberships = new TeamMembershipStore(env.DB);
+    await memberships.add(team.id, MEMBER, "lead");
+    await memberships.add(team.id, OWNER);
+    if (archived) await new TeamStore(env.DB).archive(team.id);
+
+    const response = await request(`/teams/${team.id}/members/${OWNER}`, "DELETE");
+    expect(response.status).toBe(204);
+    expect(await requestAuditEvents(response)).toEqual([
+      { action: "authorization.request_allowed" },
+      { action: "team.member_removed" },
+    ]);
   });
 
   it("starts without teams and lets an administrator create, rename, archive and restore", async () => {
     expect((await request("/me/teams")).status).toBe(200);
-    expect(await (await request("/me/teams")).json()).toEqual({ teams: [] });
+    expect(await (await request("/me/teams")).json()).toEqual({
+      teams: [],
+      requireTeamOnCreate: false,
+      capabilities: { canListAllTeams: true },
+    });
     await setRole(OWNER, "administrator");
     const created = await request("/teams", "POST", { slug: "engineering", name: "Engineering" });
     expect(created.status).toBe(201);
@@ -59,7 +150,6 @@ describe("team routes", () => {
     expect((await request(`/teams/${team.id}`, "PATCH", { name: "Platform" })).status).toBe(200);
     expect((await request(`/teams/${team.id}/archive`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).not.toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(false);
     expect(await (await request("/teams?membership=all")).json()).toEqual({ teams: [] });
     expect(
       await (await request("/teams?membership=all&includeArchived=true")).json()
@@ -68,7 +158,6 @@ describe("team routes", () => {
     });
     expect((await request(`/teams/${team.id}/restore`, "POST")).status).toBe(200);
     expect((await new TeamStore(env.DB).getById(team.id))?.archivedAt).toBeNull();
-    expect(await new TeamStore(env.DB).isActive(team.id)).toBe(true);
     expect((await auditEvents(team.id)).map((row) => row.action)).toEqual([
       "team.created",
       "team.updated",
@@ -76,6 +165,196 @@ describe("team routes", () => {
       "team.restored",
     ]);
   });
+
+  it("meTeams exposes the creation setting to active users without settings permissions", async () => {
+    await setRole(OWNER, "member");
+    const settings = new TeamSettingsStore(env.DB);
+    for (const requireTeamOnCreate of [false, true, false]) {
+      await settings.set({ requireTeamOnCreate });
+      const response = await request("/me/teams");
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      expect(meTeamsResponseSchema.parse(await response.json())).toEqual({
+        teams: [],
+        requireTeamOnCreate,
+        capabilities: { canListAllTeams: false },
+      });
+    }
+  });
+
+  it.each(["team", "workspace"] as const)(
+    "creates and updates a team with a %s default",
+    async (defaultVisibility) => {
+      const created = await request("/teams", "POST", {
+        slug: "shared-default",
+        name: "Shared default",
+        defaultVisibility,
+      });
+      expect(created.status).toBe(201);
+      const team = (await created.json()) as Team;
+      expect(team.defaultVisibility).toBe(defaultVisibility);
+      expect((await new TeamStore(env.DB).getById(team.id))?.defaultVisibility).toBe(
+        defaultVisibility
+      );
+
+      const updatedVisibility = defaultVisibility === "team" ? "workspace" : "team";
+      const updated = await request(`/teams/${team.id}`, "PATCH", {
+        defaultVisibility: updatedVisibility,
+      });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toMatchObject({ defaultVisibility: updatedVisibility });
+      expect((await new TeamStore(env.DB).getById(team.id))?.defaultVisibility).toBe(
+        updatedVisibility
+      );
+    }
+  );
+
+  it("rejects private defaults on create and update with the normal validation response", async () => {
+    const created = await request("/teams", "POST", {
+      slug: "private-default",
+      name: "Private default",
+      defaultVisibility: "private",
+    });
+    expect(created.status).toBe(400);
+    expect(await created.json()).toEqual({ error: expect.stringMatching(/^defaultVisibility:/) });
+    expect(await new TeamStore(env.DB).getBySlug("private-default")).toBeNull();
+
+    const team = await new TeamStore(env.DB).create({
+      slug: "unchanged-default",
+      name: "Unchanged default",
+      joinPolicy: "invite_only",
+    });
+    expect(team.defaultVisibility).toBe("team");
+    const updated = await request(`/teams/${team.id}`, "PATCH", {
+      defaultVisibility: "private",
+    });
+    expect(updated.status).toBe(400);
+    expect(await updated.json()).toEqual({ error: expect.stringMatching(/^defaultVisibility:/) });
+    expect(await new TeamStore(env.DB).getById(team.id)).toEqual(team);
+    expect(await auditEvents(team.id)).toEqual([]);
+  });
+
+  it("meTeams still requires an active human user", async () => {
+    const bot = await serviceFetch(`${BASE}/me/teams`, { service: "slack-bot" });
+    expect(bot.status).toBe(403);
+    await env.DB.prepare("UPDATE users SET suspended_at = ? WHERE id = ?")
+      .bind(Date.now(), OWNER)
+      .run();
+    expect((await request("/me/teams")).status).toBe(403);
+  });
+
+  it.each([
+    ...(["owner", "administrator", "member", "viewer"] as const).map((roleKey) => ({
+      roleKey,
+      permissions: permissionsForBuiltInRole(roleKey),
+    })),
+    ...(
+      [
+        [],
+        ["sessions.read"],
+        ["environments.read"],
+        ["automations.read"],
+        ["sessions.read", "environments.read"],
+        ["sessions.read", "automations.read"],
+        ["environments.read", "automations.read"],
+        ["sessions.read", "environments.read", "automations.read"],
+      ] satisfies PermissionId[][]
+    ).map((permissions: PermissionId[]) => ({ roleKey: null, permissions })),
+  ])(
+    "returns $roleKey team capabilities across memberships (permissions: $permissions)",
+    async ({ roleKey, permissions }) => {
+      if (roleKey === null) {
+        await assignCustomRole(OWNER, permissions);
+      } else {
+        await setRole(OWNER, roleKey);
+      }
+      const hasSessionsRead = permissions.includes("sessions.read");
+      const hasEnvironmentsRead = permissions.includes("environments.read");
+      const hasAutomationRead = permissions.includes("automations.read");
+      const isAdmin = roleKey === "owner" || roleKey === "administrator";
+      const team = await new TeamStore(env.DB).create({
+        slug: "capabilities",
+        name: "Capabilities",
+        joinPolicy: "invite_only",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, MEMBER, "lead");
+
+      for (const teamRole of [undefined, "member", "lead"] as const) {
+        if (teamRole === "member") await memberships.add(team.id, OWNER);
+        if (teamRole === "lead") await memberships.setRole(team.id, OWNER, "lead");
+        const eligible = isAdmin || teamRole !== undefined;
+        const manages = isAdmin || teamRole === "lead";
+        const capabilities = {
+          canReadTeamSessions: eligible && hasSessionsRead,
+          canReadTeamRepositories: eligible,
+          canReadTeamEnvironments: eligible && hasEnvironmentsRead,
+          canReadAutomations: eligible && hasAutomationRead,
+          canJoin: false,
+          canLeave: teamRole !== undefined,
+          canEditMetadata: manages,
+          canManageMembers: manages,
+          canManageRepositories: manages,
+          canManageBindings: manages,
+          canManageAutomations: manages,
+          canManageEnvironments: manages,
+          canManageSecrets: manages,
+          canArchive: manages,
+        };
+
+        const directory = await request("/teams?membership=all");
+        expect(directory.status).toBe(200);
+        expect(await directory.json()).toMatchObject({
+          teams: [{ id: team.id, capabilities }],
+        });
+        const detail = await request(`/teams/${team.id}`);
+        expect(detail.status).toBe(200);
+        expect(await detail.json()).toMatchObject({ id: team.id, capabilities });
+        const mine = await request("/me/teams");
+        expect(mine.status).toBe(200);
+        expect(await mine.json()).toMatchObject({
+          capabilities: { canListAllTeams: isAdmin },
+          teams: teamRole === undefined ? [] : [{ id: team.id, role: teamRole, capabilities }],
+        });
+
+        const sessions = await request(`/teams/${team.id}/sessions`);
+        expect(sessions.status, `${teamRole ?? "nonmember"}/sessions`).toBe(
+          !eligible ? 404 : hasSessionsRead ? 200 : 403
+        );
+        if (!eligible) expect(await sessions.json()).toEqual({ error: "Team not found" });
+        else if (!hasSessionsRead) {
+          expect(await sessions.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "sessions.read",
+          });
+        }
+
+        const repositories = await request(`/teams/${team.id}/repository-grants`);
+        expect(repositories.status, `${teamRole ?? "nonmember"}/repository-grants`).toBe(
+          eligible ? 200 : 404
+        );
+        if (!eligible) expect(await repositories.json()).toEqual({ error: "Team not found" });
+
+        const environments = await request(`/environments?ownerTeamId=${team.id}`);
+        expect(environments.status, `${teamRole ?? "nonmember"}/environments`).toBe(
+          hasEnvironmentsRead ? 200 : 403
+        );
+        if (!hasEnvironmentsRead) {
+          expect(await environments.json()).toEqual({
+            error: "Forbidden",
+            code: "permission_required",
+            permission: "environments.read",
+          });
+        } else if (!eligible) {
+          expect(await environments.json()).toEqual({ environments: [], total: 0 });
+        }
+        expect((await request(`/teams/${team.id}`, "PATCH", { name: "Renamed" })).status).toBe(
+          manages ? 200 : 403
+        );
+      }
+    }
+  );
 
   it("reports member counts on list, membership and detail responses", async () => {
     const created = await request("/teams", "POST", { slug: "counted", name: "Counted" });
@@ -131,6 +410,115 @@ describe("team routes", () => {
     );
   });
 
+  describe("when the operation audit cannot be written", () => {
+    const memberRole = async (teamId: string, userId: string) =>
+      (await new TeamMembershipStore(env.DB).listForUser(userId)).get(teamId);
+    const seed = async (joinPolicy: "open" | "invite_only" = "invite_only") => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "audited",
+        name: "Audited",
+        joinPolicy,
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, MEMBER, "lead");
+      return team.id;
+    };
+    const cases: Array<{
+      action: string;
+      arrange: () => Promise<string>;
+      mutate: (teamId: string) => Promise<Response>;
+      state: (teamId: string) => Promise<unknown>;
+    }> = [
+      {
+        action: "team.updated",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}`, "PATCH", { name: "Renamed" }),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.name,
+      },
+      {
+        action: "team.archived",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}/archive`, "POST"),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.archivedAt,
+      },
+      {
+        action: "team.restored",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamStore(env.DB).archive(teamId);
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/restore`, "POST"),
+        state: async (teamId) => (await new TeamStore(env.DB).getById(teamId))?.archivedAt,
+      },
+      {
+        action: "team.member_added",
+        arrange: () => seed(),
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "PUT", { role: "member" }),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_role_changed",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamMembershipStore(env.DB).add(teamId, OTHER, "member");
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "PUT", { role: "lead" }),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_removed",
+        arrange: async () => {
+          const teamId = await seed();
+          await new TeamMembershipStore(env.DB).add(teamId, OTHER, "member");
+          return teamId;
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/members/${OTHER}`, "DELETE"),
+        state: (teamId) => memberRole(teamId, OTHER),
+      },
+      {
+        action: "team.member_joined",
+        arrange: async () => {
+          await setRole(OWNER, "member");
+          return await seed("open");
+        },
+        mutate: (teamId) => request(`/teams/${teamId}/join`, "POST"),
+        state: (teamId) => memberRole(teamId, OWNER),
+      },
+    ];
+
+    it.each(cases)(
+      "rolls back $action with its audit row",
+      async ({ action, arrange, mutate, state }) => {
+        const teamId = await arrange();
+        const before = await state(teamId);
+        await env.DB.prepare(
+          `CREATE TRIGGER fail_team_audit
+         BEFORE INSERT ON authorization_audit_events
+         WHEN NEW.resource_type = 'team'
+         BEGIN
+           SELECT RAISE(ABORT, 'forced audit failure');
+         END`
+        ).run();
+        try {
+          expect((await mutate(teamId)).status).toBe(500);
+        } finally {
+          await env.DB.prepare("DROP TRIGGER fail_team_audit").run();
+        }
+        expect(await state(teamId)).toEqual(before);
+        expect(await auditEvents(teamId)).toEqual([]);
+
+        expect((await mutate(teamId)).ok).toBe(true);
+        expect(await state(teamId)).not.toEqual(before);
+        const rows = await auditEvents(teamId);
+        expect(rows.map((row) => row.action)).toEqual([action]);
+        expect(JSON.parse(String(rows[0].metadata_json)).before).not.toEqual(
+          JSON.parse(String(rows[0].metadata_json)).after
+        );
+      }
+    );
+  });
+
   it("rejects invalid default environments and reports duplicate team slugs", async () => {
     const team = await new TeamStore(env.DB).create({
       slug: "duplicate",
@@ -157,7 +545,7 @@ describe("team routes", () => {
     expect(await auditEvents(team.id)).toEqual([]);
   });
 
-  it("lets leads manage their team without exposing another team", async () => {
+  it("lets leads manage their team and reads other teams without granting management", async () => {
     await setRole(OWNER, "member");
     const teams = new TeamStore(env.DB);
     const memberships = new TeamMembershipStore(env.DB);
@@ -166,11 +554,13 @@ describe("team routes", () => {
     await memberships.add(own.id, OWNER, "lead");
     await memberships.add(other.id, MEMBER, "lead");
     expect((await request(`/teams/${own.id}`, "PATCH", { name: "Renamed" })).status).toBe(200);
-    expect((await request(`/teams/${other.id}`, "PATCH", { name: "Forbidden" })).status).toBe(404);
-    const hidden = await request(`/teams/${other.id}`);
+    const denied = await request(`/teams/${other.id}`, "PATCH", { name: "Forbidden" });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ reason_code: "team_capability_required" });
+    expect((await request(`/teams/${other.id}`)).status).toBe(200);
     const absent = await request("/teams/team_missing");
-    expect(hidden.status).toBe(404);
-    expect(await hidden.json()).toEqual(await absent.json());
+    expect(absent.status).toBe(404);
+    expect(await absent.json()).toEqual({ error: "Team not found" });
     expect((await teams.getById(other.id))?.name).toBe("Other");
     const mine = await request("/teams?membership=all&search=own");
     expect(((await mine.json()) as { teams: Team[] }).teams.map((team) => team.id)).toEqual([
@@ -178,22 +568,446 @@ describe("team routes", () => {
     ]);
   });
 
-  it("rejects member creation, sole-lead demotion and departure without changing the membership", async () => {
-    await setRole(OWNER, "member");
-    expect((await request("/teams", "POST", { slug: "blocked", name: "Blocked" })).status).toBe(
-      403
+  it.each(["member", "viewer"] as const)(
+    "lists all active teams and their members for a nonmember %s",
+    async (role) => {
+      await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+        .bind(BUILT_IN_ROLE_REGISTRY[role].id, OWNER)
+        .run();
+      const teams = new TeamStore(env.DB);
+      const open = await teams.create({ slug: "directory-open", name: "Open", joinPolicy: "open" });
+      const closed = await teams.create({
+        slug: "directory-closed",
+        name: "Closed",
+        joinPolicy: "invite_only",
+      });
+      const archived = await teams.create({
+        slug: "directory-archived",
+        name: "Archived",
+        joinPolicy: "open",
+      });
+      await teams.archive(archived.id);
+      await new TeamMembershipStore(env.DB).add(open.id, MEMBER, "lead");
+      const all = await (
+        await request("/teams?membership=all")
+      ).json<{ teams: Array<{ id: string; memberCount: number }> }>();
+      expect(all.teams.map(({ id }) => id).sort()).toEqual([open.id, closed.id].sort());
+      expect(all.teams.find(({ id }) => id === open.id)?.memberCount).toBe(1);
+      expect(await (await request("/teams?membership=mine")).json()).toEqual({ teams: [] });
+      expect(await (await request(`/teams/${open.id}`)).json()).toMatchObject({
+        id: open.id,
+        capabilities: { canJoin: true, canManageMembers: false },
+      });
+      expect(await (await request(`/teams/${open.id}/members`)).json()).toMatchObject({
+        members: [{ userId: MEMBER, role: "lead" }],
+      });
+      expect((await request(`/teams/${closed.id}`)).status).toBe(200);
+      expect((await request(`/teams/${open.id}/members/${MEMBER}`, "DELETE")).status).toBe(404);
+      const manage = await request(`/teams/${open.id}/members/${OTHER}`, "PUT", { role: "member" });
+      expect(manage.status).toBe(403);
+      expect(await manage.json()).toMatchObject({ reason_code: "team_capability_required" });
+      expect((await request(`/teams/${open.id}/join`, "POST")).status).toBe(200);
+    }
+  );
+
+  it.each(["off", "shadow", "on"] as const)(
+    "always conceals team sessions from nonmembers in %s",
+    async (mode) => {
+      await setRole(OWNER, "member");
+      const team = await new TeamStore(env.DB).create({
+        slug: "guarded",
+        name: "Guarded",
+        joinPolicy: "open",
+      });
+      const hidden = await modeRequest(`/teams/${team.id}/sessions`, mode);
+      const missing = await modeRequest("/teams/team_missing/sessions", mode);
+      expect(hidden.status).toBe(404);
+      expect(await hidden.json()).toEqual(await missing.json());
+      const bot = await serviceFetch(`${BASE}/teams/${team.id}/sessions`, {
+        service: "slack-bot",
+        actor: "slack:U-TEAM",
+      });
+      expect(bot.status).toBe(403);
+    }
+  );
+
+  describe("archived directory access", () => {
+    it.each(["off", "shadow", "on"] as const)(
+      "lists active teams and only the caller's archived memberships in %s",
+      async (mode) => {
+        const teams = new TeamStore(env.DB);
+        const active = await teams.create({ slug: "active", name: "Active", joinPolicy: "open" });
+        const own = await teams.create({ slug: "own-archived", name: "Own", joinPolicy: "open" });
+        const other = await teams.create({
+          slug: "other-archived",
+          name: "Other",
+          joinPolicy: "open",
+        });
+        await new TeamMembershipStore(env.DB).add(own.id, OWNER, "lead");
+        await teams.archive(own.id);
+        await teams.archive(other.id);
+
+        for (const role of ["member", "viewer"] as const) {
+          await setRole(OWNER, role);
+          const all = await modeRequest("/teams?membership=all&includeArchived=true", mode, role);
+          expect(all.status).toBe(200);
+          const result = await all.json<{ teams: Team[] }>();
+          expect(result.teams.map(({ id }) => id).sort()).toEqual([active.id, own.id].sort());
+          expect(
+            await (
+              await modeRequest(
+                "/teams?membership=all&includeArchived=true&search=other",
+                mode,
+                role
+              )
+            ).json()
+          ).toEqual({ teams: [] });
+          expect(
+            await (await modeRequest("/teams?membership=all", mode, role)).json()
+          ).toMatchObject({ teams: [{ id: active.id }] });
+          expect(
+            await (
+              await modeRequest("/teams?membership=mine&includeArchived=true", mode, role)
+            ).json()
+          ).toMatchObject({ teams: [{ id: own.id }] });
+          const mine = await (
+            await modeRequest("/me/teams", mode, role)
+          ).json<{ teams: Array<Team & { role: string }> }>();
+          expect(mine.teams).toHaveLength(1);
+          expect(mine.teams[0]).toMatchObject({ id: own.id, role: "lead" });
+          expect(mine.teams[0].archivedAt).not.toBeNull();
+        }
+      }
     );
-    const teams = new TeamStore(env.DB);
-    const memberships = new TeamMembershipStore(env.DB);
-    const team = await teams.create({ slug: "lead", name: "Lead", joinPolicy: "invite_only" });
-    await memberships.add(team.id, OWNER, "lead");
-    const demote = await request(`/teams/${team.id}/members/${OWNER}`, "PUT", { role: "member" });
-    expect(demote.status).toBe(409);
-    expect(await demote.json()).toMatchObject({ code: "last_lead" });
-    expect((await request(`/teams/${team.id}/members/${OWNER}`, "DELETE")).status).toBe(409);
-    expect((await memberships.listForUser(OWNER)).get(team.id)).toBe("lead");
-    expect(await auditEvents(team.id)).toEqual([]);
+
+    it.each(["off", "shadow", "on"] as const)(
+      "conceals archived detail and member reads with the missing-team 404 in %s",
+      async (mode) => {
+        const teams = new TeamStore(env.DB);
+        const archived = await teams.create({
+          slug: "hidden-archived",
+          name: "Hidden",
+          joinPolicy: "open",
+        });
+        await new TeamMembershipStore(env.DB).add(archived.id, MEMBER, "lead");
+        await teams.archive(archived.id);
+
+        for (const role of ["member", "viewer"] as const) {
+          await setRole(OWNER, role);
+          for (const suffix of ["", "/members"]) {
+            const hidden = await modeRequest(`/teams/${archived.id}${suffix}`, mode, role);
+            const missing = await modeRequest(`/teams/team_missing${suffix}`, mode, role);
+            expect(hidden.status, `${role}${suffix}`).toBe(404);
+            expect(missing.status).toBe(404);
+            expect(await hidden.json()).toEqual(await missing.json());
+          }
+        }
+      }
+    );
+
+    it.each([
+      { role: "member", teamRole: "member", canRestore: false },
+      { role: "member", teamRole: "lead", canRestore: true },
+      { role: "owner", teamRole: null, canRestore: true },
+      { role: "administrator", teamRole: null, canRestore: true },
+    ] as const)(
+      "preserves archived reads and restore capabilities for $role / $teamRole",
+      async ({ role, teamRole, canRestore }) => {
+        await setRole(OWNER, role);
+        const teams = new TeamStore(env.DB);
+        const archived = await teams.create({
+          slug: "readable-archived",
+          name: "Readable",
+          joinPolicy: "invite_only",
+        });
+        const memberships = new TeamMembershipStore(env.DB);
+        await memberships.add(archived.id, MEMBER, "lead");
+        if (teamRole) await memberships.add(archived.id, OWNER, teamRole);
+        await teams.archive(archived.id);
+
+        const detail = await request(`/teams/${archived.id}`);
+        expect(detail.status).toBe(200);
+        expect(await detail.json()).toMatchObject({
+          id: archived.id,
+          capabilities: {
+            canArchive: canRestore,
+            canReadTeamSessions: true,
+            canReadTeamRepositories: true,
+            canReadTeamEnvironments: true,
+            canReadAutomations: true,
+          },
+        });
+        for (const suffix of ["sessions", "repository-grants"]) {
+          expect((await request(`/teams/${archived.id}/${suffix}`)).status).toBe(200);
+        }
+        const members = await request(`/teams/${archived.id}/members`);
+        expect(members.status).toBe(200);
+        expect(await members.json()).toMatchObject({
+          members: expect.arrayContaining([
+            expect.objectContaining({ userId: MEMBER, role: "lead" }),
+          ]),
+        });
+        const all = await request("/teams?membership=all&includeArchived=true");
+        expect(await all.json()).toMatchObject({ teams: [{ id: archived.id }] });
+        expect((await request(`/teams/${archived.id}/restore`, "POST")).status).toBe(
+          canRestore ? 200 : 403
+        );
+        expect((await teams.getById(archived.id))?.archivedAt === null).toBe(canRestore);
+      }
+    );
   });
+
+  it.each(["off", "shadow", "on"] as const)(
+    "returns scoped inbox buckets with effective capabilities and never lists unshared private rows in %s",
+    async (mode) => {
+      await setRole(OWNER, "member");
+      const teams = new TeamStore(env.DB);
+      const team = await teams.create({ slug: "inbox", name: "Inbox", joinPolicy: "open" });
+      const other = await teams.create({
+        slug: "elsewhere",
+        name: "Elsewhere",
+        joinPolicy: "open",
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      await seedSession("finished", team.id);
+      await seedSession("active", team.id, { status: "active" });
+      await seedSession("attention", team.id);
+      await new SessionIndexStore(env.DB).recordLatestTerminalMessage({
+        sessionId: "attention",
+        messageId: "reply",
+        messageCreatedAt: Date.now() + 1000,
+        terminalMessageCompletedAt: Date.now() + 1000,
+      });
+      await seedSession("hidden-private", team.id, { visibility: "private", status: "active" });
+      await seedSession("shared-private", team.id, { visibility: "private" });
+      await new SessionCollaboratorStore(env.DB).add("shared-private", OWNER, MEMBER);
+      await seedSession("other-team", other.id, { visibility: "workspace" });
+      const response = await modeRequest(`/teams/${team.id}/sessions`, mode);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      const snapshot = teamSessionsResponseSchema.parse(await response.json());
+      if (!("categories" in snapshot)) throw new Error("Expected bucket snapshot");
+      expect(
+        snapshot.categories.needs_attention.items.map(({ rootSession }) => rootSession.id)
+      ).toEqual(["attention"]);
+      expect(
+        snapshot.categories.in_progress.items.map(({ rootSession }) => rootSession.id)
+      ).toEqual(["active"]);
+      expect(
+        snapshot.categories.finished.items.map(({ rootSession }) => rootSession.id).sort()
+      ).toEqual(["finished", "shared-private"]);
+      expect(
+        snapshot.categories.finished.items.find(({ rootSession }) => rootSession.id === "finished")
+          ?.rootSession
+      ).toMatchObject({
+        ownerTeamId: team.id,
+        visibility: "team",
+        capabilities: { canRead: true, canDelete: false },
+      });
+      const page = inboxPage(
+        await (
+          await modeRequest(
+            `/teams/${team.id}/sessions?bucket=finished&teamIds[]=${other.id}`,
+            mode
+          )
+        ).json()
+      );
+      expect(page.items.map(({ rootSession }) => rootSession.id).sort()).toEqual([
+        "finished",
+        "shared-private",
+      ]);
+      expect(
+        page.items.find(({ rootSession }) => rootSession.id === "shared-private")?.rootSession
+          .capabilities
+      ).toMatchObject({
+        canRead: true,
+        canManageCollaborators: false,
+      });
+    }
+  );
+
+  it("paginates session buckets, decorates descendants, and rejects malformed inbox queries", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "paged",
+      name: "Paged",
+      joinPolicy: "open",
+    });
+    for (let index = 0; index < 21; index++)
+      await seedSession(`paged-${String(index).padStart(2, "0")}`, team.id);
+    await seedSession("child", team.id, {
+      parentSessionId: "paged-20",
+      spawnDepth: 1,
+      spawnSource: "agent",
+    });
+    const firstResponse = await modeRequest(
+      `/teams/${team.id}/sessions?bucket=finished`,
+      "on",
+      "owner"
+    );
+    expect(firstResponse.status).toBe(200);
+    const first = inboxPage(await firstResponse.json());
+    expect(first.items).toHaveLength(20);
+    expect(first.hasMore).toBe(true);
+    expect(first.items[0].descendantSessions[0]).toMatchObject({
+      id: "child",
+      capabilities: { canRead: true },
+    });
+    const second = inboxPage(
+      await (
+        await modeRequest(
+          `/teams/${team.id}/sessions?bucket=finished&cursor=${first.nextCursor}`,
+          "on",
+          "owner"
+        )
+      ).json()
+    );
+    expect(second).toMatchObject({
+      items: [{ rootSession: { id: "paged-00" } }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    for (const query of [
+      "bucket=invalid",
+      "bucket=finished&bucket=in_progress",
+      "cursor=bad",
+      "bucket=finished&cursor=bad",
+      "bucket=finished&cursor=",
+    ]) {
+      expect(
+        (await modeRequest(`/teams/${team.id}/sessions?${query}`, "on", "owner")).status,
+        query
+      ).toBe(400);
+    }
+  });
+
+  it.each(["viewer", "administrator", "owner"] as const)(
+    "returns effective %s capabilities without administrative private-session list access",
+    async (role) => {
+      await setRole(OWNER, role);
+      const team = await new TeamStore(env.DB).create({
+        slug: "role-inbox",
+        name: "Role Inbox",
+        joinPolicy: "open",
+      });
+      if (role === "viewer") await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      await seedSession("role-visible", team.id);
+      await seedSession("role-private", team.id, { visibility: "private" });
+      const response = await modeRequest(`/teams/${team.id}/sessions?bucket=finished`, "on", role);
+      expect(response.status).toBe(200);
+      const page = inboxPage(await response.json());
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0].rootSession).toMatchObject({
+        id: "role-visible",
+        capabilities: {
+          canRead: true,
+          canCollaborate: false,
+          canManageLifecycle: false,
+          canDelete: false,
+          canSandbox: false,
+          canManageCollaborators: false,
+          canChangeVisibility: false,
+        },
+      });
+      expect(JSON.stringify(page)).not.toContain("role-private");
+      expect(page.items[0].rootSession).not.toHaveProperty("userId");
+    }
+  );
+
+  it("omits inaccessible ancestor IDs when a visible child is rerooted into the team inbox", async () => {
+    await setRole(OWNER, "member");
+    const team = await new TeamStore(env.DB).create({
+      slug: "rerooted",
+      name: "Rerooted",
+      joinPolicy: "open",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+    await seedSession("private-ancestor", team.id, { visibility: "private" });
+    await seedSession("visible-child", team.id, {
+      parentSessionId: "private-ancestor",
+      visibility: "workspace",
+      spawnDepth: 1,
+      spawnSource: "agent",
+    });
+    const response = await modeRequest(`/teams/${team.id}/sessions?bucket=finished`, "on");
+    const body = await response.json();
+    expect(JSON.stringify(body)).not.toContain("private-ancestor");
+    expect(body).toMatchObject({
+      items: [{ rootSession: { id: "visible-child", parentSessionId: null } }],
+    });
+  });
+
+  it("denies directory and member-only reads for suspended and role-less users", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "inactive",
+      name: "Inactive",
+      joinPolicy: "open",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+    await env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(OWNER).run();
+    for (const path of [
+      "/me/teams",
+      "/teams?membership=all",
+      `/teams/${team.id}`,
+      `/teams/${team.id}/members`,
+      `/teams/${team.id}/sessions`,
+      `/teams/${team.id}/repository-grants`,
+    ]) {
+      expect((await request(path)).status, path).toBe(403);
+    }
+    await env.DB.prepare("UPDATE users SET suspended_at = NULL WHERE id = ?").bind(OWNER).run();
+    await env.DB.prepare("DELETE FROM user_role_assignments WHERE user_id = ?").bind(OWNER).run();
+    expect((await request("/teams?membership=all")).status).toBe(403);
+    expect((await request(`/teams/${team.id}/sessions`)).status).toBe(403);
+    expect((await request(`/teams/${team.id}/repository-grants`)).status).toBe(403);
+  });
+
+  it("allows directory reads without session or audit permissions but keeps both inaccessible", async () => {
+    await env.DB.prepare(
+      "INSERT INTO roles (id, key, name, normalized_name, is_system) VALUES ('role_directory', NULL, 'Directory', 'directory', 0)"
+    ).run();
+    await env.DB.prepare(
+      "UPDATE user_role_assignments SET role_id = 'role_directory' WHERE user_id = ?"
+    )
+      .bind(OWNER)
+      .run();
+    const team = await new TeamStore(env.DB).create({
+      slug: "directory-only",
+      name: "Directory",
+      joinPolicy: "open",
+    });
+    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+    await seedSession("not-readable", team.id, { visibility: "workspace" });
+    expect((await request("/teams?membership=all")).status).toBe(200);
+    expect((await request(`/teams/${team.id}`)).status).toBe(200);
+    expect((await request(`/teams/${team.id}/sessions`)).status).toBe(403);
+    expect((await request(`/audit-events?teamId=${team.id}`)).status).toBe(403);
+  });
+
+  it.each([false, true])(
+    "rejects sole-lead demotion and departure without changing membership (archived: %s)",
+    async (archived) => {
+      await setRole(OWNER, "member");
+      expect((await request("/teams", "POST", { slug: "blocked", name: "Blocked" })).status).toBe(
+        403
+      );
+      const teams = new TeamStore(env.DB);
+      const memberships = new TeamMembershipStore(env.DB);
+      const team = await teams.create({ slug: "lead", name: "Lead", joinPolicy: "invite_only" });
+      await memberships.add(team.id, OWNER, "lead");
+      if (archived) await teams.archive(team.id);
+      const demote = await request(`/teams/${team.id}/members/${OWNER}`, "PUT", { role: "member" });
+      expect(demote.status).toBe(409);
+      expect(await demote.json()).toMatchObject({ code: "last_lead" });
+      const leave = await request(`/teams/${team.id}/members/${OWNER}`, "DELETE");
+      expect(leave.status).toBe(409);
+      expect(await leave.json()).toMatchObject({ code: "last_lead" });
+      expect(await requestAuditEvents(leave)).toEqual([
+        { action: "authorization.request_allowed" },
+      ]);
+      expect((await memberships.listForUser(OWNER)).get(team.id)).toBe("lead");
+      expect(await auditEvents(team.id)).toEqual([]);
+    }
+  );
 
   it("joins open teams, rejects invite-only joins and audits membership changes", async () => {
     await setRole(OWNER, "member");
@@ -222,33 +1036,84 @@ describe("team routes", () => {
     ]);
   });
 
-  it("audits adding, changing and removing members with team and target IDs", async () => {
-    const team = await new TeamStore(env.DB).create({
-      slug: "roles",
-      name: "Roles",
-      joinPolicy: "invite_only",
-    });
-    const store = new TeamMembershipStore(env.DB);
-    await store.add(team.id, OWNER, "lead");
-    expect(
-      (await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role: "member" })).status
-    ).toBe(200);
-    expect(
-      (await request(`/teams/${team.id}/members/${MEMBER}`, "PUT", { role: "lead" })).status
-    ).toBe(200);
-    expect((await request(`/teams/${team.id}/members/${MEMBER}`, "DELETE")).status).toBe(204);
-    const rows = await auditEvents(team.id);
-    expect(rows.map((row) => row.action)).toEqual([
-      "team.member_added",
-      "team.member_role_changed",
-      "team.member_removed",
-    ]);
-    for (const row of rows) {
-      expect(row.team_id).toBe(team.id);
-      expect(row.target_user_id_snapshot).toBe(MEMBER);
-      expect(JSON.parse(String(row.metadata_json))).toMatchObject({ before: {}, after: {} });
+  it.each(["off", "shadow", "on"] as const)(
+    "preserves the reason for every unavailable join in %s",
+    async (mode) => {
+      await setRole(OWNER, "member");
+      const teams = new TeamStore(env.DB);
+      const memberships = new TeamMembershipStore(env.DB);
+      const closed = await teams.create({
+        slug: "join-closed",
+        name: "Closed",
+        joinPolicy: "invite_only",
+      });
+      const archived = await teams.create({
+        slug: "join-archived",
+        name: "Archived",
+        joinPolicy: "open",
+      });
+      await teams.archive(archived.id);
+      const joined = await teams.create({
+        slug: "join-existing",
+        name: "Joined",
+        joinPolicy: "open",
+      });
+      await memberships.add(joined.id, OWNER);
+      for (const { team, reason } of [
+        { team: closed, reason: "invite_only" },
+        { team: archived, reason: "team_archived" },
+        { team: joined, reason: "already_member" },
+      ]) {
+        const url = `${BASE}/teams/${team.id}/join`;
+        const headers = await serviceRequestHeaders(url, {
+          method: "POST",
+          as: { userId: OWNER, role: "member" },
+        });
+        const denied = await routeRequest(
+          new Request(url, { method: "POST", headers }),
+          { ...env, TEAMS_ENFORCEMENT: mode },
+          createExecutionContext()
+        );
+        expect(denied.status, team.slug).toBe(403);
+        expect(await denied.json(), team.slug).toEqual({
+          error: "Forbidden",
+          code: reason,
+          reason_code: reason,
+        });
+        expect(await auditEvents(team.id)).toEqual([]);
+      }
+      expect((await memberships.listForUser(OWNER)).get(joined.id)).toBe("member");
+      expect((await memberships.listForUser(OWNER)).has(closed.id)).toBe(false);
+      expect((await memberships.listForUser(OWNER)).has(archived.id)).toBe(false);
     }
-  });
+  );
+
+  it.each([false, true])(
+    "denies and audits ordinary-member removal of another member (archived: %s)",
+    async (archived) => {
+      await setRole(OWNER, "member");
+      const team = await new TeamStore(env.DB).create({
+        slug: "remove-guard",
+        name: "Remove Guard",
+        joinPolicy: "open",
+      });
+      const memberships = new TeamMembershipStore(env.DB);
+      await memberships.add(team.id, OWNER);
+      await memberships.add(team.id, MEMBER, "lead");
+      if (archived) await new TeamStore(env.DB).archive(team.id);
+      const absent = await request(`/teams/${team.id}/members/${OTHER}`, "DELETE");
+      expect(absent.status).toBe(404);
+      expect(await absent.json()).toEqual({ error: "Team membership not found" });
+      const denied = await request(`/teams/${team.id}/members/${MEMBER}`, "DELETE");
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toMatchObject({ reason_code: "team_capability_required" });
+      expect((await memberships.listForUser(MEMBER)).get(team.id)).toBe("lead");
+      expect(await auditEvents(team.id)).toEqual([]);
+      expect(await requestAuditEvents(denied)).toEqual([
+        { action: "authorization.request_denied" },
+      ]);
+    }
+  );
 
   it("records a single addition when membership requests race", async () => {
     await setRole(OWNER, "member");

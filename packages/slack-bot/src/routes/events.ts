@@ -54,7 +54,7 @@ eventRoutes.post("/events", async (c) => {
         return c.json({ ok: true });
       }
       kvOperation = "put";
-      await cacheStore.put(dedupeKey, "1", { expirationTtl: EVENT_DEDUPE_TTL_MS / 1000 });
+      await cacheStore.put(dedupeKey, "1", { ttlMs: EVENT_DEDUPE_TTL_MS });
     } catch (error) {
       // This cache is best-effort. Returning 500 would drop the original work and guarantee retries.
       log.error("slack.event.dedupe_unavailable", {

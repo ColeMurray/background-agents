@@ -12,6 +12,7 @@ import {
 import type { SessionReadState } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { BrowserApiPath } from "./browser-api-fetch";
+import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
 import { applySessionReadStateToItem, sessionReadStateClientSchema } from "./session-read-state";
 
 const sessionInboxSessionClientSchema = sessionInboxSessionSchema.extend({
@@ -32,7 +33,12 @@ const sessionInboxSnapshotClientSchema = sessionInboxSnapshotSchema.extend({
 
 const SESSION_INBOX_API_PATH = "/api/sessions/inbox";
 
-interface SessionInboxQuery {
+export type SessionInboxFilters = Pick<
+  SessionListQuery,
+  "teamIds" | "scope" | "ownerFilter" | "visibility"
+>;
+
+interface SessionInboxQuery extends SessionInboxFilters {
   category: SessionInboxCategory;
   cursor?: string;
   mine?: boolean;
@@ -42,11 +48,26 @@ export function buildSessionInboxKey(query: SessionInboxQuery): BrowserApiPath {
   const params = new URLSearchParams({ category: query.category });
   if (query.cursor) params.set("cursor", query.cursor);
   if (query.mine) params.set("mine", "true");
+  appendInboxFilters(params, query);
   return `${SESSION_INBOX_API_PATH}?${params.toString()}`;
 }
 
-export function buildSessionInboxSnapshotKey(mine: boolean): BrowserApiPath {
-  return `${SESSION_INBOX_API_PATH}${mine ? "?mine=true" : ""}`;
+export function buildSessionInboxSnapshotKey(
+  mine: boolean,
+  filters: SessionInboxFilters = {}
+): BrowserApiPath {
+  const params = new URLSearchParams();
+  if (mine) params.set("mine", "true");
+  appendInboxFilters(params, filters);
+  const query = params.toString();
+  return query ? `${SESSION_INBOX_API_PATH}?${query}` : SESSION_INBOX_API_PATH;
+}
+
+function appendInboxFilters(params: URLSearchParams, filters: SessionInboxFilters) {
+  for (const teamId of filters.teamIds ?? []) params.append("teamIds[]", teamId);
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.ownerFilter) params.set("ownerFilter", filters.ownerFilter);
+  if (filters.visibility) params.set("visibility", filters.visibility);
 }
 
 export function isSessionInboxKey(key: unknown): key is string {
@@ -91,6 +112,22 @@ export function isSessionInboxItemFullyRead(item: SessionInboxItem): boolean {
   return (
     !item.rootSession.readState.unread &&
     item.descendantSessions.every((session) => !session.readState.unread)
+  );
+}
+
+interface ReadStateHierarchy {
+  rootSession: { readState: { unread: boolean } };
+  descendantSessions: ReadonlyArray<{ readState: { unread: boolean } }>;
+}
+
+/** Sessions a bulk read marks: each unread session, not each hierarchy row. */
+export function countUnreadSessions(items: readonly ReadStateHierarchy[]): number {
+  return items.reduce(
+    (count, { rootSession, descendantSessions }) =>
+      count +
+      Number(rootSession.readState.unread) +
+      descendantSessions.filter(({ readState }) => readState.unread).length,
+    0
   );
 }
 

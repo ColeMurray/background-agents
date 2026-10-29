@@ -1,69 +1,35 @@
-import { describe, it, expect } from "vitest";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
+import { describe, expect, it } from "vitest";
+import { getReasoningConfig } from "@open-inspect/shared/models";
 import { resolveModelPreference } from "./model-selection";
+import { resolveHarnessModelSelection } from "./session-harness";
 
-describe("resolveModelPreference", () => {
-  it("keeps a valid model and reasoning effort", () => {
+const MODEL = "openai/gpt-5.6-sol";
+
+describe("harness-aware reasoning preference", () => {
+  it("keeps a Codex-only effort that the generic catalog does not offer", () => {
+    expect(getReasoningConfig(MODEL)?.efforts).not.toContain("max");
     expect(
-      resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" }, [
-        "anthropic/claude-opus-4-8",
-      ])
-    ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
+      resolveModelPreference({ model: MODEL, reasoningEffort: "max" }, undefined, "codex")
+        .reasoningEffort
+    ).toBe("max");
   });
 
-  it("normalizes the model before validating reasoning effort", () => {
+  it("still replaces an effort the harness cannot run with that harness's default", () => {
     expect(
-      resolveModelPreference({ model: "claude-opus-4-8", reasoningEffort: "high" }, [
-        "anthropic/claude-opus-4-8",
-      ])
-    ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
+      resolveModelPreference({ model: MODEL, reasoningEffort: "max" }, undefined, "opencode")
+        .reasoningEffort
+    ).toBe(getReasoningConfig(MODEL)?.default);
   });
 
-  it("preserves the upstream model while enabled models are loading", () => {
-    expect(
-      resolveModelPreference({ model: "claude-opus-4-8", reasoningEffort: "high" }, undefined)
-    ).toEqual({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" });
-  });
-
-  it("preserves an omitted effort so the model default remains selectable", () => {
-    expect(resolveModelPreference({ model: "openai/gpt-5.6-sol" }, ["openai/gpt-5.6-sol"])).toEqual(
-      { model: "openai/gpt-5.6-sol", reasoningEffort: undefined }
-    );
-  });
-
-  it("uses the default when the loaded enabled-model list is empty", () => {
-    expect(
-      resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "high" }, [])
-    ).toEqual({
-      model: DEFAULT_MODEL,
-      reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
+  it("carries the Codex selection through the composer's model selection", () => {
+    const selection = resolveHarnessModelSelection({
+      harness: "codex",
+      preference: { model: MODEL, reasoningEffort: "max" },
+      enabledModels: [MODEL],
+      enabledModelOptions: [],
+      loading: false,
     });
-  });
-
-  it("uses the fallback model default when reasoning is invalid", () => {
-    expect(
-      resolveModelPreference({ model: "anthropic/claude-opus-4-8", reasoningEffort: "not-valid" }, [
-        DEFAULT_MODEL,
-      ])
-    ).toEqual({
-      model: DEFAULT_MODEL,
-      reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
-    });
-  });
-
-  it("uses the selected model default when only reasoning is invalid", () => {
-    const model = "anthropic/claude-opus-4-8";
-    expect(resolveModelPreference({ model, reasoningEffort: "not-valid" }, [model])).toEqual({
-      model,
-      reasoningEffort: getDefaultReasoningEffort(model),
-    });
-  });
-
-  it("omits reasoning for models without reasoning controls", () => {
-    expect(
-      resolveModelPreference({ model: "opencode/kimi-k2.5", reasoningEffort: "high" }, [
-        "opencode/kimi-k2.5",
-      ])
-    ).toEqual({ model: "opencode/kimi-k2.5", reasoningEffort: undefined });
+    expect(selection.availability).toEqual({ status: "available" });
+    expect(selection).toMatchObject({ model: MODEL, reasoningEffort: "max" });
   });
 });

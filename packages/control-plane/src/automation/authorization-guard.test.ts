@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
-import { isAutomationExecutionAuthorized, isPrincipalAuthorized } from "./authorization-guard";
+import { isAutomationExecutionAuthorized } from "./authorization-guard";
 
 function recordingDb(result: { authorized: number } | null = { authorized: 1 }): {
   db: SqlDatabase;
@@ -43,6 +43,9 @@ describe("automation execution authorization", () => {
     expect(bindings).toHaveLength(1);
     expect(bindings[0]?.[0]).toBe("automation-1");
     expect(queries[0]).toContain("a.id = ? AND a.deleted_at IS NULL");
+    expect(queries[0]).toContain("tm.team_id = a.owner_team_id AND tm.user_id = u.id");
+    expect(queries[0]).toContain("t.archived_at IS NULL");
+    expect(queries[0]).toContain("a.owner_team_id IS NULL OR");
     expect(queries[0]).not.toContain("automation_repositories");
     expect(queries[0]).not.toContain("automation_environments");
   });
@@ -63,15 +66,6 @@ describe("automation execution authorization", () => {
     expect(queries[0]).toContain("JOIN users u ON u.id = ?");
   });
 
-  it("authorizes collaboration without requiring automation launch permissions", async () => {
-    const { db, bindings, queries } = recordingDb();
-
-    await expect(isPrincipalAuthorized(db, "actor-1", "sessions.collaborate")).resolves.toBe(true);
-
-    expect(bindings[0]?.[0]).toBe("actor-1");
-    expect(queries[0]).not.toContain("automations");
-  });
-
   it.each([
     { name: "denied", result: { authorized: 0 } },
     { name: "missing row", result: null },
@@ -85,14 +79,5 @@ describe("automation execution authorization", () => {
         requiresEnvironmentUse: true,
       })
     ).resolves.toBe(false);
-  });
-
-  it.each([
-    { name: "denied", result: { authorized: 0 } },
-    { name: "missing row", result: null },
-  ])("fails closed when principal authorization is $name", async ({ result }) => {
-    const { db } = recordingDb(result);
-
-    await expect(isPrincipalAuthorized(db, "actor-1", "sessions.collaborate")).resolves.toBe(false);
   });
 });

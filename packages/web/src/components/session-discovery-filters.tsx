@@ -17,6 +17,10 @@ import {
   SESSION_LIFECYCLES,
   SESSION_ORIGIN_LABELS,
   SESSION_ORIGINS,
+  SESSION_OWNER_FILTERS,
+  SESSION_OWNER_LABELS,
+  SESSION_VISIBILITIES,
+  SESSION_VISIBILITY_LABELS,
   type SessionCreatorFilter,
   type SessionDiscoveryQuery,
   type SessionRepositoryFilter,
@@ -77,6 +81,8 @@ export interface SessionDiscoveryFiltersProps {
   query: SessionDiscoveryQuery;
   repositories: ReadonlyArray<SessionRepositoryFilter>;
   environments: ReadonlyArray<{ id: string; name: string }>;
+  teams: ReadonlyArray<{ id: string; name: string }>;
+  canViewAllTeams: boolean;
   hasFilters: boolean;
   onChange: (patch: Partial<SessionDiscoveryQuery>) => void;
   onClear: () => void;
@@ -87,6 +93,8 @@ export function SessionDiscoveryFilters({
   query,
   repositories,
   environments,
+  teams,
+  canViewAllTeams,
   hasFilters,
   onChange,
   onClear,
@@ -113,8 +121,90 @@ export function SessionDiscoveryFilters({
     environmentOptions.unshift({ id: query.environmentId, name: query.environmentId });
   }
 
+  const teamOptions = [...teams];
+  for (const id of query.teamIds ?? []) {
+    if (!teamOptions.some((team) => team.id === id)) teamOptions.push({ id, name: id });
+  }
+  const selectedTeams = query.teamIds?.length ? query.teamIds : undefined;
+  const teamValue = selectedTeams
+    ? selectedTeams.length === 1
+      ? selectedTeams[0]
+      : "selected-teams"
+    : query.scope === "workspace"
+      ? "workspace"
+      : query.scope === "all"
+        ? "all-teams"
+        : "all-my-teams";
+
   return (
     <div className="flex flex-wrap items-end gap-3">
+      <LabeledSelect
+        label="Team"
+        value={teamValue}
+        onValueChange={(value) => {
+          if (value === "selected-teams") return;
+          onChange({
+            teamIds: value.startsWith("team_") ? [value] : undefined,
+            scope: value === "workspace" ? "workspace" : value === "all-teams" ? "all" : undefined,
+          });
+        }}
+        triggerClassName="w-44"
+      >
+        <SelectItem value="workspace">Workspace</SelectItem>
+        {teamOptions.map((team) => (
+          <SelectItem key={team.id} value={team.id}>
+            {team.name}
+          </SelectItem>
+        ))}
+        {selectedTeams && selectedTeams.length > 1 && (
+          <SelectItem value="selected-teams">
+            {selectedTeams
+              .map((id) => teamOptions.find((team) => team.id === id)?.name ?? id)
+              .join(", ")}
+          </SelectItem>
+        )}
+        <SelectItem value="all-my-teams">All my teams</SelectItem>
+        {canViewAllTeams && <SelectItem value="all-teams">All teams</SelectItem>}
+      </LabeledSelect>
+
+      <LabeledSelect
+        label="Owner"
+        value={query.ownerFilter}
+        onValueChange={(value) => {
+          if (SESSION_OWNER_FILTERS.includes(value as SessionDiscoveryQuery["ownerFilter"])) {
+            onChange({ ownerFilter: value as SessionDiscoveryQuery["ownerFilter"] });
+          }
+        }}
+        triggerClassName="w-40"
+      >
+        {SESSION_OWNER_FILTERS.map((owner) => (
+          <SelectItem key={owner} value={owner}>
+            {SESSION_OWNER_LABELS[owner]}
+          </SelectItem>
+        ))}
+      </LabeledSelect>
+
+      <LabeledSelect
+        label="Visibility"
+        value={query.visibility ?? ANY_OPTION}
+        onValueChange={(value) => {
+          if (value === ANY_OPTION) onChange({ visibility: undefined });
+          else if (
+            SESSION_VISIBILITIES.includes(value as NonNullable<SessionDiscoveryQuery["visibility"]>)
+          ) {
+            onChange({ visibility: value as SessionDiscoveryQuery["visibility"] });
+          }
+        }}
+        triggerClassName="w-36"
+      >
+        <SelectItem value={ANY_OPTION}>Any visibility</SelectItem>
+        {SESSION_VISIBILITIES.map((visibility) => (
+          <SelectItem key={visibility} value={visibility}>
+            {SESSION_VISIBILITY_LABELS[visibility]}
+          </SelectItem>
+        ))}
+      </LabeledSelect>
+
       <div className="flex flex-col gap-1">
         <span
           id="session-creator-filter-label"

@@ -43,13 +43,15 @@ from .attachment_processor import (
     AttachmentProcessor,
     parse_session_image_attachments,
 )
-from .boot_attach import RECONNECT_BACKOFF_BASE, RECONNECT_MAX_DELAY_SECONDS, BootAttach
+from .boot_attach import BootAttach
 from .constants import (
     BRIDGE_FATAL_ERROR_FILE_PATH,
     REPO_MANIFEST_FILE_PATH,
+    runtime_state_dir,
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
+from .event_size import MAX_EVENT_BYTES, event_size_bytes
 from .git_signing import GitSigningError, GitSigningRuntime
 from .harness import (
     DEFAULT_HARNESS_ID,
@@ -66,6 +68,7 @@ from .harness import (
 from .log_config import configure_logging, get_logger
 from .prompt_budgets import resolve_prompt_limits
 from .push_operation import PushOperation, PushRejected, PushRequest
+from .reconnect_backoff import HEARTBEAT_INTERVAL_SECONDS, ReconnectBackoff
 from .repo_config import load_repo_manifest
 from .shutdown_preparation import ShutdownPreparationCoordinator
 from .types import GitUser
@@ -78,6 +81,9 @@ if TYPE_CHECKING:
 configure_logging()
 
 MAX_SAFE_GENERATION_CREATED_AT = 9_007_199_254_740_991
+HEALTH_LOG_INTERVAL_SECONDS = 60.0
+HEARTBEAT_DELAY_WARNING_SECONDS = 5.0
+HEARTBEAT_SEND_WARNING_SECONDS = 5.0
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
@@ -127,9 +133,6 @@ class AgentBridge:
     - Git identity management per prompt author
     """
 
-    HEARTBEAT_INTERVAL = 30.0
-    RECONNECT_BACKOFF_BASE = RECONNECT_BACKOFF_BASE
-    RECONNECT_MAX_DELAY_SECONDS = RECONNECT_MAX_DELAY_SECONDS
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -144,6 +147,7 @@ class AgentBridge:
         *,
         early_connect: bool = False,
         harness_factory: Callable[[], AgentHarness] | None = None,
+        reconnect_backoff: ReconnectBackoff | None = None,
     ):
         self.sandbox_id = sandbox_id
         self.session_id = session_id
@@ -172,11 +176,13 @@ class AgentBridge:
         self.shutdown_event = asyncio.Event()
         self.git_sync_complete = asyncio.Event()
 
-        # Vendor session id persistence. The legacy file name is still read so
-        # snapshots taken before the rename keep their conversation history.
-        temp_dir = Path(tempfile.gettempdir())
-        self.session_id_file = temp_dir / "agent-session-id"
-        self.legacy_session_id_file = temp_dir / "opencode-session-id"
+        # Vendor session id persistence, in the runtime state directory so a
+        # resume that lands on a fresh machine still finds it. The legacy file
+        # name is still read so snapshots taken before the rename keep their
+        # conversation history.
+        state_dir = runtime_state_dir(tempfile.gettempdir())
+        self.session_id_file = state_dir / "agent-session-id"
+        self.legacy_session_id_file = state_dir / "opencode-session-id"
         self.repo_path = Path("/workspace")
         # Supervisor-written canonical repo manifest; push targeting resolves
         # member checkout paths through it rather than joining spec-supplied
@@ -211,6 +217,8 @@ class AgentBridge:
             )
         )
         self.shutdown_preparation = ShutdownPreparationCoordinator()
+        self._generation_request_serial = 0
+        self._reauthenticating_generation = False
         self.diff_refresh = SessionDiffRefreshWorker(
             client=ControlPlaneDiffClient(
                 control_plane_url=self.control_plane_url,
@@ -245,9 +253,18 @@ class AgentBridge:
             log=self.log,
         )
 
+        self.reconnect_backoff = (
+            reconnect_backoff if reconnect_backoff is not None else ReconnectBackoff()
+        )
         self._connected_at_monotonic: float | None = None
         self._connection_count = 0
         self._reconnect_attempt_count = 0
+        # Latest heartbeat timing, retained across reconnects for bridge.health.
+        self._last_heartbeat: dict[str, Any] = {
+            "scheduling_delay_seconds": None,
+            "send_duration_seconds": None,
+            "heartbeat_delivered": None,
+        }
         self._total_connected_duration_seconds = 0.0
 
     @property
@@ -307,8 +324,10 @@ class AgentBridge:
             harness=self._harness_id.value,
             early_connect=self.boot_attach.early_connect,
         )
-        reconnect_attempts = 0
         run_outcome = "harness_start_failed"
+        # Run-scoped rather than connection-scoped, so delivery pressure stays
+        # visible during sustained outages and rapid reconnects.
+        health_task = asyncio.create_task(self._health_loop())
 
         # One lifecycle: whatever the harness acquires in open() is released
         # in the finally below, whether startup, session loading or the run
@@ -323,7 +342,6 @@ class AgentBridge:
                     await self._connect_and_run()
                     if not self.shutdown_event.is_set():
                         run_outcome = "connection_closed"
-                    reconnect_attempts = 0
                 except SessionTerminatedError:
                     run_outcome = "session_terminated"
                     self.shutdown_event.set()
@@ -352,15 +370,11 @@ class AgentBridge:
                 if self.shutdown_event.is_set():
                     break
 
-                reconnect_attempts += 1
                 self._reconnect_attempt_count += 1
-                delay = min(
-                    self.RECONNECT_BACKOFF_BASE**reconnect_attempts,
-                    self.RECONNECT_MAX_DELAY_SECONDS,
-                )
+                delay = self.reconnect_backoff.next_delay_seconds()
                 self.log.info(
                     "bridge.reconnect",
-                    attempt=reconnect_attempts,
+                    attempt=self.reconnect_backoff.attempt,
                     reconnect_attempt_count=self._reconnect_attempt_count,
                     delay_s=round(delay, 1),
                 )
@@ -373,6 +387,7 @@ class AgentBridge:
                 raise self.boot_attach.failure
 
         finally:
+            health_task.cancel()
             await self.boot_attach.stop()
             await self.activity.shutdown()
             # Cleanup failures are logged, never raised: an exception here
@@ -406,6 +421,10 @@ class AgentBridge:
     def _finalize_connection(
         self, *, now_monotonic: float | None = None
     ) -> dict[str, float | int] | None:
+        """End the active connection: settle its accounting and reconnect backoff.
+
+        Returns the fields for the disconnect log, or None without a connection.
+        """
         if self._connected_at_monotonic is None:
             return None
 
@@ -413,6 +432,8 @@ class AgentBridge:
         connection_duration_seconds = max(0.0, ended_at - self._connected_at_monotonic)
         self._connected_at_monotonic = None
         self._total_connected_duration_seconds += connection_duration_seconds
+        # However the connection ended, a long-lived one resets the backoff.
+        self.reconnect_backoff.connection_ended(connection_duration_seconds)
 
         return {
             "connection_duration_seconds": round(connection_duration_seconds, 3),
@@ -424,16 +445,30 @@ class AgentBridge:
 
     def _log_disconnect(
         self,
+        connection_fields: dict[str, float | int],
         *,
         reason: str,
         level: str = "info",
         **fields: Any,
     ) -> None:
-        connection_fields = self._finalize_connection()
-        if connection_fields is None:
-            return
         log_method = getattr(self.log, level)
         log_method("bridge.disconnect", reason=reason, **connection_fields, **fields)
+
+    def _disconnect_log_fields(
+        self, ws: ClientConnection, closed_error: websockets.ConnectionClosed | None
+    ) -> dict[str, Any]:
+        if closed_error is not None:
+            return {
+                "reason": "connection_closed",
+                "level": "warn",
+                "ws_close_code": closed_error.code,
+            }
+        close_code = getattr(ws, "close_code", None)
+        return {
+            "reason": "shutdown_requested" if self.shutdown_event.is_set() else "connection_closed",
+            "level": "warn" if close_code not in (None, 1000, 1001) else "info",
+            **({"ws_close_code": close_code} if close_code is not None else {}),
+        }
 
     def _is_fatal_connection_error(self, error_str: str) -> bool:
         """Check if a connection error is fatal and shouldn't trigger retry.
@@ -487,6 +522,7 @@ class AgentBridge:
                 self._mark_connected()
                 heartbeat_task: asyncio.Task[None] | None = None
                 background_tasks: set[asyncio.Task[None]] = set()
+                closed_error: websockets.ConnectionClosed | None = None
 
                 try:
                     self.log.info(
@@ -516,11 +552,7 @@ class AgentBridge:
                             self.log.error("bridge.command_error", exc=e)
 
                 except websockets.ConnectionClosed as e:
-                    self._log_disconnect(
-                        reason="connection_closed",
-                        level="warn",
-                        ws_close_code=e.code,
-                    )
+                    closed_error = e
                     raise
 
                 finally:
@@ -530,18 +562,11 @@ class AgentBridge:
                         task.cancel()
                     self.ws = None
                     self.event_forwarder.unbind()
-                    if self._connected_at_monotonic is not None:
-                        close_code = getattr(ws, "close_code", None)
-                        reason = (
-                            "shutdown_requested"
-                            if self.shutdown_event.is_set()
-                            else "connection_closed"
+                    connection_fields = self._finalize_connection()
+                    if connection_fields is not None:
+                        self._log_disconnect(
+                            connection_fields, **self._disconnect_log_fields(ws, closed_error)
                         )
-                        level = "warn" if close_code not in (None, 1000, 1001) else "info"
-                        extra_fields = (
-                            {"ws_close_code": close_code} if close_code is not None else {}
-                        )
-                        self._log_disconnect(reason=reason, level=level, **extra_fields)
 
         except InvalidStatus as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
@@ -564,10 +589,55 @@ class AgentBridge:
     async def _heartbeat_loop(self) -> None:
         """Send periodic heartbeat events."""
         while not self.shutdown_event.is_set():
-            await asyncio.sleep(self.HEARTBEAT_INTERVAL)
+            expected_wake = time.monotonic() + HEARTBEAT_INTERVAL_SECONDS
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            woke_at = time.monotonic()
+            scheduling_delay_seconds = max(woke_at - expected_wake, 0.0)
+            if scheduling_delay_seconds >= HEARTBEAT_DELAY_WARNING_SECONDS:
+                self.log.warn(
+                    "bridge.heartbeat_delayed",
+                    scheduling_delay_seconds=scheduling_delay_seconds,
+                    **self.event_forwarder.health_snapshot(),
+                )
 
+            delivered: bool | None = None
+            send_duration_seconds: float | None = None
             if self.ws and self.ws.state == State.OPEN:
-                await self._send_event(self._heartbeat_event())
+                send_started = time.monotonic()
+                delivered = await self._send_event(self._heartbeat_event())
+                send_duration_seconds = time.monotonic() - send_started
+                if send_duration_seconds >= HEARTBEAT_SEND_WARNING_SECONDS:
+                    self.log.warn(
+                        "bridge.heartbeat_send_slow",
+                        send_duration_seconds=send_duration_seconds,
+                        delivered=delivered,
+                        **self.event_forwarder.health_snapshot(),
+                    )
+            self._last_heartbeat = {
+                "scheduling_delay_seconds": scheduling_delay_seconds,
+                "send_duration_seconds": send_duration_seconds,
+                "heartbeat_delivered": delivered,
+            }
+
+    async def _health_loop(self) -> None:
+        """Log delivery health periodically, whether or not a socket is bound."""
+        while not self.shutdown_event.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    self.shutdown_event.wait(), timeout=HEALTH_LOG_INTERVAL_SECONDS
+                )
+            if self.shutdown_event.is_set():
+                return
+            self.log.info(
+                "bridge.health",
+                connected=bool(self.ws and self.ws.state == State.OPEN),
+                booting=self.boot_attach.booting,
+                harness_id=self._harness_id.value,
+                connection_count=self._connection_count,
+                reconnect_attempt_count=self._reconnect_attempt_count,
+                **self._last_heartbeat,
+                **self.event_forwarder.health_snapshot(),
+            )
 
     async def _end_run(self) -> None:
         """End the run loop from outside it.
@@ -609,6 +679,16 @@ class AgentBridge:
 
         if cmd_type == "prompt":
             message_id = cmd.get("messageId") or cmd.get("message_id", "unknown")
+            if self._reauthenticating_generation:
+                await self._send_event(
+                    {
+                        "type": "execution_complete",
+                        "messageId": message_id,
+                        "success": False,
+                        "error": "harness_reauthenticating",
+                    }
+                )
+                return None
             if self.shutdown_preparation.fenced:
                 await self._send_event(
                     {
@@ -663,8 +743,12 @@ class AgentBridge:
         reasoning_effort = cmd.get("reasoningEffort")
         raw_attachments = cmd.get("attachments")
         author_data = cmd.get("author", {})
-        start_time = time.time()
-        outcome = "success"
+        source_outcome: str | None = None
+        error_category: str | None = None
+        error_type: str | None = None
+        phase = "preflight"
+        emitted_event_count = 0
+        tool_call_event_count = 0
         message_cost_usd: float | None = None
         had_error = False
         error_message = None
@@ -690,11 +774,16 @@ class AgentBridge:
             )
 
             emitted_output = False
+            text_undelivered = False
 
             async def emit(event: dict[str, Any]) -> None:
-                nonlocal emitted_output, message_cost_usd
+                nonlocal emitted_output, text_undelivered, message_cost_usd
+                nonlocal emitted_event_count, tool_call_event_count
                 if event.get("type") == "execution_complete":
                     raise RuntimeError("harness must not emit execution_complete")
+                emitted_event_count += 1
+                if event.get("type") == "tool_call":
+                    tool_call_event_count += 1
                 if event.get("type") in ("token", "tool_call", "step_finish"):
                     emitted_output = True
                 # A cancelled turn never returns an outcome, so the last cost
@@ -702,8 +791,19 @@ class AgentBridge:
                 # When an outcome does arrive it is authoritative (below).
                 if event.get("type") == "step_finish" and "messageCostUsd" in event:
                     message_cost_usd = event["messageCostUsd"]
-                await self._send_event(event)
+                delivered = await self._send_event(event)
+                # Token content is cumulative, so a token the forwarder refuses
+                # as oversized (it sizes the event after stamping it in place)
+                # leaves the control plane's copy of that text incomplete. Any
+                # other undelivered token was buffered for replay.
+                if (
+                    not delivered
+                    and event.get("type") == "token"
+                    and event_size_bytes(event) > MAX_EVENT_BYTES
+                ):
+                    text_undelivered = True
 
+            phase = "harness"
             turn: TurnOutcome = await harness.run_prompt(
                 HarnessPrompt(
                     message_id=message_id,
@@ -718,19 +818,26 @@ class AgentBridge:
                 ),
                 emit,
             )
+            source_outcome = (
+                "cancelled" if turn.cancelled else "success" if turn.success else "error"
+            )
+            phase = "session_persistence"
             await self._persist_rotated_session_id(harness)
+            phase = "output_checks"
             # The outcome is authoritative for cost and success once it
-            # exists; the bridge adds only the no-output guard below.
+            # exists; the bridge adds only the output guards below.
             if turn.message_cost_usd is not None:
                 message_cost_usd = turn.message_cost_usd
             if not turn.success:
                 had_error = True
+                error_category = "harness_failure"
                 error_message = turn.error or "Unknown error"
             if turn.cancelled:
                 raise asyncio.CancelledError
 
             if not had_error and not emitted_output:
                 had_error = True
+                error_category = "no_output"
                 error_message = "The agent completed without emitting assistant output."
                 self.log.error(
                     "prompt.no_output",
@@ -739,30 +846,48 @@ class AgentBridge:
                     reasoning_effort=reasoning_effort,
                 )
 
-            if had_error:
-                outcome = "error"
+            if not had_error and text_undelivered:
+                had_error = True
+                error_category = "text_undelivered"
+                error_message = (
+                    "The agent's response exceeded the event size limit and was not "
+                    "delivered in full."
+                )
+                self.log.error(
+                    "prompt.text_undelivered",
+                    message_id=message_id,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                )
 
         except asyncio.CancelledError:
             # This top-level command boundary settles cancellation just like
             # other prompt failures, while the turn's cost is still available.
             # The done callback remains a fallback for cancellation before start.
-            outcome = "cancelled"
+            error_category = "cancelled"
             had_error = True
             error_message = "Task was cancelled"
         except Exception as e:
-            outcome = "error"
+            error_category = "exception"
+            error_type = type(e).__qualname__
             had_error = True
             error_message = str(e)
             self.log.error("prompt.error", exc=e, message_id=message_id)
         finally:
-            duration_ms = int((time.time() - start_time) * 1000)
-            self.log.info(
-                "prompt.run",
-                message_id=message_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                outcome=outcome,
-                duration_ms=duration_ms,
+            # ActivitySupervisor owns the terminal event, so it emits the
+            # prompt.run summary once it has selected what the client receives.
+            self.activity.record_prompt_diagnostics(
+                {
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "harness_id": self._harness_id.value,
+                    "source_outcome": source_outcome,
+                    "phase": phase,
+                    "error_category": error_category,
+                    "error_type": error_type,
+                    "emitted_event_count": emitted_event_count,
+                    "tool_call_event_count": tool_call_event_count,
+                }
             )
 
         return {
@@ -789,10 +914,12 @@ class AgentBridge:
         running turn.
         """
         try:
+            self._assert_authenticated_generation()
             if self.shutdown_preparation.fenced:
                 raise RuntimeError("sandbox_lifetime_expiring")
             async with asyncio.timeout_at(deadline):
                 await self.boot_attach.wait_until_ready(message_id, deadline)
+                self._assert_authenticated_generation()
                 harness = self._require_harness()
                 await self._configure_git_identity(parse_prompt_git_author(author_data))
                 await self._ensure_agent_session(harness)
@@ -816,7 +943,12 @@ class AgentBridge:
             raise RuntimeError(f"prompt could not start within {budget} s") from None
         if self.shutdown_preparation.fenced:
             raise RuntimeError("sandbox_lifetime_expiring")
+        self._assert_authenticated_generation()
         return harness, attachments
+
+    def _assert_authenticated_generation(self) -> None:
+        if self._reauthenticating_generation:
+            raise RuntimeError("harness_reauthenticating")
 
     async def _ensure_agent_session(self, harness: AgentHarness | None = None) -> None:
         """Create the vendor session on first use and persist its id."""
@@ -862,6 +994,33 @@ class AgentBridge:
         if generation is None or generation["sandboxId"] != self.sandbox_id:
             self.log.warn("bridge.sandbox_generation_invalid")
             return
+        current = self.shutdown_preparation.state.generation
+        hook = getattr(self.harness, "reauthenticate_generation", None)
+        if (
+            hook is not None
+            and current is not None
+            and generation["createdAt"] < current["createdAt"]
+        ):
+            self.log.warn("bridge.sandbox_generation_stale")
+            return
+        if hook is not None and current is not None and generation != current:
+            self._generation_request_serial += 1
+            serial = self._generation_request_serial
+            self._reauthenticating_generation = True
+            try:
+                await hook(generation)
+                if serial != self._generation_request_serial:
+                    return
+            except Exception as error:
+                # Failure keeps admission fenced; reconnect must never implicitly
+                # clear it. Readiness is resent on every connection and the control
+                # plane answers with this generation, so reconnecting is the retry.
+                self.log.error("bridge.sandbox_generation_reauth_failed", exc=error)
+                if self.ws is not None:
+                    await self.ws.close(code=1011, reason="generation reauthentication failed")
+                return
+            else:
+                self._reauthenticating_generation = False
         await self._send_event(self.shutdown_preparation.establish_generation(generation))
 
     async def _handle_prepare_shutdown(self, cmd: dict[str, Any]) -> None:

@@ -12,9 +12,42 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { FetchClient } from "../platform-ports";
 import { fakeSessionRuntimeDispatch } from "../router.test-support";
-import type { Logger } from "../logger";
-import type { InvocationRunAggregate } from "../db/automation-store";
-import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import { createLogger, type Logger } from "../logger";
+import type * as LoggerModule from "../logger";
+import type * as AuthCrypto from "../auth/crypto";
+import type { AutomationRow, InvocationRunAggregate } from "../db/automation-store";
+import { normalizeWebhookEvent, type SlackAutomationEvent } from "@open-inspect/shared/triggers";
+import type { Team } from "@open-inspect/shared/types/teams";
+import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
+import type * as SessionAdmissionModule from "../authorization/session-admission";
+
+vi.mock("../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof LoggerModule>();
+  return { ...actual, createLogger: vi.fn(actual.createLogger) };
+});
+
+function schedulerLogger(): Logger {
+  const factory = vi.mocked(createLogger);
+  const index = factory.mock.calls.map(([component]) => component).lastIndexOf("scheduler");
+  return factory.mock.results[index].value;
+}
+
+const mockSelectSessionMemory = vi.hoisted(() =>
+  vi.fn(async () => ({
+    selectionVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    personalOwnerUserId: null,
+    directiveChars: 0,
+    catalogChars: 0,
+    estimatedTokens: 0,
+    omittedCount: 0,
+    items: [],
+  }))
+);
+vi.mock("../memory/session-memory-selector-factory", () => ({
+  createSessionMemorySelector: () => ({ select: mockSelectSessionMemory }),
+}));
 
 const mockCheckRepositoryAccess = vi.hoisted(() => vi.fn());
 const mockResolveSessionProviderAuth = vi.hoisted(() =>
@@ -24,7 +57,51 @@ const mockResolveSessionProviderAuth = vi.hoisted(() =>
   ])
 );
 const mockIsAutomationExecutionAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-const mockIsPrincipalAuthorized = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockGetEffectiveAuthorization = vi.hoisted(() => vi.fn());
+const mockEvaluateSessionAdmission = vi.hoisted(() => vi.fn());
+const mockTeamGetById = vi.hoisted(() =>
+  vi.fn<(id: string) => Promise<Team | null>>().mockResolvedValue(null)
+);
+const mockTeamGrantCovers = vi.hoisted(() =>
+  vi
+    .fn<(teamId: string, repoIds: readonly (number | null)[]) => Promise<boolean>>()
+    .mockResolvedValue(true)
+);
+
+vi.mock("../db/teams", () => ({
+  TeamStore: vi.fn().mockImplementation(function () {
+    return { getById: mockTeamGetById };
+  }),
+}));
+
+vi.mock("../db/team-repository-grants", () => ({
+  TeamRepositoryGrantStore: vi.fn().mockImplementation(function () {
+    return { covers: mockTeamGrantCovers };
+  }),
+}));
+
+vi.mock("../authorization/service", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    AuthorizationService: vi.fn().mockImplementation(function () {
+      return { getEffectiveAuthorization: mockGetEffectiveAuthorization };
+    }),
+  };
+});
+
+vi.mock("../authorization/session-admission", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionAdmissionModule>()),
+  evaluateSessionAdmission: mockEvaluateSessionAdmission,
+}));
+
+const mockGetGitHubAccessToken = vi.hoisted(() => vi.fn());
+const mockGitHubAccountInfo = vi.hoisted(() => vi.fn());
+vi.mock("../auth/user/runtime", () => ({
+  getUserAuth: vi.fn(() => ({
+    api: { getAccessToken: mockGetGitHubAccessToken, accountInfo: mockGitHubAccountInfo },
+  })),
+}));
 
 vi.mock("../source-control", () => ({
   createSourceControlProviderFromEnv: vi.fn(() => ({
@@ -41,7 +118,6 @@ vi.mock("../automation/authorization-guard", async (importOriginal) => {
   return {
     ...actual,
     isAutomationExecutionAuthorized: mockIsAutomationExecutionAuthorized,
-    isPrincipalAuthorized: mockIsPrincipalAuthorized,
   };
 });
 
@@ -55,8 +131,12 @@ vi.mock("../session/skill-resolution", () => ({
   })),
 }));
 
-const { AutomationExecutionUnauthorizedError, EXECUTION_DEADLINE_GRACE_MS, Scheduler } =
-  await import("./scheduler");
+const { resolveManagedSkills } = await import("../session/skill-resolution");
+const { AutomationExecutionUnauthorizedError, SessionFollowUpRefusedError } =
+  await import("./contracts");
+const { EXECUTION_DEADLINE_GRACE_MS } = await import("./launch-policy");
+const { AutomationSlackService } = await import("./slack-service");
+const { createScheduler: createAutomationScheduler } = await import("./factory");
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
 
@@ -64,6 +144,7 @@ function aggregate(overrides?: Partial<InvocationRunAggregate>): InvocationRunAg
   return {
     total: 1,
     active: 1,
+    retrying: 0,
     failed: 0,
     completed: 0,
     skipped: 0,
@@ -85,7 +166,15 @@ function createMockStore() {
     getOverdueAutomations: vi.fn().mockResolvedValue([]),
     getActiveRunForAutomation: vi.fn().mockResolvedValue(null),
     getActiveRunForKey: vi.fn().mockResolvedValue(null),
-    getLatestSteerableRunForThread: vi.fn().mockResolvedValue(null),
+    getLatestContinuableRun: vi.fn().mockResolvedValue(null),
+    getSessionRunsForContinuityKey: vi.fn().mockResolvedValue([]),
+    markRunFirstPromptQueued: vi.fn().mockResolvedValue(undefined),
+    holdPromptForLaunchingRun: vi.fn().mockResolvedValue("held"),
+    getHeldPrompts: vi.fn().mockResolvedValue([]),
+    deleteHeldPrompt: vi.fn().mockResolvedValue(undefined),
+    deleteHeldPromptsForRun: vi.fn().mockResolvedValue(0),
+    getRunsWithDueHeldPrompts: vi.fn().mockResolvedValue([]),
+    deferHeldPrompts: vi.fn().mockResolvedValue(undefined),
     getRepositoriesForAutomation: vi.fn().mockResolvedValue([]),
     getRepositoriesForAutomationIds: vi.fn().mockResolvedValue(new Map()),
     getEnvironmentsForAutomation: vi.fn().mockResolvedValue([]),
@@ -100,6 +189,10 @@ function createMockStore() {
     insertSkippedInvocation: vi.fn().mockResolvedValue({ inserted: true }),
     recordAuthorizationDenied: vi.fn().mockResolvedValue({ inserted: true, paused: true }),
     getInvocationById: vi.fn().mockResolvedValue(null),
+    getInvocationIdByTriggerKey: vi.fn().mockResolvedValue(null),
+    claimFollowUpReceipt: vi.fn().mockResolvedValue({ kind: "claimed" }),
+    acceptFollowUpReceipt: vi.fn().mockResolvedValue(undefined),
+    releaseFollowUpReceipt: vi.fn().mockResolvedValue(undefined),
     getInvocationRunAggregate: vi.fn().mockResolvedValue(aggregate()),
     tryMarkInvocationFailureCounted: vi.fn().mockResolvedValue(true),
     getUncountedFailedInvocations: vi.fn().mockResolvedValue([]),
@@ -114,12 +207,14 @@ function createMockStore() {
     getOrphanedStartingRuns: vi.fn().mockResolvedValue([]),
     getRunsPastExecutionDeadline: vi.fn().mockResolvedValue([]),
     incrementConsecutiveFailures: vi.fn().mockResolvedValue(1),
+    disableSettledOneShots: vi.fn().mockResolvedValue(undefined),
     resetConsecutiveFailures: vi.fn().mockResolvedValue(undefined),
     autoPause: vi.fn().mockResolvedValue(undefined),
     update: vi.fn().mockResolvedValue(undefined),
     advanceNextRunAt: vi.fn().mockResolvedValue(true),
     bulkFailStartingRuns: vi.fn().mockResolvedValue(undefined),
     bulkFailRunningRuns: vi.fn().mockResolvedValue(undefined),
+    getRetriesToSettle: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -149,20 +244,32 @@ vi.mock("../db/automation-model-provider-auth", async (importOriginal) => {
 
 const mockSessionStoreCreate = vi.fn().mockResolvedValue(undefined);
 const mockSessionStoreUpdateStatus = vi.fn().mockResolvedValue(undefined);
+const mockSessionStoreGet = vi.fn();
+const mockTeamChannelBindingGet = vi.fn();
+vi.mock("../db/team-channel-bindings", () => ({
+  TeamChannelBindingStore: vi.fn().mockImplementation(function () {
+    return { get: mockTeamChannelBindingGet };
+  }),
+}));
 vi.mock("../db/session-index", () => ({
   SessionIndexStore: vi.fn().mockImplementation(function () {
     return {
       create: mockSessionStoreCreate,
       updateStatus: mockSessionStoreUpdateStatus,
+      get: mockSessionStoreGet,
     };
   }),
 }));
 
+const mockUserStoreGetIdentitiesForUser = vi.fn().mockResolvedValue([]);
+const mockUserStoreGetUserById = vi.fn().mockResolvedValue(null);
 const mockUserStoreGetIdentity = vi.fn().mockResolvedValue(null);
 vi.mock("../db/user-store", () => ({
   UserStore: vi.fn().mockImplementation(function () {
     return {
       getIdentity: mockUserStoreGetIdentity,
+      getIdentitiesForUser: mockUserStoreGetIdentitiesForUser,
+      getUserById: mockUserStoreGetUserById,
     };
   }),
 }));
@@ -199,7 +306,8 @@ vi.mock("../db/slack-channel-store", () => ({
   }),
 }));
 
-vi.mock("../auth/crypto", () => ({
+vi.mock("../auth/crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof AuthCrypto>()),
   generateId: vi.fn(() => `id-${Math.random().toString(36).slice(2, 8)}`),
 }));
 
@@ -208,7 +316,7 @@ interface SessionStub {
   fetch(request: Request): Promise<Response>;
 }
 
-function createMockSessionStub(): SessionStub {
+function createMockSessionStub({ firstPromptQueued = false } = {}): SessionStub {
   return {
     fetch: vi.fn(async (input: RequestInfo, _init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
@@ -216,6 +324,7 @@ function createMockSessionStub(): SessionStub {
       if (path === "/internal/init") return Response.json({ status: "ok" });
       if (path === "/internal/prompt")
         return Response.json({ messageId: "msg-1", status: "queued" });
+      if (path === "/internal/prompt-request") return Response.json({ queued: firstPromptQueued });
       return new Response("Not Found", { status: 404 });
     }),
   } as never;
@@ -347,8 +456,8 @@ function createEnv(
   } as Env;
 }
 
-function createScheduler(env = createEnv()): InstanceType<typeof Scheduler> {
-  return new Scheduler(env.DB, env, createTestBackgroundTasks());
+function createScheduler(env = createEnv()): ReturnType<typeof createAutomationScheduler> {
+  return createAutomationScheduler(env.DB, env, createTestBackgroundTasks());
 }
 
 // ─── Sample data ─────────────────────────────────────────────────────────────
@@ -357,6 +466,7 @@ const now = Date.now();
 
 const sampleAutomation = {
   id: "auto-1",
+  owner_team_id: null,
   name: "Daily sync",
   repo_owner: "acme",
   repo_name: "web-app",
@@ -365,6 +475,7 @@ const sampleAutomation = {
   instructions: "Run tests",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
+  schedule_once_at: null,
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
@@ -428,6 +539,9 @@ function sampleRunRow(overrides?: Record<string, unknown>) {
     repo_name: "web-app",
     repo_id: 12345,
     base_branch: "main",
+    first_prompt_pending: 0,
+    last_activity_at: now,
+    has_held_prompts: 0,
     ...overrides,
   };
 }
@@ -481,6 +595,18 @@ function makeSlackEvent(overrides?: Partial<SlackAutomationEvent>): SlackAutomat
   };
 }
 
+function steeringAuthorization(
+  overrides?: Partial<EffectiveAuthorization>
+): EffectiveAuthorization {
+  return {
+    userId: "slack-actor-user",
+    suspendedAt: null,
+    role: { id: "role-member", key: "member", name: "Member" },
+    permissions: ["sessions.read", "sessions.collaborate"],
+    ...overrides,
+  };
+}
+
 /** All children handed to the last insertInvocationGuarded call, as inserted. */
 function lastInsertedChildren(): Array<Record<string, unknown>> {
   const params = capturedInvocationParams.at(-1);
@@ -493,16 +619,25 @@ function lastInsertedChildren(): Array<Record<string, unknown>> {
 describe("Scheduler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetGitHubAccessToken.mockReset().mockResolvedValue({ accessToken: "" });
+    mockGitHubAccountInfo.mockReset();
     mockResolveSessionProviderAuth.mockResolvedValue([
       { provider: "openai", authMode: "api_key", selectionSource: "unattended_policy" },
       { provider: "xai", authMode: "api_key", selectionSource: "unattended_policy" },
     ]);
     mockProviderAuthList.mockResolvedValue([]);
     mockIsAutomationExecutionAuthorized.mockResolvedValue(true);
-    mockIsPrincipalAuthorized.mockResolvedValue(true);
+    mockGetEffectiveAuthorization.mockReset().mockResolvedValue(steeringAuthorization());
+    mockEvaluateSessionAdmission
+      .mockReset()
+      .mockResolvedValue({ kind: "allowed", legacyPermission: null });
+    mockTeamGetById.mockReset().mockResolvedValue(null);
+    mockTeamGrantCovers.mockReset().mockResolvedValue(true);
     mockUserStoreGetIdentity.mockImplementation(async (provider: string) =>
       provider === "slack" ? { userId: "slack-actor-user" } : null
     );
+    mockUserStoreGetIdentitiesForUser.mockReset().mockResolvedValue([]);
+    mockUserStoreGetUserById.mockResolvedValue(null);
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
@@ -515,6 +650,21 @@ describe("Scheduler", () => {
   });
 
   describe("tick", () => {
+    it("finishes recovery before held prompts, retries, and due automation admission", async () => {
+      await createScheduler().tick();
+      const order = [
+        mockStore.getStaleFailureResetCandidates,
+        mockStore.getRunsWithDueHeldPrompts,
+        mockStore.getRetriesToSettle,
+        mockStore.getOverdueAutomations,
+      ].map((fn) => fn.mock.invocationCallOrder[0]);
+      expect(order.every((call) => call !== undefined)).toBe(true);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      const tickTime = mockStore.getRunsWithDueHeldPrompts.mock.calls[0][0];
+      expect(mockStore.getRetriesToSettle.mock.calls[0][0]).toBe(tickTime);
+      expect(mockStore.getOverdueAutomations.mock.calls[0][0]).toBe(tickTime);
+    });
+
     it("returns empty summary when no overdue automations", async () => {
       const env = createEnv();
       const scheduler = createScheduler(env);
@@ -536,6 +686,11 @@ describe("Scheduler", () => {
       const result = await scheduler.tick();
 
       expect(result).toMatchObject({ processed: 1 });
+      expect(mockSelectSessionMemory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          principal: { userId: sampleAutomation.user_id, ownerTeamId: null },
+        })
+      );
 
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
@@ -565,6 +720,54 @@ describe("Scheduler", () => {
         authorId: sampleAutomation.created_by,
         canonicalUserId: sampleAutomation.user_id,
       });
+    });
+
+    it("attributes scheduled prompts to the owner's linked GitHub identity", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "owner" },
+      ]);
+      mockUserStoreGetUserById.mockResolvedValue({ displayName: "Automation Owner" });
+      const stub = createMockSessionStub();
+      await expect(createScheduler(createEnv(undefined, stub)).tick()).resolves.toMatchObject({
+        processed: 1,
+      });
+      await expect(getInitBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
+        canonicalUserId: sampleAutomation.user_id,
+        scmUserId: "42",
+        scmLogin: "owner",
+        scmName: "Automation Owner",
+        scmEmail: "42+owner@users.noreply.github.com",
+      });
+    });
+
+    it("launches without attribution when GitHub identity is ambiguous", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "one" },
+        { provider: "github", providerUserId: "43", providerLogin: "two" },
+      ]);
+      const stub = createMockSessionStub();
+      await expect(createScheduler(createEnv(undefined, stub)).tick()).resolves.toMatchObject({
+        processed: 1,
+        failed: 0,
+      });
+      const body = await getInitBody(vi.mocked(stub.fetch));
+      expect(body.scmUserId).toBeUndefined();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+    });
+
+    it("still fails launch when the attribution store is unavailable", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentitiesForUser.mockRejectedValue(new Error("D1 unavailable"));
+      await expect(createScheduler().tick()).resolves.toMatchObject({ processed: 0, failed: 1 });
+      expect(mockStore.updateRun).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ status: "failed", failure_reason: "D1 unavailable" })
+      );
     });
 
     it("rejects unattended execution before invocation work when the owner is unauthorized", async () => {
@@ -656,6 +859,89 @@ describe("Scheduler", () => {
       expect(children[0].invocation_id).toBe(children[1].invocation_id);
       // Both launched.
       expect(mockStore.claimRunSession).toHaveBeenCalledTimes(2);
+    });
+
+    it("settles one attribution snapshot after admission for every fan-out child", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      selectRepositories("auto-1", [
+        repositoryRow("auto-1"),
+        repositoryRow("auto-1", { repo_name: "api" }),
+      ]);
+      mockUserStoreGetIdentitiesForUser
+        .mockResolvedValueOnce([
+          { provider: "github", providerUserId: "42", providerLogin: "owner" },
+        ])
+        .mockResolvedValueOnce([
+          { provider: "github", providerUserId: "43", providerLogin: "changed" },
+        ]);
+      const stub = createMockSessionStub();
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toMatchObject({
+        processed: 1,
+        failed: 0,
+      });
+      expect(mockUserStoreGetIdentitiesForUser).toHaveBeenCalledTimes(1);
+      expect(mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUserStoreGetIdentitiesForUser.mock.invocationCallOrder[0]
+      );
+      const initRequests = vi
+        .mocked(stub.fetch)
+        .mock.calls.filter(([request]) =>
+          new URL((request as Request).url).pathname.endsWith("/init")
+        );
+      expect(initRequests).toHaveLength(2);
+      for (const [request] of initRequests) {
+        expect(await (request as Request).json()).toMatchObject({
+          scmUserId: "42",
+          scmLogin: "owner",
+        });
+      }
+    });
+
+    it("keeps a settled null manual attribution without looking it up again", async () => {
+      mockStore.getById.mockResolvedValue(sampleAutomation);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "42", providerLogin: "owner" },
+      ]);
+      const stub = createMockSessionStub();
+      await createScheduler(createEnv(undefined, stub)).trigger("auto-1", "manual-user", null);
+      expect(mockUserStoreGetIdentitiesForUser).not.toHaveBeenCalled();
+      expect((await getInitBody(vi.mocked(stub.fetch))).scmUserId).toBeUndefined();
+    });
+
+    it("resolves the scheduled owner's verified profile when no login is cached", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { id: "github-account-42", provider: "github", providerUserId: "42", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        account: {
+          id: "github-account-42",
+          providerId: "github",
+          accountId: "42",
+        },
+        user: { name: "Verified Owner" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "42",
+          login: "verified-owner",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toMatchObject({
+        processed: 1,
+      });
+      expect(await getInitBody(vi.mocked(stub.fetch))).toMatchObject({
+        scmUserId: "42",
+        scmLogin: "verified-owner",
+        scmEmail: "42+verified-owner@users.noreply.github.com",
+      });
+      expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
+        query: { accountId: "github-account-42", userId: "user-1" },
+      });
     });
 
     it("resolves one provider auth snapshot for every child in a fan-out invocation", async () => {
@@ -1475,9 +1761,7 @@ describe("Scheduler", () => {
       const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       const result = await scheduler.tick();
 
@@ -1535,6 +1819,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledTimes(1);
@@ -1561,6 +1846,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
     });
@@ -1580,14 +1866,13 @@ describe("Scheduler", () => {
       );
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-timeout");
@@ -1640,6 +1925,7 @@ describe("Scheduler", () => {
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-a", "orphan-b", "orphan-c"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledExactlyOnceWith("inv-batch");
@@ -1660,9 +1946,7 @@ describe("Scheduler", () => {
       mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
 
       const scheduler = createScheduler();
-      const warnSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
-        .mockImplementation(() => {});
+      const warnSpy = vi.spyOn(schedulerLogger(), "warn").mockImplementation(() => {});
 
       await scheduler.tick();
 
@@ -1708,12 +1992,8 @@ describe("Scheduler", () => {
       });
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
-      const warnSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "warn")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(schedulerLogger(), "warn").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
@@ -1752,9 +2032,7 @@ describe("Scheduler", () => {
       mockStore.bulkFailStartingRuns.mockRejectedValue(new Error("D1 timeout"));
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       const bulkFailErrorCall = errorSpy.mock.calls.find(
@@ -1795,20 +2073,20 @@ describe("Scheduler", () => {
       );
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
 
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       expect(mockStore.bulkFailRunningRuns).toHaveBeenCalledWith(
         ["timeout-1"],
         "execution_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
 
@@ -1840,14 +2118,13 @@ describe("Scheduler", () => {
       mockStore.getInvocationRunAggregate.mockRejectedValue(new Error("D1 timeout"));
 
       const scheduler = createScheduler();
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await scheduler.tick();
       expect(mockStore.bulkFailStartingRuns).toHaveBeenCalledWith(
         ["orphan-1"],
         "session_creation_timeout",
+        expect.any(Number),
         expect.any(Number)
       );
       const bulkTrackErrorCall = errorSpy.mock.calls.find(
@@ -1897,105 +2174,41 @@ describe("Scheduler", () => {
     });
   });
 
-  describe("runComplete", () => {
+  describe("runComplete factory wiring", () => {
     beforeEach(() => {
       mockStore.getRunById.mockResolvedValue(sampleRunRow());
+      mockSessionStoreGet
+        .mockReset()
+        .mockResolvedValue({ ownerTeamId: "team-a", visibility: "workspace" });
+      mockTeamChannelBindingGet.mockReset().mockResolvedValue({ teamId: "team-a" });
     });
 
-    it("marks run as completed and resets failures once every sibling completed", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
-      );
+    it.each([false, true])(
+      "does not retry publication on a terminal duplicate after preparation failure: %s",
+      async (preparationFailed) => {
+        mockStore.getInvocationById.mockResolvedValue({
+          trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
+        });
+        if (preparationFailed)
+          mockStore.getInvocationById.mockRejectedValue(new Error("D1 unavailable"));
+        mockStore.getById.mockResolvedValue(sampleSlackAutomation);
+        const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
+        const scheduler = createScheduler(
+          createEnv({
+            SLACK_BOT: { fetch: slackFetch },
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          })
+        );
+        mockStore.updateRun.mockResolvedValueOnce(true).mockResolvedValue(false);
 
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(runCompletion());
+        await scheduler.runComplete(runCompletion());
+        await scheduler.runComplete(runCompletion());
 
-      expect(result).toBeUndefined();
-      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
-        status: "completed",
-        completed_at: expect.any(Number),
-      });
-      expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledWith("inv-1");
-      expect(mockStore.resetConsecutiveFailures).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("does not reset while siblings are still active", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 2, active: 1, failed: 0, completed: 1 })
-      );
-
-      const scheduler = createScheduler();
-      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
-
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
-
-    it("never resets after a partial failure, even when the invocation finishes", async () => {
-      // Sibling failed earlier (strike already taken via CAS); this success
-      // finishes the invocation as partial_failed — no reset.
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 2, active: 0, failed: 1, completed: 1 })
-      );
-      mockStore.tryMarkInvocationFailureCounted.mockResolvedValue(false);
-
-      const scheduler = createScheduler();
-      await expect(scheduler.runComplete(runCompletion())).resolves.toBeUndefined();
-
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
-    });
-
-    it("reads slack coordinates from the invocation and labels from the run snapshot", async () => {
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({
-          automation_id: "auto-slack",
-          invocation_id: "inv-slack",
-          trigger_run_metadata: null,
-        })
-      );
-      mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
-        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
-      });
-      mockStore.getById.mockResolvedValue(sampleSlackAutomation);
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 0, completed: 1 })
-      );
-
-      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createScheduler(
-        createEnv({
-          SLACK_BOT: { fetch: slackFetch } as FetchClient,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        })
-      );
-
-      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
-
-      expect(result).toBeUndefined();
-      expect(slackFetch).toHaveBeenCalledOnce();
-      const [, init] = slackFetch.mock.calls[0];
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        channel: "C1",
-        reactionMessageTs: "1700000000.000200",
-        // Label reads the run's snapshot, not the automation row.
-        repoFullName: "acme/web-app",
-        sessionId: "sess-1",
-        messageId: "msg-1",
-      });
-      expect(body.signature).toEqual(expect.any(String));
-    });
+        expect(mockStore.getInvocationById).toHaveBeenCalledTimes(preparationFailed ? 2 : 1);
+        expect(mockStore.getInvocationRunAggregate).toHaveBeenCalledOnce();
+        expect(slackFetch).toHaveBeenCalledTimes(preparationFailed ? 0 : 1);
+      }
+    );
 
     it("still posts to slack when a late success corrects a swept timeout", async () => {
       // The sweep posts nothing when it declares a run lost, so the correction
@@ -2011,17 +2224,7 @@ describe("Scheduler", () => {
       mockStore.updateRun.mockResolvedValue(false);
       mockStore.completeTimedOutRun.mockResolvedValue(true);
       mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
         trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
       });
       mockStore.getById.mockResolvedValue(sampleSlackAutomation);
 
@@ -2041,117 +2244,6 @@ describe("Scheduler", () => {
       expect(body).toMatchObject({ channel: "C1", reactionMessageTs: "1700000000.000200" });
       // The strike the sweep took stays; accounting is deliberately skipped.
       expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
-    });
-
-    it("labels a repo-less run as No repository", async () => {
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({
-          automation_id: "auto-slack",
-          invocation_id: "inv-slack",
-          repo_owner: null,
-          repo_name: null,
-          repo_id: null,
-          base_branch: null,
-        })
-      );
-      mockStore.getInvocationById.mockResolvedValue({
-        id: "inv-slack",
-        automation_id: "auto-slack",
-        source: "event",
-        scheduled_at: null,
-        trigger_key: "slack:msg:C1:1700000000.000200",
-        concurrency_key: "slack:C1:thread-root",
-        trigger_metadata: JSON.stringify({ channel: "C1", messageTs: "1700000000.000200" }),
-        skip_reason: null,
-        failure_counted_at: null,
-        created_at: now,
-        updated_at: now,
-      });
-      mockStore.getById.mockResolvedValue({
-        ...sampleSlackAutomation,
-        repo_owner: null,
-        repo_name: null,
-        repo_id: null,
-        base_branch: null,
-      });
-
-      const slackFetch = vi.fn().mockResolvedValue(Response.json({ ok: true }));
-      const scheduler = createScheduler(
-        createEnv({
-          SLACK_BOT: { fetch: slackFetch } as FetchClient,
-          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
-        })
-      );
-
-      const result = await scheduler.runComplete(runCompletion({ automationId: "auto-slack" }));
-
-      expect(result).toBeUndefined();
-      expect(slackFetch).toHaveBeenCalledOnce();
-      const [, init] = slackFetch.mock.calls[0];
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        channel: "C1",
-        reactionMessageTs: "1700000000.000200",
-        repoFullName: "No repository",
-      });
-    });
-
-    it("marks run as failed and takes the CAS-guarded strike on failure", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
-      );
-
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(
-        runCompletion({ success: false, error: "Sandbox crashed" })
-      );
-
-      expect(result).toBeUndefined();
-      expect(mockStore.updateRun).toHaveBeenCalledWith("run-1", {
-        status: "failed",
-        failure_reason: "Sandbox crashed",
-        completed_at: expect.any(Number),
-      });
-      expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledWith("inv-1");
-      expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("ignores callback when the guarded update finds the run already terminal", async () => {
-      mockStore.getRunById.mockResolvedValue(
-        sampleRunRow({ status: "failed", failure_reason: "execution_timeout", completed_at: now })
-      );
-      // The SQL guard suppresses the write.
-      mockStore.updateRun.mockResolvedValue(false);
-
-      const scheduler = createScheduler();
-      const result = await scheduler.runComplete(runCompletion());
-
-      expect(result).toBeUndefined();
-      expect(mockStore.resetConsecutiveFailures).not.toHaveBeenCalled();
-      expect(mockStore.getInvocationRunAggregate).not.toHaveBeenCalled();
-    });
-
-    it("auto-pauses after run-complete pushes failures to 3", async () => {
-      mockStore.getInvocationRunAggregate.mockResolvedValue(
-        aggregate({ total: 1, active: 0, failed: 1, completed: 0 })
-      );
-      mockStore.incrementConsecutiveFailures.mockResolvedValue(3);
-
-      const scheduler = createScheduler();
-      await expect(
-        scheduler.runComplete(runCompletion({ success: false, error: "Third failure" }))
-      ).resolves.toBeUndefined();
-
-      expect(mockStore.autoPause).toHaveBeenCalledWith("auto-1");
-    });
-
-    it("propagates failure-tracking errors so the callback caller retries", async () => {
-      mockStore.updateRun.mockRejectedValue(new Error("D1 timeout"));
-
-      const scheduler = createScheduler();
-      await expect(
-        scheduler.runComplete(runCompletion({ success: false, error: "Sandbox crashed" }))
-      ).rejects.toThrow("D1 timeout");
     });
   });
 
@@ -2182,8 +2274,13 @@ describe("Scheduler", () => {
       mockIsAutomationExecutionAuthorized.mockResolvedValue(false);
 
       const scheduler = createScheduler();
-      await expect(scheduler.trigger("auto-1", "user-1")).rejects.toBeInstanceOf(
-        AutomationExecutionUnauthorizedError
+      const denied = scheduler.trigger("auto-1", "user-1");
+      await expect(denied).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+      await expect(denied).rejects.toMatchObject({
+        reason: "execution_authorization_denied",
+      });
+      expect(new AutomationExecutionUnauthorizedError().reason).toBe(
+        "execution_authorization_denied"
       );
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
@@ -2247,9 +2344,7 @@ describe("Scheduler", () => {
       const env = createEnv(undefined, failingStub);
 
       const scheduler = createScheduler(env);
-      const errorSpy = vi
-        .spyOn((scheduler as unknown as { log: Logger }).log, "error")
-        .mockImplementation(() => {});
+      const errorSpy = vi.spyOn(schedulerLogger(), "error").mockImplementation(() => {});
 
       await expect(scheduler.trigger("auto-1", "user-1")).rejects.toThrow(
         "Failed to trigger automation"
@@ -2280,7 +2375,12 @@ describe("Scheduler", () => {
 
         const result = await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent());
 
-        expect(result).toEqual({ triggered: 1, skipped: 1, steered: 0 });
+        expect(result).toEqual({
+          triggered: 1,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [expect.any(String)],
+        });
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -2319,34 +2419,34 @@ describe("Scheduler", () => {
 
       it("does not request context for an unmatched reply", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         // Fails the automation's text condition, so no run is admitted.
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "unrelated chatter" }))
-        ).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
 
       it("does not request context for a successfully steered reply", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+        mockStore.getLatestContinuableRun.mockResolvedValue(
           sampleRunRow({ id: "active-run", session_id: "sess-running" })
         );
         const { slackFetch, env } = threadContextEnv();
 
         expect(
           await createScheduler(env).event(makeSlackEvent({ text: "also update the changelog" }))
-        ).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+        ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
       });
 
       it("does not request context when admission is skipped for concurrency", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
         const { slackFetch, env } = threadContextEnv();
 
@@ -2354,6 +2454,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 1,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2361,7 +2462,7 @@ describe("Scheduler", () => {
 
       it("does not request context when the invocation is deduplicated", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockStore.insertInvocationGuarded.mockRejectedValue(
           new Error("UNIQUE constraint failed: automation_invocations.trigger_key")
         );
@@ -2371,6 +2472,7 @@ describe("Scheduler", () => {
           triggered: 0,
           skipped: 1,
           steered: 0,
+          invocationIds: [],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2378,13 +2480,14 @@ describe("Scheduler", () => {
 
       it("requests context once for an admitted run and splices it into the prompt", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env, stub } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(1);
@@ -2406,13 +2509,14 @@ describe("Scheduler", () => {
           sampleSlackAutomation,
           { ...sampleSlackAutomation, id: "auto-slack-2" },
         ]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
           triggered: 2,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String), expect.any(String)],
         });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(2);
@@ -2425,7 +2529,7 @@ describe("Scheduler", () => {
           sampleSlackAutomation,
           { ...sampleSlackAutomation, id: "auto-slack-2" },
         ]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         mockIsAutomationExecutionAuthorized
           .mockResolvedValueOnce(false)
           .mockResolvedValueOnce(true);
@@ -2435,6 +2539,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 1,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
@@ -2447,7 +2552,7 @@ describe("Scheduler", () => {
 
       it("launches without history when the context request fails", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
         const stub = createMockSessionStub();
         const env = createEnv(
@@ -2462,6 +2567,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2471,7 +2577,7 @@ describe("Scheduler", () => {
 
       it("launches without history when the context request is aborted", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         // What a timed-out binding fetch looks like to the caller.
         const slackFetch = vi.fn(async () => {
           throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
@@ -2489,6 +2595,7 @@ describe("Scheduler", () => {
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         // The run still launches — a slow Slack read must not strand children.
@@ -2499,21 +2606,20 @@ describe("Scheduler", () => {
 
       it("uses the baseline prompt when lazy prompt construction rejects", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { env, stub } = threadContextEnv();
-        const scheduler = createScheduler(env);
-        const promptBuilder = scheduler as unknown as {
-          buildSlackContextWithThread: () => Promise<string>;
-        };
-        vi.spyOn(promptBuilder, "buildSlackContextWithThread").mockRejectedValue(
-          new Error("prompt provider failed")
-        );
+        const contextWithThread = vi
+          .spyOn(AutomationSlackService.prototype, "contextWithThread")
+          .mockRejectedValueOnce(new Error("prompt provider failed"));
+        const scheduler = createAutomationScheduler(env.DB, env, createTestBackgroundTasks());
 
         expect(await scheduler.event(makeSlackEvent())).toEqual({
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
+        contextWithThread.mockRestore();
 
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
@@ -2528,13 +2634,14 @@ describe("Scheduler", () => {
 
       it("skips the request entirely for a top-level message", async () => {
         mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
         const { slackFetch, env } = threadContextEnv();
 
         expect(await createScheduler(env).event(makeSlackEvent({ threadTs: undefined }))).toEqual({
           triggered: 1,
           skipped: 0,
           steered: 0,
+          invocationIds: [expect.any(String)],
         });
 
         expect(threadContextCalls(slackFetch)).toHaveLength(0);
@@ -2543,7 +2650,7 @@ describe("Scheduler", () => {
 
     it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
@@ -2559,19 +2666,13 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also update the changelog" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
 
-      // The continuity lookup is scoped to the thread's concurrency key and a
-      // 7-day window measured from now.
-      expect(mockStore.getLatestSteerableRunForThread).toHaveBeenCalledWith(
+      // The continuity lookup is scoped to the thread's concurrency key.
+      expect(mockStore.getLatestContinuableRun).toHaveBeenCalledWith(
         "auto-slack",
-        "slack:C1:thread-root",
-        expect.any(Number)
+        "slack:C1:thread-root"
       );
-      const sinceMs = mockStore.getLatestSteerableRunForThread.mock.calls[0]?.[2] as number;
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      expect(sinceMs).toBeGreaterThanOrEqual(Date.now() - sevenDaysMs - 1000);
-      expect(sinceMs).toBeLessThanOrEqual(Date.now() - sevenDaysMs + 1000);
 
       // The follow-up was enqueued onto the existing session as a slack-sourced
       // turn, so its reply posts back in-thread via /callbacks/complete.
@@ -2596,30 +2697,316 @@ describe("Scheduler", () => {
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
     });
 
+    it("attributes a Slack automation follow-up to the actor, not the automation owner", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockImplementation(async (userId: string) =>
+        userId === "slack-actor-user"
+          ? [{ provider: "github", providerUserId: "77", providerLogin: "reviewer" }]
+          : []
+      );
+      mockUserStoreGetUserById.mockResolvedValue({ displayName: "Slack Reviewer" });
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).resolves.toMatchObject({ steered: 1 });
+      await expect(getPromptBody(vi.mocked(stub.fetch))).resolves.toMatchObject({
+        authorId: "slack:U1",
+        canonicalUserId: "slack-actor-user",
+        scmEnrichment: {
+          userId: "77",
+          login: "reviewer",
+          name: "Slack Reviewer",
+          email: "77+reviewer@users.noreply.github.com",
+        },
+      });
+    });
+
+    it("resolves the Slack actor's verified profile when no login is cached", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { id: "github-account-77", provider: "github", providerUserId: "77", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        account: {
+          id: "github-account-77",
+          providerId: "github",
+          accountId: "77",
+        },
+        user: { name: "Verified Actor" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "77",
+          login: "verified-actor",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(
+          makeSlackEvent({ text: "follow up" })
+        )
+      ).toMatchObject({ steered: 1, triggered: 0 });
+      expect(await getPromptBody(vi.mocked(stub.fetch))).toMatchObject({
+        canonicalUserId: "slack-actor-user",
+        scmEnrichment: {
+          userId: "77",
+          login: "verified-actor",
+          email: "77+verified-actor@users.noreply.github.com",
+        },
+      });
+      expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
+        query: { accountId: "github-account-77", userId: "slack-actor-user" },
+      });
+    });
+
+    it.each(["empty", "unavailable"])(
+      "steers without attribution when the actor grant is %s",
+      async (scenario) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-running" })
+        );
+        mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+          {
+            id: "github-account-77",
+            provider: "github",
+            providerUserId: "77",
+            providerLogin: null,
+          },
+        ]);
+        if (scenario === "empty") mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "" });
+        else mockGetGitHubAccessToken.mockRejectedValue(new Error("revoked grant"));
+        const stub = createMockSessionStub();
+        expect(
+          await createScheduler(createEnv(undefined, stub)).event(
+            makeSlackEvent({ text: "follow up" })
+          )
+        ).toMatchObject({ steered: 1, triggered: 0 });
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        if (scenario === "empty")
+          expect(prompt.scmEnrichment).toMatchObject({ userId: "77", login: null });
+        else
+          expect(prompt.scmEnrichment).toEqual({
+            userId: null,
+            login: null,
+            name: null,
+            email: null,
+          });
+        expect(mockGitHubAccountInfo).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not steer or start an owner run for a mismatched actor profile", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { id: "github-account-77", provider: "github", providerUserId: "77", providerLogin: null },
+      ]);
+      mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
+      mockGitHubAccountInfo.mockResolvedValue({
+        account: {
+          id: "github-account-77",
+          providerId: "github",
+          accountId: "42",
+        },
+        user: { name: "Wrong" },
+        data: {
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "42",
+          login: "wrong",
+          verifiedEmails: [],
+          primaryEmail: null,
+        },
+      });
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).rejects.toThrow("mismatched GitHub account");
+      expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it("steers a natural follow-up without attribution when GitHub identity is ambiguous", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockResolvedValue([
+        { provider: "github", providerUserId: "77" },
+        { provider: "github", providerUserId: "78" },
+      ]);
+      const stub = createMockSessionStub();
+      expect(
+        await createScheduler(createEnv(undefined, stub)).event(
+          makeSlackEvent({ text: "also update the changelog" })
+        )
+      ).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
+      const body = await getPromptBody(vi.mocked(stub.fetch));
+      expect(body.canonicalUserId).toBe("slack-actor-user");
+      expect(body.scmEnrichment).toEqual({ userId: null, login: null, name: null, email: null });
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it("does not start an owner run when steering attribution storage fails", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(
+        sampleRunRow({ session_id: "sess-running" })
+      );
+      mockUserStoreGetIdentitiesForUser.mockRejectedValue(new Error("D1 unavailable"));
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())
+      ).rejects.toThrow("D1 unavailable");
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+    });
+
     it("resolves and authorizes the Slack actor once across several steering candidates", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([
         sampleSlackAutomation,
         { ...sampleSlackAutomation, id: "auto-slack-2" },
       ]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
-        sampleRunRow({ id: "active-run", session_id: "sess-running" })
-      );
+      mockStore.getLatestContinuableRun
+        .mockResolvedValueOnce(sampleRunRow({ id: "active-run-1", session_id: "sess-running-1" }))
+        .mockResolvedValueOnce(sampleRunRow({ id: "active-run-2", session_id: "sess-running-2" }));
 
       expect(await createScheduler().event(makeSlackEvent({ text: "follow up" }))).toEqual({
         triggered: 0,
         skipped: 0,
         steered: 2,
+        invocationIds: ["inv-1", "inv-1"],
       });
 
       expect(mockUserStoreGetIdentity).toHaveBeenCalledTimes(1);
-      expect(mockIsPrincipalAuthorized).toHaveBeenCalledTimes(1);
+      expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+      expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith("slack-actor-user");
+      expect(mockEvaluateSessionAdmission.mock.calls.map(([, , id]) => id)).toEqual([
+        "sess-running-1",
+        "sess-running-2",
+      ]);
+    });
+
+    describe("Slack steering session admission", () => {
+      const actorUserId = "slack-actor-user";
+      const sessionId = "sess-steering";
+
+      beforeEach(() => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ session_id: sessionId })
+        );
+      });
+
+      it.each([
+        "unresolved actor",
+        "missing collaboration permission",
+        "suspended actor",
+        "authorization unavailable",
+      ])("fails closed before session admission for %s", async (scenario) => {
+        if (scenario === "unresolved actor") mockUserStoreGetIdentity.mockResolvedValue(null);
+        if (scenario === "missing collaboration permission") {
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization({ permissions: [] })
+          );
+        }
+        if (scenario === "suspended actor") {
+          mockGetEffectiveAuthorization.mockResolvedValue(
+            steeringAuthorization({ suspendedAt: 1 })
+          );
+        }
+        if (scenario === "authorization unavailable") {
+          mockGetEffectiveAuthorization.mockRejectedValue(new Error("authorization unavailable"));
+        }
+        const stub = createMockSessionStub();
+
+        expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [],
+        });
+        expect(stub.fetch).not.toHaveBeenCalled();
+        expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        if (scenario === "unresolved actor") {
+          expect(mockGetEffectiveAuthorization).not.toHaveBeenCalled();
+        } else {
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith(actorUserId);
+        }
+      });
+
+      it("does not steer or start a replacement run when the session index row is missing", async () => {
+        mockEvaluateSessionAdmission.mockResolvedValue({ kind: "not_found" });
+        const stub = createMockSessionStub();
+
+        expect(await createScheduler(createEnv(undefined, stub)).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [],
+        });
+        expect(stub.fetch).not.toHaveBeenCalled();
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("checks each session instead of reusing the first admission", async () => {
+        const sessionIds = ["sess-allowed", "sess-denied"];
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          sampleSlackAutomation,
+          { ...sampleSlackAutomation, id: "auto-slack-2" },
+        ]);
+        mockStore.getLatestContinuableRun
+          .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[0] }))
+          .mockResolvedValueOnce(sampleRunRow({ session_id: sessionIds[1] }));
+        mockEvaluateSessionAdmission
+          .mockResolvedValueOnce({ kind: "allowed", legacyPermission: null })
+          .mockResolvedValueOnce({ kind: "action_denied", reason: "not_collaborator" });
+        const requests = vi.fn(async (_request: Request, _sessionId: string) =>
+          Response.json({ messageId: "msg-steer", status: "queued" })
+        );
+        const env = createEnv({ TEAMS_ENFORCEMENT: "shadow" });
+        env.SESSION = fakeSessionRuntimeDispatch(requests);
+
+        expect(await createScheduler(env).event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 1,
+          invocationIds: ["inv-1"],
+        });
+        expect(requests).toHaveBeenCalledTimes(1);
+        expect(requests.mock.calls[0][1]).toBe("sess-allowed");
+        expect(mockEvaluateSessionAdmission.mock.calls.map(([, , id]) => id)).toEqual(sessionIds);
+        for (const [ctx, , id, action, slot] of mockEvaluateSessionAdmission.mock.calls) {
+          expect(ctx.principal).toEqual({ kind: "user", userId: actorUserId });
+          expect(sessionIds).toContain(id);
+          expect(action).toBe("collaborate");
+          expect(slot).toBeNull();
+        }
+        expect(mockGetEffectiveAuthorization).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        expect(mockIsAutomationExecutionAuthorized).not.toHaveBeenCalled();
+      });
     });
 
     it("continues the same session on a reply after the run has completed", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // The thread's run finished, but its session is still steerable within the
       // window — like replying after an @mention turn ends.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
       );
 
@@ -2633,7 +3020,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "actually, can you also bump the version?" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.source).toBe("slack");
@@ -2646,7 +3033,7 @@ describe("Scheduler", () => {
 
     it("uses a no-repository label when steering a repo-less run's thread", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({
           id: "active-run",
           session_id: "sess-running",
@@ -2667,7 +3054,7 @@ describe("Scheduler", () => {
         makeSlackEvent({ text: "thanks — also check the rollout" })
       );
 
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1 });
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 1, invocationIds: ["inv-1"] });
 
       const promptBody = await getPromptBody(fetchMock);
       expect(promptBody.callbackContext).toMatchObject({
@@ -2678,7 +3065,7 @@ describe("Scheduler", () => {
 
     it("anchors the thread to the message ts for a top-level (non-reply) follow-up", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "active-run", session_id: "sess-running" })
       );
 
@@ -2693,6 +3080,7 @@ describe("Scheduler", () => {
         triggered: 0,
         skipped: 0,
         steered: 1,
+        invocationIds: ["inv-1"],
       });
 
       const promptBody = await getPromptBody(fetchMock);
@@ -2705,7 +3093,7 @@ describe("Scheduler", () => {
     it("starts a fresh event invocation when no steerable session exists (outside the window)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // Outside the continuity window → no steerable run, and no active run.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -2717,7 +3105,12 @@ describe("Scheduler", () => {
       // Matching text so the trigger conditions pass.
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
 
       const params = mockStore.insertInvocationGuarded.mock.calls[0][0];
       expect(params.invocation).toMatchObject({
@@ -2748,7 +3141,7 @@ describe("Scheduler", () => {
 
     it("appends workspace session instructions to a new Slack automation session", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -2758,7 +3151,12 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         "Run tests\n\n## Additional Instructions\n\nAlways run tests.\n---\n\n" +
@@ -2770,7 +3168,7 @@ describe("Scheduler", () => {
 
     it("does not append whitespace-only workspace instructions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -2782,6 +3180,7 @@ describe("Scheduler", () => {
         triggered: 1,
         skipped: 0,
         steered: 0,
+        invocationIds: [expect.any(String)],
       });
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
@@ -2794,7 +3193,7 @@ describe("Scheduler", () => {
 
     it("launches without workspace instructions when the settings read fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
 
       const stub = createMockSessionStub();
@@ -2804,7 +3203,12 @@ describe("Scheduler", () => {
 
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 1,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
         `Run tests\n---\n\n${sampleSlackContextBlock}\n\n---\n\n` +
@@ -2816,7 +3220,7 @@ describe("Scheduler", () => {
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // Run is still starting → not yet steerable, but it blocks a second run.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue({
         id: "starting-run",
         status: "starting",
@@ -2831,7 +3235,12 @@ describe("Scheduler", () => {
       const scheduler = createScheduler(env);
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       // The skip is a childless invocation carrying the message coordinates
       // but never the dedup trigger_key (a skip must not consume the slot).
       expect(mockStore.insertSkippedInvocation).toHaveBeenCalledWith(
@@ -2851,29 +3260,91 @@ describe("Scheduler", () => {
 
     it("deduplicates a redelivered event via the invocation trigger-key index", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
       mockStore.getActiveRunForKey.mockResolvedValue(null);
       mockStore.insertInvocationGuarded.mockRejectedValue(
         new Error(
           "D1_ERROR: UNIQUE constraint failed: automation_invocations.automation_id, automation_invocations.trigger_key"
         )
       );
+      // A concurrent delivery wins the insert race after the pre-check missed it.
+      mockStore.getInvocationIdByTriggerKey
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce("inv-winner");
 
       const scheduler = createScheduler();
       const result = await scheduler.event(makeSlackEvent());
 
-      expect(result).toEqual({ triggered: 0, skipped: 1, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: ["inv-winner"],
+      });
       // Dedup is a silent no-op — no skip row, no schedule advance.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
       expect(mockStore.update).not.toHaveBeenCalled();
     });
+
+    it("resolves a redelivery to the owning invocation even while it is still running", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestContinuableRun.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
+      mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-original");
+      const event = makeSlackEvent();
+
+      const result = await createScheduler().event(event);
+
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 1,
+        steered: 0,
+        invocationIds: ["inv-original"],
+      });
+      expect(mockStore.getInvocationIdByTriggerKey).toHaveBeenCalledWith(
+        sampleSlackAutomation.id,
+        event.triggerKey
+      );
+      // Not an overlap: no skip row and no "already active" notice for a redelivery.
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { path: "the overlap pre-check", active: true, inserted: true },
+      { path: "a lost guarded insert", active: false, inserted: false },
+    ])(
+      "resolves a concurrent same-key delivery admitted after the trigger-key check ($path)",
+      async ({ active, inserted }) => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(
+          active ? sampleRunRow({ id: "original-child" }) : null
+        );
+        mockStore.insertInvocationGuarded.mockResolvedValueOnce({ inserted });
+        // The original commits its invocation between the pre-check and the overlap.
+        mockStore.getInvocationIdByTriggerKey
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce("inv-original");
+
+        const result = await createScheduler().event(makeSlackEvent());
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-original"],
+        });
+        expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      }
+    );
 
     it("falls through to a new trigger when steering the session fails", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       // A completed run is steerable, but the enqueue will fail; with the run no
       // longer active, the reply is re-evaluated as a new trigger (it matches),
       // mirroring the @mention path's stale-session → new-session recovery.
-      mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+      mockStore.getLatestContinuableRun.mockResolvedValue(
         sampleRunRow({ id: "done-run", status: "completed", session_id: "sess-done" })
       );
       mockStore.getActiveRunForKey.mockResolvedValue(null);
@@ -2893,7 +3364,12 @@ describe("Scheduler", () => {
 
       // Steer failed → fell through → matched conditions → invocation created
       // but its only child failed to launch, so triggered stays 0.
-      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0 });
+      expect(result).toEqual({
+        triggered: 0,
+        skipped: 0,
+        steered: 0,
+        invocationIds: [expect.any(String)],
+      });
       expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
         expect.objectContaining({
           invocation: expect.objectContaining({ automation_id: "auto-slack", source: "event" }),
@@ -2901,6 +3377,887 @@ describe("Scheduler", () => {
       );
       // Not treated as a concurrency skip.
       expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+    });
+
+    describe("webhook sessionKey", () => {
+      const sampleWebhookAutomation = {
+        ...sampleAutomation,
+        id: "auto-hook",
+        name: "Card agent",
+        trigger_type: "webhook",
+        schedule_cron: null,
+        next_run_at: null,
+        trigger_config: JSON.stringify({ conditions: [] }),
+      };
+
+      const iterateOnly = {
+        ...sampleWebhookAutomation,
+        trigger_config: JSON.stringify({
+          conditions: [
+            {
+              type: "jsonpath",
+              operator: "all_match",
+              value: [{ path: "$.mode", comparison: "eq", value: "iterate" }],
+            },
+          ],
+        }),
+      };
+
+      function webhookEvent(body: Record<string, unknown>, idempotencyKey?: string) {
+        return normalizeWebhookEvent("auto-hook", body, { idempotencyKey, sessionKey: "card-42" });
+      }
+
+      async function promptRequestBody(input: RequestInfo, init?: RequestInit) {
+        const text = input instanceof Request ? await input.clone().text() : String(init?.body);
+        return JSON.parse(text) as Record<string, unknown>;
+      }
+
+      beforeEach(() => {
+        mockStore.getById.mockResolvedValue(sampleWebhookAutomation);
+      });
+
+      it("continues the session an earlier delivery with the same key started", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", status: "completed", session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "iterate", pr: 8262 }, "review-1")
+        );
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 0,
+          steered: 1,
+          invocationIds: ["inv-card"],
+        });
+        expect(mockStore.getLatestContinuableRun).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:session:card-42"
+        );
+        const promptBody = await getPromptBody(vi.mocked(stub.fetch));
+        expect(promptBody.source).toBe("automation");
+        expect(promptBody.callbackContext).toBeUndefined();
+        expect(promptBody.clientRequestId).toMatch(/^webhook:[0-9a-f]{64}$/);
+        expect(promptBody.content).toContain('"pr": 8262');
+        expect(promptBody.content).not.toContain(sampleWebhookAutomation.instructions);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("resolves a retry of the delivery that started the session to its invocation", async () => {
+        mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "build" }, "first")
+        );
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-first"],
+        });
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      });
+
+      it("resolves a retry to its invocation after the conditions stop matching it", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.getInvocationIdByTriggerKey.mockResolvedValue("inv-first");
+
+        const result = await createScheduler().event(webhookEvent({ mode: "build" }, "first"));
+
+        expect(result).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-first"],
+        });
+        expect(mockStore.getInvocationIdByTriggerKey).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:first"
+        );
+      });
+
+      it("sends a retried follow-up with the same request id and counts the session's conflict as a duplicate", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+        );
+        const requestIds: unknown[] = [];
+        const stub = {
+          fetch: vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+            const url = typeof input === "string" ? input : input.url;
+            if (new URL(url).pathname !== "/internal/prompt")
+              return new Response("Not Found", { status: 404 });
+            requestIds.push((await promptRequestBody(input, init)).clientRequestId);
+            return requestIds.length === 1
+              ? Response.json({ messageId: "msg-1", status: "queued" })
+              : Response.json({ code: "PROMPT_REQUEST_CONFLICT" }, { status: 409 });
+          }),
+        } as never;
+        const scheduler = createScheduler(createEnv(undefined, stub));
+
+        expect(await scheduler.event(webhookEvent({ mode: "iterate" }, "review-1"))).toMatchObject({
+          steered: 1,
+        });
+        expect(await scheduler.event(webhookEvent({ mode: "iterate" }, "review-1"))).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: ["inv-card"],
+        });
+        expect(requestIds[1]).toBe(requestIds[0]);
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it("starts a run of its own, keyed to the session, when no session has the key yet", async () => {
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "build" }, "first")
+        );
+
+        expect(result.steered).toBe(0);
+        const claim = mockStore.claimFollowUpReceipt.mock.calls[0]?.[0];
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            invocation: expect.objectContaining({
+              id: claim.claimInvocationId,
+              concurrency_key: "webhook:session:card-42",
+            }),
+          })
+        );
+        expect(mockStore.acceptFollowUpReceipt).toHaveBeenCalledWith(
+          "auto-hook",
+          "webhook:idem:first",
+          claim.claimId,
+          claim.claimInvocationId,
+          expect.any(Number)
+        );
+        expect(mockStore.acceptFollowUpReceipt.mock.invocationCallOrder[0]).toBeLessThan(
+          mockStore.claimRunSession.mock.invocationCallOrder[0]!
+        );
+      });
+
+      it("starts a fresh run when the session has been idle past the window", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({
+            session_id: "sess-card",
+            last_activity_at: Date.now() - 8 * 24 * 60 * 60 * 1000,
+          })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "build" })
+        );
+
+        expect(result.steered).toBe(0);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalled();
+      });
+
+      describe("while the run launches", () => {
+        const heldRow = (prompt: Record<string, unknown>) => ({
+          id: "held-1",
+          run_id: "run-1",
+          actor_user_id: "user-1",
+          actor_author_id: "user-1",
+          client_request_id: "webhook:held",
+          prompt: JSON.stringify(prompt),
+          request_id: "webhook:idem:held",
+          created_at: now,
+        });
+
+        async function promptContents(fetchMock: ReturnType<typeof vi.fn>) {
+          const contents: unknown[] = [];
+          for (const [input, init] of fetchMock.mock.calls as [RequestInfo, RequestInit?][]) {
+            const url = typeof input === "string" ? input : input.url;
+            if (new URL(url).pathname !== "/internal/prompt") continue;
+            contents.push((await promptRequestBody(input, init)).content);
+          }
+          return contents;
+        }
+
+        it.each([
+          { phase: "before it has a session", run: { status: "starting", session_id: null } },
+          { phase: "before its first prompt", run: { first_prompt_pending: 1 } },
+          { phase: "before earlier held follow-ups are released", run: { has_held_prompts: 1 } },
+        ])("holds a follow-up that arrives $phase", async ({ run }) => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", ...run })
+          );
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 0,
+            steered: 1,
+            invocationIds: ["inv-card"],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+          expect(mockEvaluateSessionAdmission).not.toHaveBeenCalled();
+          const held = mockStore.holdPromptForLaunchingRun.mock.calls[0]?.[0] as {
+            run_id: string;
+            actor_user_id: string;
+            client_request_id: string;
+            request_id: string;
+            prompt: string;
+          };
+          expect(held).toMatchObject({
+            run_id: "run-1",
+            actor_user_id: "user-1",
+            client_request_id: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
+            request_id: "webhook:idem:review-2",
+          });
+          expect(JSON.parse(held.prompt).clientRequestId).toBe(held.client_request_id);
+          expect(JSON.parse(held.prompt)).toMatchObject({
+            source: "automation",
+            clientRequestId: expect.stringMatching(/^webhook:[0-9a-f]{64}$/),
+          });
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        });
+
+        it("continues the session directly when the run finishes launching first", async () => {
+          mockStore.getLatestContinuableRun
+            .mockResolvedValueOnce(
+              sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+            )
+            .mockResolvedValueOnce(
+              sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 0 })
+            );
+          mockStore.holdPromptForLaunchingRun.mockResolvedValue("not_holding");
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" })
+          );
+
+          expect(result).toMatchObject({ steered: 1, invocationIds: ["inv-card"] });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(1);
+        });
+
+        it("skips a retry of a follow-up already held for the run", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", first_prompt_pending: 1 })
+          );
+          mockStore.holdPromptForLaunchingRun.mockResolvedValue("duplicate");
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: ["inv-card"],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+        });
+
+        it("releases held follow-ups after the run's own first prompt, including ones held meanwhile", async () => {
+          mockStore.getHeldPrompts
+            .mockResolvedValueOnce([
+              heldRow({ content: "HELD", authorId: "user-1", source: "automation" }),
+            ])
+            .mockResolvedValueOnce([
+              {
+                ...heldRow({ content: "HELD-LATER", authorId: "user-1", source: "automation" }),
+                id: "held-2",
+              },
+            ]);
+          const stub = createMockSessionStub();
+
+          await createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "build" }));
+
+          const contents = await promptContents(vi.mocked(stub.fetch));
+          expect(contents).toHaveLength(3);
+          expect(contents[0]).toContain(sampleWebhookAutomation.instructions);
+          expect(contents.slice(1)).toEqual(["HELD", "HELD-LATER"]);
+          expect(mockStore.markRunFirstPromptQueued.mock.invocationCallOrder[0]).toBeLessThan(
+            mockStore.getHeldPrompts.mock.invocationCallOrder[0]!
+          );
+          expect(mockStore.deleteHeldPrompt.mock.calls).toEqual([["held-1"], ["held-2"]]);
+        });
+
+        it.each([
+          { refusal: "cannot be reached", status: 503, code: null },
+          { refusal: "has a full queue", status: 429, code: "PROMPT_QUEUE_FULL" },
+        ])(
+          "keeps held follow-ups, in order, until the session $refusal no longer",
+          async ({ status, code }) => {
+            mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
+              sampleRunRow({ session_id: "sess-card", first_prompt_pending: 0 }),
+            ]);
+            const held = [
+              heldRow({ content: "HELD-1" }),
+              { ...heldRow({ content: "HELD-2" }), id: "held-2" },
+            ];
+            mockStore.getHeldPrompts.mockResolvedValue(held);
+            let accepting = false;
+            const fetch = vi.fn(async (_input: RequestInfo) =>
+              accepting
+                ? Response.json({ messageId: "msg", status: "queued" })
+                : Response.json({ error: "busy", code }, { status })
+            );
+            const scheduler = createScheduler(createEnv(undefined, { fetch } as never));
+
+            await scheduler.tick();
+
+            // The first follow-up stays held, and the one behind it is not tried.
+            expect(promptCallCount(fetch)).toBe(1);
+            expect(mockStore.deleteHeldPrompt).not.toHaveBeenCalled();
+            expect(mockStore.deferHeldPrompts).toHaveBeenCalledWith("run-1", expect.any(Number));
+
+            accepting = true;
+            mockStore.getHeldPrompts.mockReset().mockResolvedValueOnce(held).mockResolvedValue([]);
+            await scheduler.tick();
+
+            expect(promptCallCount(fetch)).toBe(3);
+            expect(mockStore.deleteHeldPrompt.mock.calls).toEqual([["held-1"], ["held-2"]]);
+          }
+        );
+
+        it.each([
+          {
+            state: "its first prompt is recorded as queued",
+            run: { first_prompt_pending: 0 },
+            firstPromptQueued: false,
+            outcome: "released",
+          },
+          {
+            state: "the session took its first prompt but the record of it is missing",
+            run: { first_prompt_pending: 1 },
+            firstPromptQueued: true,
+            outcome: "released",
+          },
+          {
+            state: "it ended after the session took its first prompt",
+            run: { status: "failed", first_prompt_pending: 1 },
+            firstPromptQueued: true,
+            outcome: "released",
+          },
+          {
+            state: "it ended before its first prompt",
+            run: { status: "failed", first_prompt_pending: 1 },
+            firstPromptQueued: false,
+            outcome: "dropped",
+          },
+          {
+            state: "it is still launching",
+            run: { first_prompt_pending: 1 },
+            firstPromptQueued: false,
+            outcome: "deferred",
+          },
+          {
+            state: "it has not claimed a session yet",
+            run: { status: "starting", session_id: null },
+            firstPromptQueued: false,
+            outcome: "deferred",
+          },
+          {
+            state: "it failed before claiming a session",
+            run: { status: "failed", session_id: null },
+            firstPromptQueued: false,
+            outcome: "dropped",
+          },
+        ])(
+          "settles held follow-ups in the sweep when $state",
+          async ({ run, firstPromptQueued, outcome }) => {
+            mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
+              sampleRunRow({ session_id: "sess-card", ...run }),
+            ]);
+            mockStore.getHeldPrompts.mockResolvedValueOnce([heldRow({ content: "HELD" })]);
+            const stub = createMockSessionStub({ firstPromptQueued });
+
+            await createScheduler(createEnv(undefined, stub)).tick();
+
+            expect(promptCallCount(vi.mocked(stub.fetch))).toBe(outcome === "released" ? 1 : 0);
+            expect(mockStore.deleteHeldPrompt).toHaveBeenCalledTimes(
+              outcome === "released" ? 1 : 0
+            );
+            expect(mockStore.deleteHeldPromptsForRun).toHaveBeenCalledTimes(
+              outcome === "dropped" ? 1 : 0
+            );
+            expect(mockStore.deferHeldPrompts).toHaveBeenCalledTimes(
+              outcome === "deferred" ? 1 : 0
+            );
+            expect(mockStore.markRunFirstPromptQueued).toHaveBeenCalledTimes(
+              outcome === "released" && run.first_prompt_pending === 1 ? 1 : 0
+            );
+          }
+        );
+
+        it("defers a run whose session cannot say whether it took the first prompt", async () => {
+          mockStore.getRunsWithDueHeldPrompts.mockResolvedValue([
+            sampleRunRow({ session_id: "sess-card", first_prompt_pending: 1 }),
+          ]);
+          const fetch = vi.fn(async (_input: RequestInfo) => new Response("down", { status: 500 }));
+
+          await createScheduler(createEnv(undefined, { fetch } as never)).tick();
+
+          expect(mockStore.deferHeldPrompts).toHaveBeenCalledWith("run-1", expect.any(Number));
+          expect(mockStore.deleteHeldPromptsForRun).not.toHaveBeenCalled();
+        });
+
+        it("sends the run's first prompt under its stable request id", async () => {
+          const stub = createMockSessionStub();
+
+          await createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "build" }));
+
+          expect(await getPromptBody(vi.mocked(stub.fetch))).toMatchObject({
+            clientRequestId: expect.stringMatching(/^automation-run:/),
+          });
+        });
+
+        it("skips a retry the session reports as already queued", async () => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card" })
+          );
+          const fetch = vi.fn(async (_input: RequestInfo) =>
+            Response.json({ messageId: "msg-1", status: "queued", deduplicated: true })
+          );
+
+          const result = await createScheduler(createEnv(undefined, { fetch } as never)).event(
+            webhookEvent({ mode: "iterate" }, "review-2")
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: ["inv-card"],
+          });
+        });
+      });
+
+      it("refuses the delivery, rather than starting a fresh run, when the session cannot be reached", async () => {
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+        );
+        const stub = {
+          fetch: vi.fn(async () => {
+            throw new Error("network down");
+          }),
+        } as never;
+
+        await expect(
+          createScheduler(createEnv(undefined, stub)).event(webhookEvent({ mode: "iterate" }))
+        ).rejects.toMatchObject({
+          name: "SessionFollowUpRefusedError",
+          invocationId: "inv-card",
+          status: null,
+          code: null,
+        });
+        expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { refusal: "a closed session", status: 409, code: "SESSION_NOT_PROMPTABLE" },
+        {
+          refusal: "a sandbox that needs recovery",
+          status: 409,
+          code: "SANDBOX_RECOVERY_REQUIRED",
+        },
+        { refusal: "a spent budget", status: 409, code: "BUDGET_EXHAUSTED" },
+        { refusal: "a full queue", status: 429, code: "PROMPT_QUEUE_FULL" },
+        { refusal: "a server error", status: 500, code: null },
+      ])(
+        "refuses the delivery, rather than starting a fresh run, for $refusal",
+        async ({ status, code }) => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+          );
+          const stub = {
+            fetch: vi.fn(async () =>
+              Response.json({ error: "refused", ...(code ? { code } : {}) }, { status })
+            ),
+          } as never;
+
+          const refusal = await createScheduler(createEnv(undefined, stub))
+            .event(webhookEvent({ mode: "iterate" }, "review-1"))
+            .then(
+              () => null,
+              (error: unknown) => error
+            );
+
+          expect(refusal).toBeInstanceOf(SessionFollowUpRefusedError);
+          expect(refusal).toMatchObject({ invocationId: "inv-card", status, code });
+          expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalled();
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+        }
+      );
+
+      it.each(["missing collaboration permission", "session admission denied"])(
+        "neither steers nor starts a run for an executor with %s",
+        async (scenario) => {
+          mockStore.getLatestContinuableRun.mockResolvedValue(
+            sampleRunRow({ invocation_id: "inv-card", session_id: "sess-card" })
+          );
+          if (scenario === "missing collaboration permission") {
+            mockGetEffectiveAuthorization.mockResolvedValue(
+              steeringAuthorization({ permissions: [] })
+            );
+          } else {
+            mockEvaluateSessionAdmission.mockResolvedValue({ kind: "not_found" });
+          }
+          const stub = createMockSessionStub();
+
+          const result = await createScheduler(createEnv(undefined, stub)).event(
+            webhookEvent({ mode: "iterate" })
+          );
+
+          expect(result).toEqual({
+            triggered: 0,
+            skipped: 1,
+            steered: 0,
+            invocationIds: [],
+          });
+          expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+          expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+          expect(mockGetEffectiveAuthorization).toHaveBeenCalledWith("user-1");
+        }
+      );
+
+      it("does not continue a session for a delivery that fails the conditions", async () => {
+        mockStore.getById.mockResolvedValue(iterateOnly);
+        mockStore.getLatestContinuableRun.mockResolvedValue(
+          sampleRunRow({ session_id: "sess-card" })
+        );
+        const stub = createMockSessionStub();
+
+        const result = await createScheduler(createEnv(undefined, stub)).event(
+          webhookEvent({ mode: "demo" }, "no-match")
+        );
+
+        expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+        expect(mockStore.claimFollowUpReceipt).toHaveBeenCalled();
+        expect(mockStore.releaseFollowUpReceipt).toHaveBeenCalled();
+        expect(promptCallCount(vi.mocked(stub.fetch))).toBe(0);
+      });
+    });
+  });
+
+  describe("current team repository grants", () => {
+    const teamId = "33333333333333333333333333333333";
+    const activeTeam: Team = {
+      id: teamId,
+      slug: "automation-grants",
+      name: "Automation grants",
+      description: null,
+      joinPolicy: "invite_only",
+      defaultVisibility: "team",
+      defaultEnvironmentId: null,
+      grantsVersion: 1,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const teamAutomation: AutomationRow = {
+      ...sampleAutomation,
+      harness: "opencode",
+      owner_team_id: teamId,
+      event_type: null,
+      trigger_config: null,
+      trigger_auth_data: null,
+    };
+    const environment = {
+      id: "env_55555555555555555555555555555555",
+      owner_team_id: teamId,
+      name: "Full workspace",
+    };
+    const members = [
+      {
+        ...repositoryRow("auto-1", { base_branch: "main" }),
+        environment_id: environment.id,
+        position: 0,
+      },
+      {
+        ...repositoryRow("auto-1", { repo_name: "api", repo_id: 67890, base_branch: "develop" }),
+        environment_id: environment.id,
+        position: 1,
+      },
+    ];
+    beforeEach(() => {
+      mockTeamGetById.mockResolvedValue(activeTeam);
+      mockStore.getById.mockResolvedValue(teamAutomation);
+      mockStore.getOverdueAutomations.mockResolvedValue([teamAutomation]);
+      mockEnvironmentGetById.mockReset().mockResolvedValue(environment);
+      mockEnvironmentRepositories.mockReset().mockResolvedValue(members);
+    });
+    describe("launch-time re-authorization", () => {
+      function launchableRepositories(names: string[]) {
+        selectRepositories(
+          "auto-1",
+          names.map((name, index) =>
+            repositoryRow("auto-1", { repo_name: name, repo_id: 1000 + index })
+          )
+        );
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+          repoId: 1000 + names.indexOf(name),
+          repoOwner: owner,
+          repoName: name,
+          defaultBranch: "main",
+        }));
+        mockTeamGrantCovers.mockResolvedValue(true);
+      }
+
+      /** Admit the firing, then deny every launch. */
+      function denyAfterAdmission() {
+        mockIsAutomationExecutionAuthorized.mockResolvedValueOnce(true).mockResolvedValue(false);
+      }
+
+      it("re-checks admission's requirements as the last step before session creation", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 0 }));
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          name: "AutomationExecutionUnauthorizedError",
+          reason: "execution_authorization_denied",
+        });
+        const admissionRequest = {
+          automationId: "auto-1",
+          executionUserId: "manual-user",
+          requiresRepositoryUse: true,
+          requiresEnvironmentUse: false,
+        };
+        expect(mockIsAutomationExecutionAuthorized.mock.calls).toEqual([
+          [expect.anything(), admissionRequest],
+          [expect.anything(), admissionRequest],
+        ]);
+        const launchCheck = mockIsAutomationExecutionAuthorized.mock.invocationCallOrder[1];
+        expect(launchCheck).toBeGreaterThan(
+          mockStore.setRunExecutionDeadline.mock.invocationCallOrder[0]
+        );
+        expect(launchCheck).toBeGreaterThan(
+          vi.mocked(resolveManagedSkills).mock.invocationCallOrder[0]
+        );
+        expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+        expect(mockStore.updateRun).toHaveBeenCalledWith(expect.any(String), {
+          status: "unauthorized",
+          failure_reason: "execution_authorization_denied",
+          session_id: null,
+          completed_at: expect.any(Number),
+        });
+        expect(mockStore.tryMarkInvocationFailureCounted).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("reports a team archived after admission", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+        mockTeamGetById
+          .mockResolvedValueOnce(activeTeam)
+          .mockResolvedValue({ ...activeTeam, archivedAt: 2 });
+
+        await expect(createScheduler().trigger("auto-1", "manual-user")).rejects.toMatchObject({
+          reason: "team_archived",
+        });
+      });
+
+      it("counts a scheduled launch denial as skipped without a failure strike", async () => {
+        launchableRepositories(["web-app"]);
+        denyAfterAdmission();
+
+        expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 1, failed: 0 });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      });
+
+      describe("mixed fan-out with a denied and a genuinely failed child", () => {
+        beforeEach(() => {
+          launchableRepositories(["web-app", "api"]);
+          // "api" fails resolution before launch; "web-app" is denied at launch.
+          mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+            name === "api"
+              ? null
+              : { repoId: 1000, repoOwner: owner, repoName: name, defaultBranch: "main" }
+          );
+          denyAfterAdmission();
+          mockStore.getInvocationRunAggregate.mockResolvedValue(
+            aggregate({ total: 2, active: 0, failed: 1 })
+          );
+        });
+
+        it("fails a manual trigger and counts the genuine failure", async () => {
+          const trigger = createScheduler().trigger("auto-1", "manual-user");
+          await expect(trigger).rejects.toThrow("Failed to trigger automation");
+          await expect(trigger).rejects.not.toBeInstanceOf(AutomationExecutionUnauthorizedError);
+          expect(mockStore.updateRun).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({ status: "unauthorized" })
+          );
+          expect(mockStore.tryMarkInvocationFailureCounted).toHaveBeenCalledTimes(1);
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+
+        it("reports a scheduled firing as failed, not skipped", async () => {
+          expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 1 });
+          expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it("counts an event launch denial as skipped", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestContinuableRun.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(null);
+        denyAfterAdmission();
+
+        expect(await createScheduler().event(makeSlackEvent())).toEqual({
+          triggered: 0,
+          skipped: 1,
+          steered: 0,
+          invocationIds: [expect.any(String)],
+        });
+        expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      });
+
+      it("re-authorizes each fanned-out child against current team state", async () => {
+        launchableRepositories(["web-app", "api", "worker"]);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 3, active: 3 }));
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs.filter((run) => run.status === "running")).toHaveLength(3);
+        expect(mockIsAutomationExecutionAuthorized).toHaveBeenCalledTimes(1 + 3);
+        // One admission read plus one launch read per child.
+        expect(mockTeamGetById).toHaveBeenCalledTimes(1 + 3);
+      });
+
+      it("uses the team's default visibility as of launch", async () => {
+        launchableRepositories(["web-app"]);
+        mockTeamGetById
+          .mockResolvedValueOnce({ ...activeTeam, defaultVisibility: "workspace" })
+          .mockResolvedValue({ ...activeTeam, defaultVisibility: "team" });
+        mockStore.getInvocationRunAggregate.mockResolvedValue(aggregate({ total: 1, active: 1 }));
+
+        await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ ownerTeamId: teamId, visibility: "team" })
+        );
+      });
+    });
+
+    it("checks resolved direct IDs before manual admission", async () => {
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockCheckRepositoryAccess.mockResolvedValue({
+        repoId: 98765,
+        repoOwner: "acme",
+        repoName: "web-app",
+        defaultBranch: "main",
+      });
+      mockTeamGrantCovers.mockResolvedValue(false);
+
+      const stub = createMockSessionStub();
+      await expect(
+        createScheduler(createEnv(undefined, stub)).trigger("auto-1", "manual-user")
+      ).rejects.toMatchObject({ reason: "target_team_missing_grant" });
+      expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [98765]);
+      expect(mockCheckRepositoryAccess).toHaveBeenCalledTimes(1);
+      expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
+      expect(mockStore.claimRunSession).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).not.toHaveBeenCalled();
+      expect(stub.fetch).not.toHaveBeenCalled();
+      expect(mockResolveSessionProviderAuth).not.toHaveBeenCalled();
+      expect(mockStore.incrementConsecutiveFailures).not.toHaveBeenCalled();
+      expect(mockStore.insertSkippedInvocation).not.toHaveBeenCalled();
+      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+    });
+
+    it.each(["repository", "environment"] as const)(
+      "preserves a failed %s resolution while authorized healthy fan-out launches",
+      async (target) => {
+        selectRepositories("auto-1", [
+          repositoryRow("auto-1"),
+          ...(target === "repository"
+            ? [repositoryRow("auto-1", { repo_name: "api", repo_id: 67890 })]
+            : []),
+        ]);
+        if (target === "environment") selectEnvironments("auto-1", [environment.id]);
+        mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) =>
+          name === "api"
+            ? null
+            : { repoId: 12345, repoOwner: owner, repoName: name, defaultBranch: "main" }
+        );
+        mockTeamGrantCovers.mockResolvedValue(true);
+        mockStore.getInvocationRunAggregate.mockResolvedValue(
+          aggregate({ total: 2, active: 1, failed: 1 })
+        );
+
+        const result = await createScheduler().trigger("auto-1", "manual-user");
+
+        expect(result.runs).toEqual([
+          expect.objectContaining({ repo_name: "web-app", status: "running" }),
+          expect.objectContaining({
+            status: "failed",
+            failure_reason:
+              target === "repository"
+                ? "Repository is not accessible for the configured SCM provider"
+                : expect.stringContaining("acme/api"),
+            ...(target === "repository"
+              ? { repo_name: "api" }
+              : { environment_id: environment.id }),
+          }),
+        ]);
+        expect(mockTeamGrantCovers).toHaveBeenCalledWith(teamId, [12345]);
+        expect(mockTeamGrantCovers).toHaveBeenCalledTimes(1);
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(1);
+        expect(mockSessionStoreCreate).toHaveBeenCalledTimes(1);
+        expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+        expect(mockStore.incrementConsecutiveFailures).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it("keeps workspace environment resolution at launch time", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockEnvironmentGetById.mockResolvedValue({ ...environment, owner_team_id: null });
+      mockTeamGrantCovers.mockResolvedValue(false);
+      selectEnvironments("auto-1", [environment.id]);
+      mockStore.insertInvocationGuarded.mockImplementation(async (params: unknown) => {
+        capturedInvocationParams.push(
+          structuredClone(params) as { children: Array<Record<string, unknown>> }
+        );
+        mockEnvironmentRepositories.mockResolvedValue([
+          members[0],
+          { ...members[1], base_branch: "edited-after-admission" },
+        ]);
+        return { inserted: true };
+      });
+      mockCheckRepositoryAccess.mockImplementation(async ({ owner, name }) => ({
+        repoId: name === "api" ? 67890 : 12345,
+        repoOwner: owner,
+        repoName: name,
+        defaultBranch: "main",
+      }));
+      const stub = createMockSessionStub();
+
+      expect(await createScheduler(createEnv(undefined, stub)).tick()).toEqual({
+        processed: 1,
+        skipped: 0,
+        failed: 0,
+      });
+      expect(mockTeamGrantCovers).not.toHaveBeenCalled();
+      expect(mockTeamGetById).not.toHaveBeenCalled();
+      expect(mockSessionStoreCreate).toHaveBeenCalledTimes(1);
+      expect(mockStore.recordAuthorizationDenied).not.toHaveBeenCalled();
+      expect(mockEnvironmentRepositories.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockStore.insertInvocationGuarded.mock.invocationCallOrder[0]
+      );
+      expect((await getInitBody(vi.mocked(stub.fetch))).repositories).toEqual([
+        { repoOwner: "acme", repoName: "web-app", repoId: 12345, baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", repoId: 67890, baseBranch: "edited-after-admission" },
+      ]);
     });
   });
 });

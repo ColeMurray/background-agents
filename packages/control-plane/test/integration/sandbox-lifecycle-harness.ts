@@ -3,7 +3,8 @@ import {
   DEFAULT_LIFECYCLE_CONFIG,
   SandboxLifecycleManager,
 } from "../../src/sandbox/lifecycle/manager";
-import type { SandboxProvider } from "../../src/sandbox/provider";
+import { SandboxAccess } from "../../src/sandbox/lifecycle/sandbox-access";
+import { providerResumesAfterStop, type SandboxProvider } from "../../src/sandbox/provider";
 import { LifecycleSessionContext } from "../../src/session/sandbox-lifecycle-adapters";
 import { SandboxShutdownCoordinator } from "../../src/session/sandbox-shutdown";
 import {
@@ -42,6 +43,7 @@ export function realLifecycleHarness(
   const shutdownAnnouncements: object[] = [];
   const lifecycleAnnouncements: object[] = [];
   const queueAdmissions: string[] = [];
+  const log = createLogger("retention-test");
   const transaction = <T>(operation: () => T) => durableState.storage.transactionSync(operation);
   const messages = new MessageRepository(
     durableState.storage.sql,
@@ -55,7 +57,7 @@ export function realLifecycleHarness(
         void task();
       },
     },
-    createLogger("retention-test"),
+    log,
     messages,
     { broadcast: () => undefined, sendToSandbox: async () => undefined },
     { notifyComplete: async () => undefined } as never,
@@ -66,6 +68,26 @@ export function realLifecycleHarness(
     queueAdmissions.push(decision);
     options.onQueueAdmission?.(decision);
   };
+  const broadcaster = {
+    broadcast: (message: object) => {
+      options.onLifecycleAnnouncement?.(message);
+      lifecycleAnnouncements.push(message);
+    },
+  };
+  const sockets = {
+    getSandboxWebSocket: () =>
+      sandbox.getSandbox()?.active_socket_id === "" ? null : (options.socket ?? null),
+    getConnectedClientCount: () => 0,
+    sendToSandbox: () => false,
+    detachSandboxWebSocket: () => sandbox.revokeActiveSocketId(),
+  };
+  const access = new SandboxAccess({
+    storage: sandbox,
+    broadcaster,
+    sockets,
+    canResumeAfterStop: () => providerResumesAfterStop(provider),
+    getLogger: () => log,
+  });
   const shutdown = new SandboxShutdownCoordinator({
     store: options.store ?? new SandboxShutdownRepository(durableState.storage.sql),
     provider,
@@ -91,25 +113,14 @@ export function realLifecycleHarness(
     },
     onLifecycleChange: processQueue,
     reconcileStatusFromMessages: async () => undefined,
-    retireAccess: () => manager.retireShutdownAccess(),
+    retireAccess: () => access.retireShutdownAccess(),
   } as never);
   const manager = new SandboxLifecycleManager(
     provider,
     sandbox,
     sessionContext,
-    {
-      broadcast: (message) => {
-        options.onLifecycleAnnouncement?.(message);
-        lifecycleAnnouncements.push(message);
-      },
-    },
-    {
-      getSandboxWebSocket: () =>
-        sandbox.getSandbox()?.active_socket_id === "" ? null : (options.socket ?? null),
-      getConnectedClientCount: () => 0,
-      sendToSandbox: () => false,
-      detachSandboxWebSocket: () => sandbox.revokeActiveSocketId(),
-    },
+    broadcaster,
+    sockets,
     {
       schedule: async () => undefined,
       cancel: async () => undefined,
@@ -117,6 +128,7 @@ export function realLifecycleHarness(
     },
     { generateId: () => "integration-sandbox-token" },
     shutdown,
+    access,
     {
       ...DEFAULT_LIFECYCLE_CONFIG,
       controlPlaneUrl: "https://control-plane.test",

@@ -107,14 +107,24 @@ high performance even with hundreds of concurrent sessions.
 An **environment** is a named, reusable set of repositories — the thing you reach for when the same
 multi-repository workspace comes up again and again (a frontend + its API, a service + its shared
 library). Environments are managed under **Settings > Environments** and appear at the top of the
-new-session picker.
+new-session picker when accessible. They can be workspace-owned or team-owned, with names unique
+within that ownership scope. Ownership is immutable. Team pages also list their own environments.
+
+Team environments require membership in the owning team or a workspace Owner/Administrator role,
+plus the appropriate environment permission. Managing one requires a lead or workspace
+Owner/Administrator and `environments.manage`; secrets, settings, and image mutations also require
+their respective feature permissions. A team environment can launch only into a session owned by
+that team. A team's session catalog can include eligible workspace environments too, provided its
+repository grants cover their members. Unbound bot catalogs do not expose team environments.
+`requireTeamOnCreate`, when enabled, also requires a team for new environment definitions. See
+[Authentication and Authorization](AUTH.md#environment-access).
 
 An environment defines:
 
 - **An ordered repository list** (up to 10) with a base branch per repository; the first repository
   is the primary
-- **Environment secrets** — sessions launched from the environment receive global secrets plus the
-  environment's secrets (repository secrets do not flow in; see
+- **Environment secrets** — sessions receive global secrets, then their owning team's secrets (if
+  any), then the environment's secrets; later scopes win. Repository secrets do not flow in (see
   [Secrets Management](./SECRETS.md#which-secrets-a-session-receives))
 - **Optional prebuilt images** — the whole environment (all clones + all setup scripts) is built
   ahead of time so sessions boot in seconds (see [Pre-Built Images](./IMAGE_PREBUILD.md))
@@ -189,8 +199,13 @@ incurring compute costs.
 
 Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
 does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
-in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+in case the process is actually gone. A ready sandbox whose heartbeat is overdue gets a short
+reconnect grace before that check retires it. Explicit lifecycle paths such as inactivity and stale
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+While the coordinator that started their checkpoint is still capturing the sandbox, a refused bridge
+is told to retry rather than exit, so the save is not aborted by the container shutting down. After
+a control-plane restart the new coordinator cannot record such a checkpoint, so the bridge exits. A
+shutdown save that is `draining`, `prepared`, or `capturing` is persisted and still answers retry.
 
 ### Data Plane (Sandbox Backends)
 
@@ -203,7 +218,7 @@ development environment.
 - Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode and the Claude Agent SDK (the coding agent harnesses)
+- OpenCode, the Claude Agent SDK, and the pinned Codex CLI (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -211,14 +226,14 @@ Open-Inspect supports these sandbox backends:
 - **Daytona**: persistent stop/start sandboxes via direct REST API calls
 - **Vercel Sandboxes**: filesystem snapshot restore and prebuilt-image builds via the Vercel Sandbox
   API
-- **OpenComputer**: template-based sandboxes with checkpoint-backed prebuilt-image builds via the
-  OpenComputer REST API
 - **E2B**: template-based sandboxes with persistent pause/resume via direct E2B REST API calls
+- **Boat**: full-VM sandboxes deployed from a saved snapshot, archived on inactivity and resumed on
+  a new machine via direct Boat REST API calls
 
-Prebuilt-image builds are supported on Modal, Vercel, and OpenComputer. Saved filesystem state can
-be restored on those same providers for session resumes; Daytona and E2B use persistent sandboxes
-instead. For Daytona and E2B, the control plane stops or pauses the sandbox on inactivity or stale
-heartbeat, then resumes that same sandbox later.
+Prebuilt-image builds are supported on Modal, Vercel, E2B, and Daytona (opt-in); Boat has none.
+Saved filesystem state can be restored on Modal and Vercel for session resumes; Daytona, E2B, and
+Boat use persistent sandboxes instead. For those three, the control plane stops, pauses, or archives
+the sandbox on inactivity or stale heartbeat, then resumes that same sandbox later.
 
 ### Clients
 
@@ -276,7 +291,7 @@ When you create a session for a repo without an existing snapshot:
 5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
 6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
 7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
-   staging). The bridge attaches to it and sends `ready`
+   or Codex staging). The bridge attaches to it and sends `ready`
 8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
    were waiting dispatch now
 
@@ -327,7 +342,7 @@ When restoring from a previous snapshot:
 ```
 
 1. **Restore snapshot**: The selected snapshot-capable provider restores the filesystem from a saved
-   snapshot or checkpoint
+   snapshot
 2. **Bridge connects**: As in a fresh start, the bridge connects first and reports each phase
 3. **Quick sync**: Fetches the session's branch from origin. The restored checkout is left as it is,
    so the snapshot's commit and any uncommitted work survive the restore
@@ -534,11 +549,21 @@ runs on exactly one harness, chosen at create:
   the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
   carries exactly one Anthropic credential. This is the harness that can use a connected Claude
   subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+- **Codex**: the bridge launches OpenAI's Codex CLI as `codex app-server` and speaks JSON-RPC to it
+  over stdio. It always runs the image's pinned install (`/opt/openinspect/codex/bin/codex`), never
+  whatever `codex` is in `/usr/local/bin`, which a provider such as Boat replaces at boot. A small
+  subreaper owns the process and contains everything it spawns when the harness stops it.
+  `CODEX_HOME` is a per-sandbox directory (`~/.openinspect/codex`) that never holds the OpenAI
+  credential: the bridge hands Codex `OPENAI_API_KEY` or a short-lived ChatGPT access token fetched
+  from the control plane at login, and the process does not inherit the sandbox's `OPENAI_*` or
+  `CODEX_*` variables. Codex runs OpenAI models only and refuses a model, reasoning effort, or
+  credential it cannot use instead of substituting a default. See
+  [Using OpenAI Models](OPENAI_MODELS.md).
 
-Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
-above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
-of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
-the running turn ends on both harnesses.
+All three harnesses emit the same session events (tokens, tool calls, steps, warnings), so
+everything above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports
+the outcome of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts
+queue until the running turn ends on every harness.
 
 ### What the Agent Can Do
 
@@ -576,6 +601,12 @@ pushes the branch with the shared GitHub App credentials and returns a manual `p
 PR is attributed to the App bot rather than to you.
 
 This maintains proper code review workflows—you can't approve your own PRs.
+
+A PR opened while processing an automation run's own prompt (scheduled, webhook-triggered, or
+manually triggered with **Run now**) is created with the GitHub App, even though the prompt carries
+the owner's or requester's identity for commit attribution: unattended work is the App's, so that
+person can review and approve it. PRs opened from child sessions the run's agent spawns still use
+the prompting identity's OAuth.
 
 ---
 
@@ -626,7 +657,7 @@ indicator.
 
 ### How Snapshots Solve This
 
-Provider snapshots and checkpoints let us capture a sandbox's state after setup:
+Provider snapshots let us capture a sandbox's state after setup:
 
 ```
 First session:  Clone ─▶ Install/Build ─▶ Start Runtime ─▶ [Snapshot] ─▶ Work
@@ -642,9 +673,7 @@ active provider supports saved filesystem state.
 For Vercel, Terraform builds a base-runtime snapshot from the local checkout and wires a
 deterministic snapshot name into `VERCEL_BASE_SNAPSHOT_NAME`. Fresh Vercel sandboxes resolve that
 name to the newest created snapshot instead of cloning and installing the sandbox runtime on every
-session. OpenComputer uses a managed template plus checkpoints for the same prebuilt-image
-lifecycle. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) and
-[OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md) for provider-specific details.
+session. See [Vercel Sandbox Provider](VERCEL_SANDBOX_PROVIDER.md) for provider-specific details.
 
 ### Image Prebuilding
 
@@ -668,10 +697,11 @@ same organization.
 
 ### Why Single-Tenant?
 
-The system uses a shared GitHub App installation for all git operations. This means:
+GitHub git operations use a shared GitHub App installation. This means:
 
-- Any user can access any repository the GitHub App is installed on
-- There's no per-user repository access validation
+- The installation defines the workspace's maximum repository reach; workspace permissions and team
+  repository grants further constrain access
+- Open-Inspect does not compare a user's personal GitHub repository permissions with that scope
 - The trust boundary is your organization, not individual users
 
 This follows
@@ -680,32 +710,30 @@ was built for internal use where all employees have access to company repositori
 
 ### Token Architecture
 
-| Token              | Purpose                                    | Scope                            |
-| ------------------ | ------------------------------------------ | -------------------------------- |
-| GitHub App Token   | Mint brokered git credentials              | All repos where App is installed |
-| User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
-| Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
-| WebSocket Token    | Authenticate client connections            | Single session                   |
-| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Pinned session provider account  |
+Session sandboxes fetch git credentials through the control plane and cache them on disk. GitHub
+credentials cover the persisted session repositories, intersected with current owning-team grants
+only for team-owned sessions. GitLab returns the deployment PAT without per-session narrowing. Modal
+filesystem snapshots can retain the helper cache; brokerage is not a token-free snapshot guarantee,
+and grant removal does not immediately revoke issued credentials.
 
-Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
-of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
-env-token fallbacks so legacy snapshots can boot through the credential-helper migration. The helper
-authorizes HTTPS requests for the configured SCM host, preserving existing setup/start hooks that
-clone other private repositories available to the installation. This primarily protects continuously
-running sessions and Daytona persistent resumes from expired embedded credentials; Modal snapshot
-restores still mint a fresh fallback token on restore.
+Image builds receive `VCS_CLONE_TOKEN` because they have no session broker. For GitHub it is scoped
+to the build repositories, with current owning-team grants applied for team-owned environment
+builds. For GitLab it is the deployment PAT, not a repository-scoped or single-use credential. See
+the canonical [access and credential boundaries](AUTH.md#repository-and-credential-boundaries) for
+dependency access, cache behavior, and provider limitations.
 
 ### Secrets
 
-You can configure environment variables (API keys, credentials) at global, per-repository, or
-per-environment scope. A session receives global secrets plus its **session target's** secrets:
+You can configure environment variables (API keys, credentials) at global, team, repository, or
+environment scope. Precedence is global, then owning team when present, then the **session
+target's** secrets; later layers win collisions:
 
 - **Global secrets** apply to all sessions (e.g., `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
   `ZHIPU_API_KEY`, `OPENCODE_API_KEY`)
-- **Repository secrets** apply to sessions launched from that repo (including all bot-created
-  sessions) and override global secrets with the same key; ad-hoc multi-repository sessions receive
-  each selected repository's secrets, with the primary winning collisions
+- **Team secrets** apply to sessions owned by that team, overriding global values
+- **Repository secrets** apply to repository-targeted sessions and override global and team secrets
+  with the same key; ad-hoc multi-repository sessions receive each selected repository's secrets,
+  with the primary winning collisions
 - **Environment secrets** apply to sessions launched from that environment — its repositories'
   repository secrets do not flow in
 - Stored encrypted (AES-256-GCM) in D1 database
@@ -746,8 +774,8 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 
 > **LLM API keys** (e.g., `ANTHROPIC_API_KEY` for Claude models) are added as global secrets. A
 > deployment can instead configure `anthropic_api_key` in Terraform to inject one fleet-wide key
-> into Modal session sandboxes and OpenComputer sandboxes; a global secret of the same name takes
-> precedence over it, and the other providers read only the secret store.
+> into Modal session sandboxes; a global secret of the same name takes precedence over it, and the
+> other providers read only the secret store.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
 > require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go

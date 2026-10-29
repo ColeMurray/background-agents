@@ -12,6 +12,7 @@ import { GlobalSecretsStore } from "../db/global-secrets";
 import { SecretsValidationError, normalizeKey, validateKey } from "../db/secrets-validation";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { authorizeWorkspaceRepositories } from "./workspace-repository-authorization";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
@@ -45,6 +46,11 @@ async function handleSetRepoSecrets(
   const { owner, name } = repository;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  const denied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: resolved.repoOwner, name: resolved.repoName, repoId: resolved.repoId }],
+    requireLead: true,
+  });
+  if (denied) return denied;
 
   const body = await parseBody(
     request,
@@ -119,6 +125,11 @@ async function handleListRepoSecrets(
   const { owner, name } = repository;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  const denied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: resolved.repoOwner, name: resolved.repoName, repoId: resolved.repoId }],
+    requireLead: true,
+  });
+  if (denied) return denied;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
   const globalStore = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
@@ -189,6 +200,11 @@ async function handleDeleteRepoSecret(
   }
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
+  const denied = await authorizeWorkspaceRepositories(ctx, {
+    repositories: [{ owner: resolved.repoOwner, name: resolved.repoName, repoId: resolved.repoId }],
+    requireLead: true,
+  });
+  if (denied) return denied;
 
   const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 

@@ -10,6 +10,7 @@ const githubSenderSchema = githubUserSchema.extend({
 });
 
 const repositorySchema = z.object({
+  id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   owner: githubUserSchema,
   name: z.string(),
   private: z.boolean(),
@@ -69,6 +70,8 @@ export const reviewCommentPayloadSchema = z.object({
   pull_request: pullRequestSchema.omit({ body: true, user: true }),
   comment: z.object({
     id: z.number(),
+    // Set on a reply: the thread's top-level comment, the only id GitHub's replies endpoint accepts.
+    in_reply_to_id: z.number().nullish(),
     body: z.string(),
     path: z.string(),
     diff_hunk: z.string(),

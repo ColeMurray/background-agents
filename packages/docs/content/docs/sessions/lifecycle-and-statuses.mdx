@@ -4,7 +4,7 @@ description: What each session and sandbox status means, how a sandbox boots, an
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-25"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - packages/shared/src/types/sessions.ts
@@ -83,7 +83,7 @@ stateDiagram-v2
     ready --> snapshotting: snapshot capture (where supported)
     snapshotting --> ready: post-turn capture (Modal)
     snapshotting --> stopped: shutdown capture
-    ready --> stopped: persistent provider stop, pause, or hibernate
+    ready --> stopped: persistent provider stop or pause
     stopped --> spawning: next prompt
     ready --> stale: heartbeats stop
     stale --> failed: no recovery
@@ -142,9 +142,13 @@ When any of these trips:
 
 Two timers end a sandbox that is not failing:
 
-- **Inactivity.** With no client connected, an idle sandbox is stopped after the inactivity timeout (your operator sets `SANDBOX_INACTIVITY_TIMEOUT_MS`; the default is 10 minutes). A connected client extends the timer and receives a warning instead. Modal, modal-vm, Vercel, and OpenComputer attempt to save state at confirmed shutdown; Daytona and E2B stop or pause the retained sandbox. The sandbox shows Stopped and can recover on your next prompt.
-- **Lifetime.** Settings › Sandbox has a **Session Timeout (minutes)** field that requests a lifetime for each sandbox. Leave it blank to inherit a parent setting or the provider default. The field appears only for providers that honor it (Modal, modal-vm, Vercel, OpenComputer, E2B; not Daytona).
+- **Inactivity.** With no session-page WebSocket connected, idle sandboxes for automations (`automation`), GitHub bot runs (`github-bot`), and agent-created children (`agent`, including nested children) default to stopping after 2 minutes. User (`user`), Slack (`slack-bot`), and Linear (`linear-bot`) sessions keep the 10-minute default. Modal, modal-vm, and Vercel attempt to save state at confirmed shutdown; Daytona, E2B, and Boat stop, pause, or archive the retained sandbox. The sandbox shows Stopped; a follow-up prompt resumes the existing session and restores or resumes its sandbox rather than creating a new session.
+- **Lifetime.** Settings › Sandbox has a **Session Timeout (minutes)** field that requests a lifetime for each sandbox. Leave it blank to inherit a parent setting or the provider default. The field appears only for providers that honor it (Modal, modal-vm, Vercel, E2B, Boat; not Daytona).
 - **Final snapshot buffer.** Also under Settings › Sandbox, **Final snapshot buffer (minutes)** reserves time before provider expiry to stop work, preserve the filesystem, and retire the sandbox. Default 10 minutes, minimum 5.
+
+Your operator sets the regular timeout with `SANDBOX_INACTIVITY_TIMEOUT_MS` (default `600000` ms) and the unattended timeout with `SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS` (default `120000` ms, minimum `60000` ms; lower values are rejected). Unattended sessions use the smaller of the two values, so setting the unattended value at or above the regular value disables the shorter timeout.
+
+A connected session-page WebSocket keeps the existing timer extensions and receives warnings instead of an inactivity stop, including for unattended sessions. Direct terminal, VS Code, or VNC connections alone do not extend the timer. Runtime heartbeats renew activity while a prompt is processing, so quiet running turns are not treated as idle.
 
 Settings › Sandbox values can be set globally and overridden per repository and per environment. See [Sandbox settings](/configure/sandbox-settings).
 
@@ -164,11 +168,10 @@ Saved filesystem state includes installed dependencies, built artifacts, and unc
 
 Not every provider restores from a saved filesystem:
 
-| Provider                | Resume model                                                                                                                                                                                   |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Modal, modal-vm, Vercel | A saved filesystem snapshot can be restored into a new sandbox after shutdown. Modal can also snapshot after a turn; modal-vm and Vercel skip those captures.                                  |
-| OpenComputer            | A confirmed shutdown checkpoints state and retires the source; the next prompt restores into a new sandbox. Without a saved shutdown receipt, a retained hibernated sandbox can wake in place. |
-| Daytona, E2B            | The retained sandbox resumes in place after being stopped (Daytona) or paused (E2B).                                                                                                           |
+| Provider                | Resume model                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modal, modal-vm, Vercel | A saved filesystem snapshot can be restored into a new sandbox after shutdown. Modal can also snapshot after a turn; modal-vm and Vercel skip those captures. |
+| Daytona, E2B, Boat      | The retained sandbox resumes in place after being stopped (Daytona), paused (E2B), or archived to a disk snapshot (Boat).                                     |
 
 The status labels are the same on both models. See [Sandbox providers](/configure/sandbox-providers).
 

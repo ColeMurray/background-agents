@@ -1,5 +1,5 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
-import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import type { SandboxResources } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
@@ -25,15 +25,14 @@ export type TriggerImageBuildResult =
 
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
 export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; host: string; username: string; token: string }
-  | { type: "unavailable" };
+  { type: "credential_helper"; token: string } | { type: "unavailable" };
 
 /**
  * Provider-neutral build request resolved before adapter-specific execution.
  * Every supported provider uses the same create-bind-launch session contract.
  */
 export interface ImageBuildPlan {
-  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
+  resources?: SandboxResources;
   buildId: string;
   scope: ImageBuildScope;
   repositories: ImageBuildRepository[];
@@ -135,9 +134,7 @@ export interface ReconcileOrphanOperationInput {
  * than losing a resource nothing else records.
  */
 export type ReconcileOrphanOperationOutcome =
-  | { type: "absent" }
-  | { type: "deleted" }
-  | { type: "pending" };
+  { type: "absent" } | { type: "deleted" } | { type: "pending" };
 
 /** Input for finding a build source whose create response was never seen. */
 export interface RecoverUnboundSourceInput {

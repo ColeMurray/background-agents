@@ -38,6 +38,7 @@ const classificationSchema = z.object({
 const pendingRequestDataSchema = z.object({
   message: z.string().min(1),
   userId: z.string().min(1),
+  teamId: z.string().min(1).nullable().optional(),
   /** Present when `message` still needs sender attribution before delivery. */
   unattributedPrompt: unattributedPromptSchema.optional(),
   previousMessages: z.array(z.string()).optional(),
@@ -84,7 +85,7 @@ export async function storePendingRequest(env: Env, request: PendingRequest): Pr
     pendingRequestKey(request.requestId),
     // Parse before persisting so only schema-known fields reach KV.
     JSON.stringify(pendingRequestSchema.parse(request)),
-    { expirationTtl: PENDING_REQUEST_TTL_MS / 1000 }
+    { ttlMs: PENDING_REQUEST_TTL_MS }
   );
 }
 

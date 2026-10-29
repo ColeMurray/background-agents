@@ -33,6 +33,7 @@ from .launch_policy import (
     parse_launch,
 )
 from .models import SandboxConfig, SandboxHandle
+from .termination import terminate_and_wait
 from .tunnels import SandboxTunnels
 from .vcs_env import inject_vcs_env_vars
 from .vm_recovery import VMAllocationOutcome, VMServiceLaunch, find_owned_vm, owned_vm_tags_match
@@ -76,7 +77,6 @@ class RepositoryImageSource:
 @dataclass(frozen=True)
 class SnapshotImageSource:
     image_id: str
-    clone_token: str | None
 
 
 type SandboxImageSource = BaseImageSource | RepositoryImageSource | SnapshotImageSource
@@ -157,8 +157,6 @@ class SandboxLauncher:
             }
         )
 
-        clone_token: str | None = None
-        include_github_cli_aliases = False
         snapshot_id: str | None = None
         if isinstance(spec.source, BaseImageSource):
             image = docker_base_image() if docker.enabled else base_image
@@ -172,8 +170,6 @@ class SandboxLauncher:
         else:
             image = modal.Image.from_id(spec.source.image_id)
             env_vars["RESTORED_FROM_SNAPSHOT"] = "true"
-            clone_token = spec.source.clone_token
-            include_github_cli_aliases = True
             snapshot_id = spec.source.image_id
 
         if config.session_config is not None:
@@ -185,8 +181,8 @@ class SandboxLauncher:
 
         inject_vcs_env_vars(
             env_vars,
-            clone_token=clone_token if has_repository else None,
-            include_github_cli_aliases=include_github_cli_aliases,
+            clone_host=config.clone_host,
+            clone_username=config.clone_username,
         )
 
         code_server_password: str | None = None
@@ -355,7 +351,7 @@ class SandboxLauncher:
         ):
             log.warn("sandbox.docker_allocation_retire_mismatch", sandbox_id=sandbox_id)
             return
-        await sandbox.terminate.aio(wait=True)
+        await terminate_and_wait(sandbox)
         log.info(
             "sandbox.docker_allocation_retired",
             sandbox_id=sandbox_id,

@@ -12,6 +12,8 @@ export interface PromptMessageData {
 
 export interface EnqueuePromptCoreData {
   participant: ParticipantRow;
+  /** Recorded as the prompt's account in place of the participant's when set, null included. */
+  promptAccountUserId?: string | null;
   userId: string;
   content: string;
   source: MessageSource;
@@ -25,4 +27,6 @@ export interface EnqueuePromptCoreData {
 export interface EnqueuedPrompt {
   messageId: string;
   position: number | null;
+  /** The request's clientRequestId named a prompt already queued; nothing new was added. */
+  deduplicated: boolean;
 }

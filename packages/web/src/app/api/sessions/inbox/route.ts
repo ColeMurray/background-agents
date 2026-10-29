@@ -3,7 +3,15 @@ import { NextResponse } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
-const SESSION_INBOX_QUERY_PARAMS = ["category", "cursor", "mine", "teamIds[]"] as const;
+const SESSION_INBOX_QUERY_PARAMS = [
+  "category",
+  "cursor",
+  "mine",
+  "teamIds[]",
+  "scope",
+  "ownerFilter",
+  "visibility",
+] as const;
 
 export async function GET(request: NextRequest) {
   try {

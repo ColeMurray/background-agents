@@ -53,8 +53,13 @@ The in-sandbox runtime (entrypoint supervisor, control-plane bridge, shared type
 
 Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
-- **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
+
+Modal does not need the GitHub App private key. Fresh and snapshot-restored session sandboxes fetch
+scoped Git credentials on demand from the control plane; image builds receive a one-shot clone token
+in the build request. The legacy Modal `github-app` secret is optional and not required by these
+paths. Keep the App private key in the control plane; the optional GitHub bot Worker still needs its
+own App credential bindings. Do not inject the private key through session secrets.
 
 ### API (`src/`)
 
@@ -73,7 +78,9 @@ snapshot, terminate, and delete provider operations.
 
 1. Install Modal CLI: `pip install modal`
 2. Authenticate: `modal setup`
-3. Create secrets via Modal CLI:
+3. Create the required `llm-api-keys` and `internal-api` secrets via Modal CLI (Terraform provisions
+   them when using the full deployment guide). Do not create a `github-app` secret for sandbox Git
+   authentication:
 
 ```bash
 # Fleet-wide LLM API keys. No key is required — pass an empty value to have
@@ -81,19 +88,24 @@ snapshot, terminate, and delete provider operations.
 # instead. The secret itself must exist; Modal cannot hold one with no keys.
 modal secret create llm-api-keys ANTHROPIC_API_KEY="sk-ant-..."
 
-# GitHub App credentials (for repo access)
-modal secret create github-app \
-  GITHUB_APP_ID="123456" \
-  GITHUB_APP_PRIVATE_KEY="$(cat private-key-pkcs8.pem)" \
-  GITHUB_APP_INSTALLATION_ID="12345678"
-
 # Internal API secret (for control plane authentication)
+MODAL_API_SECRET="$(openssl rand -hex 32)"
 modal secret create internal-api \
-  MODAL_API_SECRET="$(openssl rand -hex 32)" \
+  MODAL_API_SECRET="$MODAL_API_SECRET" \
   ALLOWED_CONTROL_PLANE_HOSTS="your-control-plane.workers.dev"
+
+# Reuse the same value when configuring the control plane with Terraform.
+export TF_VAR_modal_api_secret="$MODAL_API_SECRET"
 ```
 
 See `.env.example` for a full list of environment variables.
+
+Use the retained `MODAL_API_SECRET` value for the control plane's `modal_api_secret` Terraform input
+(or its `MODAL_API_SECRET` secret binding); do not generate a second value. Set
+`ALLOWED_CONTROL_PLANE_HOSTS` to the deployed control-plane hostname. Removing the old `github-app`
+dependency does not make either of the required secret objects above optional. For upgrades, verify
+the deployed Modal app and runtime images use the current credential path before removing legacy
+credentials needed by older deployments.
 
 ### Install local packages
 
@@ -145,6 +157,10 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
 | `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 
+`api-create-sandbox`, `api-restore-sandbox`, and `api-create-build-sandbox` require `clone_host` and
+`clone_username`. The control plane resolves them from its `SCM_PROVIDER`, and Modal sets them as
+`VCS_HOST` and `VCS_CLONE_USERNAME` in the sandbox.
+
 ### Example: Create Sandbox
 
 ```bash
@@ -156,7 +172,9 @@ curl -X POST "https://${WORKSPACE}--open-inspect-api-create-sandbox.modal.run" \
     "repo_owner": "your-org",
     "repo_name": "your-repo",
     "control_plane_url": "https://your-control-plane.workers.dev",
-    "sandbox_auth_token": "your-token"
+    "sandbox_auth_token": "your-token",
+    "clone_host": "github.com",
+    "clone_username": "x-access-token"
   }'
 ```
 
@@ -174,9 +192,6 @@ Set via Modal secrets:
 | Variable | Secret | Description |
 |----------|--------|-------------|
 | `ANTHROPIC_API_KEY` | `llm-api-keys` | Anthropic API key for Claude; may be empty when sessions use other providers |
-| `GITHUB_APP_ID` | `github-app` | GitHub App ID for repo access |
-| `GITHUB_APP_PRIVATE_KEY` | `github-app` | GitHub App private key (PKCS#8) |
-| `GITHUB_APP_INSTALLATION_ID` | `github-app` | GitHub App installation ID |
 | `MODAL_API_SECRET` | `internal-api` | Shared secret for control plane auth |
 | `ALLOWED_CONTROL_PLANE_HOSTS` | `internal-api` | Comma-separated allowed hostnames for URL validation |
 

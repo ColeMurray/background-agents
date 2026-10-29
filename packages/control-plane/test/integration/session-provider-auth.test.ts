@@ -5,8 +5,11 @@ import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts"
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { initializeSession } from "../../src/session/initialize";
+import { resolvedPin } from "../../src/session/pinned";
+import { emptySelection } from "../../src/memory/selection";
 import { resolveSessionProviderAuth } from "../../src/session/provider-account-resolution";
 import { cleanD1Tables } from "./cleanup";
+import { waitForSandboxStatus } from "./helpers";
 
 const FIRST_ACCOUNT_ID = "1".repeat(32);
 const SECOND_ACCOUNT_ID = "2".repeat(32);
@@ -55,13 +58,15 @@ describe("session provider auth persistence", () => {
         reasoningEffort: null,
         participantUserId: "user-1",
         platformUserId: null,
-        managedSkillsManifest: {
+        participantCanonicalUserId: null,
+        memory: resolvedPin(await emptySelection(1)),
+        managedSkills: resolvedPin({
           selection: { mode: "all" },
           resolverVersion: 1,
           manifestSha256: "0".repeat(64),
           resolvedAt: 1,
           skills: [],
-        },
+        }),
         providerAuth,
       },
       {
@@ -71,6 +76,10 @@ describe("session provider auth persistence", () => {
         metrics: { queries: [], totalQueryDurationMs: 0 },
       } as never
     );
+
+    // Init starts warming in waitUntil. Let the stubbed spawn settle before
+    // changing D1 state or letting Vitest tear down its module-resolution RPC.
+    await waitForSandboxStatus(env.SESSION.get(env.SESSION.idFromName(sessionId)), "failed");
 
     await defaults.set("openai", SECOND_ACCOUNT_ID, "provider_account", null, 60);
 

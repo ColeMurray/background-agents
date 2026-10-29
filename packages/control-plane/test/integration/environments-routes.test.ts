@@ -8,12 +8,13 @@
  * exist are seeded directly via EnvironmentStore (mirroring PR-4's split).
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { SELF, env, createExecutionContext } from "cloudflare:test";
 import { EnvironmentStore } from "../../src/db/environments";
 import { RepoSecretsStore } from "../../src/db/repo-secrets";
+import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { routeRequest, serviceFetch, serviceRequestHeaders } from "./helpers";
 
 const BASE = "https://test.local";
 
@@ -52,6 +53,7 @@ async function seedEnvironment(opts?: {
 
 describe("Environments API (routes)", () => {
   beforeEach(cleanD1Tables);
+  afterEach(() => vi.restoreAllMocks());
 
   describe("auth", () => {
     it("returns 401 without internal auth", async () => {
@@ -280,11 +282,27 @@ describe("Environments API (routes)", () => {
         }
       );
 
-      const res = await serviceFetch(`${BASE}/environments/${id}/secrets/import`, {
+      const checkRepositoryAccess = vi
+        .spyOn(GitHubSourceControlProvider.prototype, "checkRepositoryAccess")
+        .mockResolvedValue({
+          repoId: 1,
+          repoOwner: "acme",
+          repoName: "web",
+          defaultBranch: "main",
+        });
+      const url = `${BASE}/environments/${id}/secrets/import`;
+      const init = {
         method: "POST",
         body: JSON.stringify({ repoOwner: " ACME ", repoName: " WEB ", keys: ["DEPLOY_KEY"] }),
-      });
+      };
+      const res = await routeRequest(
+        new Request(url, { ...init, headers: await serviceRequestHeaders(url, init) }),
+        env,
+        createExecutionContext()
+      );
       expect(res.status).toBe(200);
+      expect(checkRepositoryAccess).toHaveBeenCalledOnce();
+      expect(checkRepositoryAccess).toHaveBeenCalledWith({ owner: "acme", name: "web" });
       const raw = await res.text();
       // Value-free: neither plaintext nor ciphertext leaks into the response.
       expect(raw).not.toContain("supersecretvalue");

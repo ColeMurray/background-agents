@@ -1,22 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { TemplateGallery } from "@/components/automations/template-gallery";
 import { BackIcon } from "@/components/ui/icons";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 export default function AutomationTemplatesPage() {
+  return (
+    <Suspense fallback={null}>
+      <AutomationTemplatesContent />
+    </Suspense>
+  );
+}
+
+function AutomationTemplatesContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const { hasPermission, loading } = useCurrentUserAuthorization();
-  const canCreate = hasPermission("automations.create");
+  const { teamId, navigation } = useAutomationScope();
+  const { canCreate, loading } = useCanCreateAutomation(teamId);
 
   useEffect(() => {
-    if (!loading && !canCreate) router.replace("/automations");
-  }, [canCreate, loading, router]);
+    if (!loading && !canCreate) router.replace(navigation.list);
+  }, [canCreate, loading, navigation, router]);
 
   if (loading || !canCreate) return null;
 
@@ -27,7 +36,7 @@ export default function AutomationTemplatesPage() {
           <div className="px-4 py-3 flex items-center gap-2">
             <CollapsedSidebarControls />
             <Link
-              href="/automations"
+              href={navigation.list}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
               aria-label="Back to automations"
             >
@@ -49,7 +58,7 @@ export default function AutomationTemplatesPage() {
             </p>
           </div>
 
-          <TemplateGallery />
+          <TemplateGallery teamId={teamId} />
         </div>
       </div>
     </div>

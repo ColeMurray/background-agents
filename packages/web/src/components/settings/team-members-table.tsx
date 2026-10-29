@@ -5,12 +5,22 @@ import type { TeamMember, TeamResponse } from "@/hooks/use-teams";
 import { useTeamMemberCandidates, useTeamMembers } from "@/hooks/use-teams";
 import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useAuthSession } from "@/lib/auth-session";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { UserIdentity, UserIdentityPicker, userDisplayName } from "@/components/user-identity";
 
 export function TeamMembersTable({ team, members }: { team: TeamResponse; members: TeamMember[] }) {
   const capabilities = useTeamCapabilities(team);
   const { hasPermission } = useCurrentUserAuthorization();
+  const viewerId = useAuthSession().data?.user?.id;
   const { candidates, loading, error } = useTeamMemberCandidates(
     capabilities.canManageMembers && hasPermission("workspace.members.read")
   );
@@ -42,35 +52,35 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
       <div className="divide-y divide-border rounded-lg border border-border">
         {members.length === 0 && <p className="p-4 text-sm text-muted-foreground">No members.</p>}
         {members.map((member) => {
-          const name = member.displayName ?? member.email ?? member.userId;
+          const name = userDisplayName(member);
+          // The control plane lets any member remove themselves unless they are the
+          // sole lead, which canLeave already reflects; others need manage rights.
+          const canRemove =
+            member.userId === viewerId ? capabilities.canLeave : capabilities.canManageMembers;
           return (
             <div
               key={member.userId}
               className="grid gap-3 p-4 sm:grid-cols-[1fr_8rem_auto] sm:items-center"
             >
-              <div className="min-w-0">
-                <p className="truncate font-medium text-foreground">{name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {member.email ?? member.userId}
-                </p>
-              </div>
-              <select
-                aria-label={`Role for ${name}`}
+              <UserIdentity {...member} />
+              <Select
                 value={member.role}
                 disabled={!capabilities.canManageMembers || pending}
-                onChange={(event) =>
-                  void run(() =>
-                    setMember(member.userId, event.target.value === "lead" ? "lead" : "member")
-                  )
+                onValueChange={(value) =>
+                  void run(() => setMember(member.userId, value === "lead" ? "lead" : "member"))
                 }
-                className="rounded border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
               >
-                <option value="member">Member</option>
-                <option value="lead">Lead</option>
-              </select>
+                <SelectTrigger aria-label={`Role for ${name}`} density="compact">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="member">Member</SelectItem>
+                  <SelectItem value="lead">Lead</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 variant="outline"
-                disabled={!capabilities.canManageMembers || pending}
+                disabled={!canRemove || pending}
                 onClick={() => void run(() => removeMember(member.userId))}
                 aria-label={`Remove ${name}`}
               >
@@ -85,20 +95,13 @@ export function TeamMembersTable({ team, members }: { team: TeamResponse; member
           Add member
         </label>
         {hasPermission("workspace.members.read") ? (
-          <select
+          <UserIdentityPicker
             id="add-team-member"
             value={userId}
             disabled={!capabilities.canManageMembers || pending || loading || !!error}
-            onChange={(event) => setUserId(event.target.value)}
-            className="min-w-48 flex-1 rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
-          >
-            <option value="">Select a workspace member</option>
-            {available.map((candidate) => (
-              <option key={candidate.userId} value={candidate.userId}>
-                {candidate.displayName ?? candidate.email ?? candidate.userId}
-              </option>
-            ))}
-          </select>
+            onValueChange={setUserId}
+            candidates={available}
+          />
         ) : (
           <input
             id="add-team-member"

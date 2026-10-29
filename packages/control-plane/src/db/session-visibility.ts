@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { SessionViewer } from "@open-inspect/shared";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 
@@ -26,7 +27,7 @@ export function visibleSessionsPredicate(
          WHERE tm.team_id = ${alias}.owner_team_id AND tm.user_id = ?)) )`
     : `${alias}.visibility != 'private'`;
   const params: unknown[] = teamsEnforced
-    ? [viewer.roleKey === "owner" || viewer.roleKey === "administrator" ? 1 : 0, viewer.userId]
+    ? [isWorkspaceAdmin(viewer.roleKey) ? 1 : 0, viewer.userId]
     : [];
   if (options.excludePrivate) {
     return {
@@ -34,8 +35,12 @@ export function visibleSessionsPredicate(
       params,
     };
   }
+  // Mirrors the resolver: team-owned collaborator grants require current team membership.
   const privateSql = `(${alias}.visibility = 'private' AND (${alias}.user_id = ? OR EXISTS (
-    SELECT 1 FROM session_collaborators sc WHERE sc.session_id = ${alias}.id AND sc.user_id = ?)))`;
+    SELECT 1 FROM session_collaborators sc WHERE sc.session_id = ${alias}.id AND sc.user_id = ?
+      AND (${alias}.owner_team_id IS NULL OR EXISTS (
+        SELECT 1 FROM team_memberships ctm
+        WHERE ctm.team_id = ${alias}.owner_team_id AND ctm.user_id = sc.user_id)))))`;
   params.push(viewer.userId, viewer.userId);
   return {
     sql: teamsEnforced

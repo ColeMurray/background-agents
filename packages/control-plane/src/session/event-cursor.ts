@@ -15,8 +15,7 @@ interface LegacyEventCursor {
 export type EventListCursor = EventTimelineCursor | LegacyEventCursor;
 
 export type ParseEventCursorResult<TCursor> =
-  | { ok: true; cursor: TCursor | null }
-  | { ok: false; error: string };
+  { ok: true; cursor: TCursor | null } | { ok: false; error: string };
 
 export function eventTimelineCursorFromRow(
   event: Pick<EventRow, "created_at" | "id" | "timeline_sequence">

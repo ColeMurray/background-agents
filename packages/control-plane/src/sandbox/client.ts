@@ -8,11 +8,19 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import type {
+  McpServerConfig,
+  SandboxResources,
+  SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
-import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
+import {
+  buildSessionConfig,
+  toRepositoryConfigPayload,
+  type ScmCloneIdentity,
+} from "./sandbox-env";
 import type { SessionRepositoryInfo } from "./provider";
 import { parsePendingVmReference } from "./providers/pending-vm-reference";
 import { withRequestDeadline } from "./request-deadline";
@@ -160,6 +168,7 @@ export function buildModalSandboxDashboardUrl(params: {
 }
 
 export interface CreateSandboxRequest {
+  scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -202,6 +211,7 @@ export interface CreateSandboxResponse {
 }
 
 export interface RestoreSandboxRequest {
+  scmIdentity: ScmCloneIdentity;
   sandboxBackend?: ModalBackend;
   retireSandboxId?: string | null;
   launchDeadlineAtMs?: number;
@@ -274,7 +284,7 @@ export interface SnapshotBuildSandboxRequest {
 }
 
 export interface CreateImageBuildSandboxRequest {
-  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
+  resources?: SandboxResources;
   sandboxBackend?: ModalBackend;
   /** Scope kind ("repo" | "environment") — accepted by Modal for logging only. */
   scopeKind: ImageBuildScopeKind;
@@ -283,9 +293,8 @@ export interface CreateImageBuildSandboxRequest {
   buildId: string;
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  scmIdentity: ScmCloneIdentity;
   cloneToken?: string;
-  cloneHost?: string;
-  cloneUsername?: string;
   callbackUrl: string;
   failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
@@ -330,12 +339,16 @@ export class ModalApiError extends Error {
   }
 }
 
+/**
+ * Whether a modal-vm launch HTTP error leaves the allocation unknown: any 5xx, except
+ * `docker_not_available`, which Modal returns before retiring or allocating a VM.
+ */
+export function isAmbiguousModalVmLaunchError(error: ModalApiError): boolean {
+  return error.status >= 500 && error.detail !== "docker_not_available";
+}
+
 export type ModalVmStartupOutcome =
-  | "unknown"
-  | "not_visible"
-  | "other_generation"
-  | "window_closed"
-  | "race_pending";
+  "unknown" | "not_visible" | "other_generation" | "window_closed" | "race_pending";
 
 export class ModalVmStartupError extends Error {
   constructor(
@@ -427,7 +440,7 @@ export class ModalClient {
           detail === "race_pending"
         )
           throw new ModalVmStartupError(detail, error);
-        if (error.status < 500) throw error;
+        if (!isAmbiguousModalVmLaunchError(error)) throw error;
       }
       throw new ModalVmStartupError(
         "unknown",
@@ -498,6 +511,8 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           agent_session_id: request.agentSessionId || null,
           harness: request.harness,
           provider: request.provider || "anthropic",
@@ -577,6 +592,8 @@ export class ModalClient {
         MODAL_SANDBOX_START_REQUEST_DEADLINE_MS,
         {
           snapshot_image_id: request.snapshotImageId,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           session_config: buildSessionConfig(request),
           sandbox_id: request.sandboxId,
           control_plane_url: request.controlPlaneUrl,
@@ -782,8 +799,8 @@ export class ModalClient {
           build_id: request.buildId,
           repositories: request.repositories.map(toRepositoryConfigPayload),
           clone_token: request.cloneToken,
-          clone_host: request.cloneHost,
-          clone_username: request.cloneUsername,
+          clone_host: request.scmIdentity.host,
+          clone_username: request.scmIdentity.cloneUsername,
           callback_url: request.callbackUrl,
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,

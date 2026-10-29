@@ -3,14 +3,24 @@ import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { applyIdentityEnforcement } from "../routing/identity-enforcement";
 import { SessionInternalPaths, sessionScmDisplayFieldsSchema } from "../session/contracts";
+import { UserStore } from "../db/user-store";
+import { resolveGitHubEnrichmentForRequest, type GitHubEnrichment } from "../session/identity";
+import { resolveScmProviderFromEnv } from "../source-control/config";
+import {
+  GitHubAttributionUnavailableError,
+  resolveGitHubCredentialAuthority,
+} from "../source-control/github-credential-authority";
 import type { Env } from "../types";
 import { error, GITHUB_USER_OR_SERVICE_ROUTE, requireSession } from "./shared";
 import { parseJsonBody } from "./body";
 import { dispatchSession, type SessionRouteContext } from "./session-route";
 
+// Optional attribution must leave time for minting before the browser proxy aborts.
+const WS_GITHUB_ATTRIBUTION_TIMEOUT_MS = 5_000;
+
 export async function handleSessionWsToken(
   request: Request,
-  _env: Env,
+  env: Env,
   params: { id: string },
   ctx: SessionRouteContext
 ): Promise<Response> {
@@ -32,6 +42,26 @@ export async function handleSessionWsToken(
   if (!authorization) return error("Authorization unavailable", 503);
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = authorization.userId;
+  const isGitHub = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
+  let enrichment: GitHubEnrichment | null = null;
+  if (isGitHub) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), WS_GITHUB_ATTRIBUTION_TIMEOUT_MS);
+    });
+    try {
+      enrichment = await Promise.race([
+        resolveGitHubCredentialAuthority(ctx, request.headers).then((authority) =>
+          resolveGitHubEnrichmentForRequest(new UserStore(ctx.db), canonicalUserId, authority)
+        ),
+        deadline,
+      ]);
+    } catch (retrievalError) {
+      if (!(retrievalError instanceof GitHubAttributionUnavailableError)) throw retrievalError;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -40,9 +70,11 @@ export async function handleSessionWsToken(
       body: JSON.stringify({
         userId,
         canonicalUserId,
-        scmLogin: body.scmLogin,
-        scmName: body.scmName,
-        scmEmail: body.scmEmail,
+        replaceScmIdentity: isGitHub,
+        scmUserId: enrichment?.scmUserId ?? null,
+        scmLogin: isGitHub ? (enrichment?.scmLogin ?? null) : body.scmLogin,
+        scmName: isGitHub ? (enrichment?.displayName ?? null) : body.scmName,
+        scmEmail: isGitHub ? (enrichment?.email ?? null) : body.scmEmail,
       }),
     })
   );

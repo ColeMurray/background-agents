@@ -15,10 +15,12 @@ DEFAULT_VNC_ENABLED = False
 
 @dataclass
 class SandboxConfig:
-    """Configuration for creating a sandbox."""
+    """Shared configuration for creating or restoring a sandbox."""
 
     repo_owner: str | None
     repo_name: str | None
+    clone_host: str  # VCS identity resolved by the control plane
+    clone_username: str
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
     session_config: SessionConfig | dict[str, Any] | None = None
     control_plane_url: str = ""

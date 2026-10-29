@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import type { Env } from "../types";
 import {
   clearLocalCache,
@@ -20,7 +21,7 @@ function makeEnv(fetchResult: Response | Error): Env {
   const fetch =
     fetchResult instanceof Error
       ? vi.fn().mockRejectedValue(fetchResult)
-      : vi.fn().mockResolvedValue(fetchResult);
+      : vi.fn().mockImplementation(async () => fetchResult.clone());
   return {
     SLACK_KV: {
       get: vi.fn().mockResolvedValue(null),
@@ -35,19 +36,6 @@ describe("getRoutingRules", () => {
   beforeEach(() => {
     clearLocalCache();
     vi.clearAllMocks();
-  });
-
-  it("parses routing rules from the control-plane settings response", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        integrationId: "slack",
-        settings: { defaults: { routingRules: [{ keyword: "frontend", target: "acme/web" }] } },
-      })
-    );
-
-    expect(await getRoutingRules(env, "trace")).toEqual([
-      { keyword: "frontend", target: "acme/web" },
-    ]);
   });
 
   it("returns an empty list when slack settings are unset", async () => {
@@ -83,11 +71,6 @@ describe("getRoutingRules", () => {
       })
     );
 
-    expect(await getRoutingRules(env)).toEqual([]);
-  });
-
-  it("fails open to an empty list on a non-OK response", async () => {
-    const env = makeEnv(new Response("error", { status: 500 }));
     expect(await getRoutingRules(env)).toEqual([]);
   });
 
@@ -161,7 +144,113 @@ describe("getAvailableRepos", () => {
     vi.clearAllMocks();
   });
 
-  it("normalizes control-plane repositories and stores them in KV", async () => {
+  it("reads channels afresh per user, keeping workspace reads actorless and cached", async () => {
+    const env = makeEnv(jsonResponse({ repos: [], cached: false, cachedAt: "2026-10-01" }));
+    const fetch = vi.mocked(env.CONTROL_PLANE.fetch);
+    fetch.mockImplementation(async (_input, init) => {
+      const name = new Headers(init?.headers).get("X-OpenInspect-Actor")?.slice(6) ?? "workspace";
+      return jsonResponse({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name,
+            fullName: `acme/${name}`,
+            description: null,
+            archived: false,
+            private: true,
+            defaultBranch: "main",
+          },
+        ],
+        cached: false,
+        cachedAt: "2026-10-01",
+      });
+    });
+    expect((await getAvailableRepos(env, "trace", null, "U123"))[0].name).toBe("workspace");
+    expect((await getAvailableRepos(env, "trace", "C1", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", "C1", "U456"))[0].name).toBe("u456");
+    expect((await getAvailableRepos(env, "trace", "C1", "U123"))[0].name).toBe("u123");
+    expect((await getAvailableRepos(env, "trace", null, "U456"))[0].name).toBe("workspace");
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("X-OpenInspect-Actor"))
+    ).toEqual([null, "slack:U123", "slack:U456", "slack:U123"]);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual([
+      "https://internal/repos",
+      "https://internal/repos?channel=slack%3AC1",
+      "https://internal/repos?channel=slack%3AC1",
+      "https://internal/repos?channel=slack%3AC1",
+    ]);
+    const [url, init] = fetch.mock.calls[1];
+    const headers = new Headers(init?.headers);
+    const signed = {
+      signatureHeader: headers.get("X-OpenInspect-Service-Signature") ?? "",
+      service: "slack-bot" as const,
+      secret: "test-secret",
+      method: init?.method ?? "GET",
+      url: String(url),
+      bodySha256Hex: await sha256Hex(""),
+      actor: headers.get("X-OpenInspect-Actor") ?? "",
+    };
+    expect(await verifyServiceSignature(signed)).toMatchObject({ ok: true });
+    const changed = new URL(signed.url);
+    changed.searchParams.set("channel", "slack:C_OTHER");
+    expect(await verifyServiceSignature({ ...signed, url: changed.toString() })).toMatchObject({
+      ok: false,
+      reason: "mismatch",
+    });
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+  });
+
+  it("makes no channel catalog request without a current user", async () => {
+    const env = makeEnv(new Error("should not fetch"));
+    expect(await getAvailableRepos(env, "trace", "C1")).toEqual([]);
+    expect(await getAvailableRepos(env, "trace", "C1", "")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Response | Error]>([
+    ["denied", new Response(null, { status: 403 })],
+    ["unavailable", new Response(null, { status: 503 })],
+    ["offline", new Error("CP offline")],
+    ["malformed", jsonResponse({ repos: [{ owner: "acme", name: "web" }] })],
+    ["invalid JSON", new Response("not JSON")],
+  ])("fails closed on %s with preseeded caches", async (_name, result) => {
+    const env = makeEnv(result);
+    vi.mocked(env.CONTROL_PLANE.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        repos: [
+          {
+            id: 1,
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            description: null,
+            archived: false,
+            private: true,
+            defaultBranch: "main",
+          },
+        ],
+        cached: false,
+        cachedAt: "2026-10-01",
+      })
+    );
+    const workspaceRepos = await getAvailableRepos(env, "trace");
+    expect(workspaceRepos).toHaveLength(1);
+    env.SLACK_KV.get = vi.fn().mockResolvedValue(workspaceRepos);
+    expect(await getAvailableRepos(env, "trace", "C1", "U123")).toEqual([]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(2);
+    expect(env.SLACK_KV.get).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).toHaveBeenCalledTimes(1);
+    expect(await getAvailableRepos(env, "trace")).toBe(workspaceRepos);
+    clearLocalCache();
+    expect(await getAvailableRepos(env, "trace")).toEqual(workspaceRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+  });
+
+  it("normalizes repositories and retains memory even if the KV write fails", async () => {
     const env = makeEnv(
       jsonResponse({
         repos: [
@@ -187,6 +276,7 @@ describe("getAvailableRepos", () => {
       })
     );
 
+    vi.mocked(env.SLACK_KV.put).mockRejectedValueOnce(new Error("KV unavailable"));
     const repos = await getAvailableRepos(env, "trace-1");
 
     expect(repos).toEqual([
@@ -207,35 +297,8 @@ describe("getAvailableRepos", () => {
     expect(env.SLACK_KV.put).toHaveBeenCalledWith("repos:cache", JSON.stringify(repos), {
       expirationTtl: 300,
     });
-  });
-
-  it("falls back to cached repos when the control plane returns an error", async () => {
-    const cachedRepos = [
-      {
-        id: "acme/web",
-        owner: "acme",
-        name: "web",
-        fullName: "acme/web",
-        displayName: "web",
-        description: "Cached repo",
-        defaultBranch: "main",
-        private: false,
-      },
-    ];
-    const env = {
-      SLACK_KV: {
-        get: vi.fn().mockResolvedValue(cachedRepos),
-        put: vi.fn().mockResolvedValue(undefined),
-        delete: vi.fn().mockResolvedValue(undefined),
-      },
-      CONTROL_PLANE: {
-        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
-      },
-      SERVICE_AUTH_SECRET: "test-secret",
-    } as unknown as Env;
-
-    await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
-    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+    expect(await getAvailableRepos(env, "trace-1")).toBe(repos);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("bounds the catalog fetch and serves the KV fallback when it times out", async () => {
@@ -285,19 +348,6 @@ describe("getAvailableRepos", () => {
     expect(init?.signal).toBe(timeoutSpy.mock.results[0]?.value);
   });
 
-  it("falls back when the control-plane repository response is malformed", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        repos: [{ owner: "Open-Inspect", name: "Background-Agents" }],
-        cached: false,
-        cachedAt: new Date().toISOString(),
-      })
-    );
-
-    await expect(getAvailableRepos(env, "trace-3")).resolves.toEqual([]);
-    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
-  });
-
   it("rejects malformed cached repositories on the fallback path", async () => {
     const env = {
       SLACK_KV: {
@@ -312,33 +362,6 @@ describe("getAvailableRepos", () => {
 
     await expect(getAvailableRepos(env, "trace-4")).resolves.toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
-  });
-
-  it("uses the in-memory cache after a successful fetch", async () => {
-    const env = makeEnv(
-      jsonResponse({
-        repos: [
-          {
-            id: 1,
-            owner: "acme",
-            name: "api",
-            fullName: "acme/api",
-            description: null,
-            private: false,
-            defaultBranch: "main",
-            archived: false,
-          },
-        ],
-        cached: false,
-        cachedAt: new Date().toISOString(),
-      })
-    );
-
-    const first = await getAvailableRepos(env);
-    const second = await getAvailableRepos(env);
-
-    expect(second).toBe(first);
-    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledTimes(1);
   });
 });
 

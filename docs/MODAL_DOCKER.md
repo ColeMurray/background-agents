@@ -33,10 +33,18 @@ The harness, bridge, workspace, IDE, and desktop run directly on the VM host. Do
 workloads such as PostgreSQL, Redis, and container builds. The runtime supervises the local daemon;
 user environment variables cannot enable Docker or redirect its readiness probes.
 
-Generic `cpuCores` and `memoryMib` size the **outer VM**, not individual containers. Missing/null
-values select the offering defaults (currently 2 cores and 4096 MiB). Positive explicit settings
-override them. VM image builds use their scope's configured resources. Standard build sizing is
-unchanged. These values are product defaults, not claimed Modal minimums.
+Generic `cpuCores` and `memoryMib` reserve resources for the **outer VM**, not individual
+containers. Missing/null requests select the offering defaults: 0.5 CPU cores and 2048 MiB. The VM
+can burst up to `cpuLimitCores` and `memoryLimitMib`; missing/null limits default to 2 CPU cores and
+4096 MiB, or the corresponding request if it is larger. Explicit limits must be at least the
+effective request. VM image builds use their scope's configured requests and limits. Standard build
+sizing is unchanged. These values are product defaults, not claimed Modal minimums.
+
+Modal bills CPU and memory by `max(request, actual usage)`, not the configured limit. Bursting above
+the request depends on spare host capacity; memory pressure can evict a sandbox using more than its
+request. CPU is throttled at its limit and exceeding the memory limit can cause an OOM kill. Size
+requests using observed usage and monitor exit reasons, especially for Docker and parallel builds.
+See [Modal Sandbox resources](https://modal.com/docs/guide/sandbox-resources).
 
 ## Snapshots and recovery
 
@@ -55,10 +63,12 @@ Containers must use appropriate persistence and restart policies. Live Docker pa
 provided. Raw daemon logs are truncated after clean preparation before reusable image capture.
 
 Retried VM launches adopt only an exactly owned allocation and recover its original interactive
-credentials. A predecessor must be confirmed terminated before launching a replacement. Build
-allocations have deterministic backend/build names, so a retried create adopts the allocation an
-earlier lost response created. Returned build handles are persisted for cleanup before backend
-validation; incompatible builds never start and cannot publish prepared images.
+credentials. A predecessor must be confirmed terminated before launching a replacement. A build
+whose create response is lost is marked failed; its VM runs until the provider's build sandbox
+timeout (40 minutes by default, up to 70 minutes, including the 10-minute finalization grace).
+Re-triggering the build uses a new build ID and allocation name, not the previous allocation.
+Returned build handles are persisted for cleanup before backend validation; incompatible builds
+never start and cannot publish prepared images.
 
 Before create or restore returns, the control plane records a pending VM reference of the form
 `modal-vm-session:["sessionId","sandboxId"]`. The session id selects the named allocation; the
@@ -106,10 +116,13 @@ Create, restore, and resolve report typed HTTP 409 error `detail` values:
 - `other_generation`: the ownership tags do not match.
 - `window_closed`: create/restore missed the launch deadline with no owned allocation.
 - `race_pending`: create/restore cannot yet see the winner after `AlreadyExistsError`, or resolve
-  found a VM whose enabled tunnel URLs are not all visible yet.
+  found a VM with none of its tunnel URLs readable yet. Like create/restore, resolve returns a
+  partial tunnel map rather than waiting for ports Modal did not publish.
 
-Unexpected provider errors remain 500. The pending-reference stop endpoint retains its separate
-`pending_reference_not_visible` response.
+Create reports HTTP 501 `docker_not_available` before retiring or allocating anything when the
+deployment has no verified Docker image. The control plane fails that launch as permanent instead of
+resolving it. Unexpected provider errors remain 500. The pending-reference stop endpoint retains its
+separate `pending_reference_not_visible` response.
 
 ## Switching backends
 
@@ -118,6 +131,24 @@ snapshots may become unusable. Drain/retire active allocations first when feasib
 credentials for pending cleanup, and rebuild images under the selected backend. Do not relabel old
 artifacts. Rollback to `modal` does not transparently resume VM sessions or prove old VMs have
 stopped.
+
+After changing `sandbox_provider`, apply Terraform and ensure the web app is deployed with the new
+provider. The deployment step depends on `web_platform`:
+
+- **Cloudflare**: `terraform apply` rebuilds and deploys the web Worker with the new provider. No
+  separate redeploy step is needed.
+- **Vercel**: after the apply, create a new production deployment through your configured CLI,
+  Git-linked, or GitHub Actions deployment path. If using Actions, manually run **Deploy Web**;
+  Terraform-only changes do not trigger it, and it skips deployment unless `VERCEL_API_TOKEN` and
+  `VERCEL_PROJECT_ID` are configured in GitHub. See
+  [Deploy the Web App](GETTING_STARTED.md#step-7-deploy-the-web-app) for the CLI and Git-linked
+  paths.
+
+Terraform updates `NEXT_PUBLIC_SANDBOX_PROVIDER`, but Vercel environment changes apply only to new
+deployments and `NEXT_PUBLIC_*` values are fixed at build time. Until the new Vercel deployment is
+live, `GET /api/image-builds` still filters by the old provider, so the Pre-Built Images page shows
+the old provider's builds. This applies to any provider switch, not only switches to or from
+`modal-vm`.
 
 PR #2007's earlier per-session Docker/variant design was not deployed. Its schema additions and
 settings are not part of this implementation, so no variant migration is required.

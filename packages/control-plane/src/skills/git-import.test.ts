@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
@@ -102,6 +102,43 @@ const SKILL_MD = [
 ].join("\n");
 
 describe("fetchSkillImport", () => {
+  it("imports the workspace catalog with installation-wide content access", async () => {
+    const provider = fakeProvider({ "SKILL.md": { content: SKILL_MD } });
+    const resolveCommit = vi.spyOn(provider, "resolveCommit");
+    const listTree = vi.spyOn(provider, "listTree");
+    const readBlob = vi.spyOn(provider, "readBlob");
+    await fetchSkillImport(provider, source());
+    for (const method of [resolveCommit, listTree, readBlob]) {
+      expect(method).toHaveBeenCalledWith(expect.any(Object), { kind: "all" });
+    }
+  });
+
+  it("reuses the repository resolution already authorized by the route", async () => {
+    const provider = fakeProvider({ "SKILL.md": { content: SKILL_MD } });
+    const check = vi.spyOn(provider, "checkRepositoryAccess");
+    const resolveCommit = vi.spyOn(provider, "resolveCommit");
+    const result = await fetchSkillImport(provider, source(), undefined, {
+      repoId: 123,
+      repoOwner: "canonical-owner",
+      repoName: "canonical-name",
+      defaultBranch: "develop",
+    });
+    expect(check).not.toHaveBeenCalled();
+    expect(resolveCommit).toHaveBeenCalledWith(
+      {
+        owner: "canonical-owner",
+        name: "canonical-name",
+        ref: "develop",
+      },
+      { kind: "all" }
+    );
+    expect(result.source).toMatchObject({
+      repoOwner: "canonical-owner",
+      repoName: "canonical-name",
+      resolvedRef: "develop",
+    });
+  });
+
   it("maps SKILL.md and supporting files onto a validated revision", async () => {
     const provider = fakeProvider({
       "SKILL.md": { content: SKILL_MD },
@@ -211,6 +248,30 @@ describe("fetchSkillImport", () => {
         message: 'SKILL.md has no name; "deploy-service" was derived from the source path',
       },
     ]);
+  });
+
+  it("derives an unnamed skill from the requested alias while reading the canonical repository", async () => {
+    const provider = fakeProvider(
+      { "SKILL.md": { content: "---\ndescription: Deploys the API\n---\n# Deploy\n" } },
+      { normalizedIdentity: { repoOwner: "canonical-owner", repoName: "renamed-skills" } }
+    );
+    const resolveCommit = vi.spyOn(provider, "resolveCommit");
+    const listTree = vi.spyOn(provider, "listTree");
+    const readBlob = vi.spyOn(provider, "readBlob");
+
+    const result = await fetchSkillImport(provider, source());
+
+    expect(result.name).toBe("skills");
+    expect(result.source).toMatchObject({
+      repoOwner: "canonical-owner",
+      repoName: "renamed-skills",
+    });
+    for (const read of [resolveCommit, listTree, readBlob]) {
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: "canonical-owner", name: "renamed-skills" }),
+        { kind: "all" }
+      );
+    }
   });
 
   it("surfaces frontmatter that has no managed-skill field", async () => {

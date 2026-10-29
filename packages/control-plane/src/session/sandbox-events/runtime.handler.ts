@@ -118,6 +118,7 @@ export class SandboxRuntimeEventHandler {
     }
     this.log.info("sandbox.boot_progress", {
       event: "sandbox.boot_progress",
+      sandbox_id: event.sandboxId,
       ...sandboxBootPhaseLogFields(toSandboxBootPhase(event)),
     });
     persistSandboxEvent(this.eventRepository, event, context);

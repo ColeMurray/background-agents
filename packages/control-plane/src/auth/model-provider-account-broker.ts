@@ -27,6 +27,8 @@ const DEFAULT_POLL_DELAY_MS = 100;
 
 export interface ProviderAccess {
   accessToken: string;
+  credentialVersion: number;
+  expiresAt: number;
   expiresIn?: number;
   externalAccountId?: string;
   providerMetadata?: Record<string, string>;
@@ -41,6 +43,7 @@ export type ModelProviderAccountBrokerErrorCode =
   | "credential_not_found"
   | "credential_invalid"
   | "exchange_busy"
+  | "deadline_exceeded"
   | "reconnect_required"
   | "upstream_retry_safe";
 
@@ -72,8 +75,13 @@ interface BrokerOptions {
   pollDelayMs?: number;
 }
 
+export interface ProviderAccessRequest {
+  rejectedCredentialVersion?: number;
+  /** Caller deadline is independent of the durable rotating-grant lease. */
+  deadlineAt?: number;
+}
+
 export class ModelProviderAccountBroker {
-  private readonly inFlight = new Map<string, Promise<ProviderAccess>>();
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly createOwner: () => string;
@@ -100,7 +108,22 @@ export class ModelProviderAccountBroker {
     );
   }
 
-  async getAccess(accountId: string, expectedProvider: ModelProviderId): Promise<ProviderAccess> {
+  async getAccess(
+    accountId: string,
+    expectedProvider: ModelProviderId,
+    request: ProviderAccessRequest = {}
+  ): Promise<ProviderAccess> {
+    this.requireBudget(request);
+    const access = await this.resolveAccess(accountId, expectedProvider, request);
+    this.requireBudget(request);
+    return access;
+  }
+
+  private async resolveAccess(
+    accountId: string,
+    expectedProvider: ModelProviderId,
+    request: ProviderAccessRequest
+  ): Promise<ProviderAccess> {
     const account = await this.requireUsableAccount(accountId, expectedProvider);
     const adapter = this.registry.get(expectedProvider);
     if (!adapter) {
@@ -110,35 +133,57 @@ export class ModelProviderAccountBroker {
       );
     }
     const state = await this.readState(accountId, expectedProvider);
+    this.requireBudget(request);
+    if (
+      request.rejectedCredentialVersion !== undefined &&
+      state.credentialVersion < request.rejectedCredentialVersion
+    ) {
+      throw new ModelProviderAccountBrokerError(
+        "credential_invalid",
+        "Rejected credential version is not current"
+      );
+    }
     const credential = this.parseCredential(adapter, state);
     const cached = adapter.cachedAccess(credential);
-    if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
+    if (
+      state.exchangeState === "idle" &&
+      state.credentialVersion !== request.rejectedCredentialVersion &&
+      cached &&
+      cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs
+    ) {
       await this.touchLastUsed(account);
-      return this.toAccess(account, adapter, credential, cached);
+      return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
     }
 
-    const key = `${accountId}:${state.credentialVersion}`;
-    const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const promise = this.refreshWithClaim(account, adapter, state).finally(() => {
-      if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
-    });
-    this.inFlight.set(key, promise);
-    return promise;
+    // The durable claim is the only coalescing: a concurrent caller polls it and
+    // evaluates its own rejected version and budget against the settled state.
+    return this.refreshWithClaim(account, adapter, state, request);
   }
 
   private async refreshWithClaim(
-    account: ModelProviderAccount & { status: "active" },
+    initialAccount: ModelProviderAccount & { status: "active" },
     adapter: ErasedProviderAccountAdapter,
-    initialState: ProviderCredentialState
+    initialState: ProviderCredentialState,
+    request: ProviderAccessRequest
   ): Promise<ProviderAccess> {
+    let account = initialAccount;
     let state = initialState;
+    let waited = false;
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
+      this.requireBudget(request);
       const credential = this.parseCredential(adapter, state);
       const cached = adapter.cachedAccess(credential);
-      if (cached && cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs) {
+      if (
+        state.exchangeState === "idle" &&
+        state.credentialVersion !== request.rejectedCredentialVersion &&
+        cached &&
+        cached.accessTokenExpiresAt - this.now() > adapter.refreshBufferMs
+      ) {
+        // Idle after a wait means the lease ended, not that the account is still
+        // usable: the owner may have fenced it terminally.
+        if (waited) account = await this.requireCurrentEligibility(account);
         await this.touchLastUsed(account);
-        return this.toAccess(account, adapter, credential, cached);
+        return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
       }
 
       if (state.exchangeState === "in_flight") {
@@ -165,6 +210,7 @@ export class ModelProviderAccountBroker {
         }
         await this.sleep(this.pollDelayMs);
         state = await this.readState(account.id, account.provider);
+        waited = true;
         continue;
       }
 
@@ -177,6 +223,7 @@ export class ModelProviderAccountBroker {
           adapter,
           owner: this.createOwner(),
           now: this.now,
+          refreshDeadlineAt: request.deadlineAt,
           complete: ({ write, refreshed }) => {
             adapter.validateExternalIdentity(
               refreshed.externalAccountId,
@@ -188,13 +235,20 @@ export class ModelProviderAccountBroker {
         if (result.kind === "claim_unavailable") {
           await this.sleep(this.pollDelayMs);
           state = await this.readState(account.id, account.provider);
+          waited = true;
           continue;
         }
         await this.touchLastUsed(account);
-        return this.toAccess(account, adapter, result.refreshed.credential, {
-          accessToken: result.refreshed.accessToken,
-          accessTokenExpiresAt: result.refreshed.accessTokenExpiresAt,
-        });
+        return this.toAccess(
+          account,
+          adapter,
+          result.refreshed.credential,
+          {
+            accessToken: result.refreshed.accessToken,
+            accessTokenExpiresAt: result.refreshed.accessTokenExpiresAt,
+          },
+          state.credentialVersion + 1
+        );
       } catch (error) {
         if (!(error instanceof ClaimedProviderCredentialExchangeError)) throw error;
         if (error.phase === "parse") {
@@ -250,7 +304,7 @@ export class ModelProviderAccountBroker {
         "Concurrent credential replacement has no usable access token"
       );
     }
-    return this.toAccess(account, adapter, credential, cached);
+    return this.toAccess(account, adapter, credential, cached, state.credentialVersion);
   }
 
   private parseCredential(
@@ -301,6 +355,22 @@ export class ModelProviderAccountBroker {
     previousState: ProviderCredentialState,
     fenceError?: unknown
   ): Promise<ProviderAccess> {
+    const account = await this.requireCurrentEligibility(previousAccount);
+    const state = await this.readState(account.id, account.provider);
+    if (state.credentialVersion !== previousState.credentialVersion) {
+      return this.accessFromConcurrentUpdate(account, adapter, state);
+    }
+    if (fenceError !== undefined) throw fenceError;
+    throw new ModelProviderAccountBrokerError(
+      "exchange_busy",
+      `${account.provider} credential exchange lost its durable claim`
+    );
+  }
+
+  /** The account's current lifecycle state, rejecting it if no longer usable. */
+  private async requireCurrentEligibility(
+    previousAccount: ModelProviderAccount
+  ): Promise<ModelProviderAccount & { status: "active" }> {
     const account = await this.stores.accounts.getById(previousAccount.id);
     if (!account) {
       throw new ModelProviderAccountBrokerError("account_not_found", "Provider account not found");
@@ -324,16 +394,7 @@ export class ModelProviderAccountBroker {
         `Provider account is ${account.status}`
       );
     }
-
-    const state = await this.readState(account.id, account.provider);
-    if (state.credentialVersion !== previousState.credentialVersion) {
-      return this.accessFromConcurrentUpdate(account, adapter, state);
-    }
-    if (fenceError !== undefined) throw fenceError;
-    throw new ModelProviderAccountBrokerError(
-      "exchange_busy",
-      `${account.provider} credential exchange lost its durable claim`
-    );
+    return { ...account, status: "active" };
   }
 
   private async readState(
@@ -354,11 +415,14 @@ export class ModelProviderAccountBroker {
     account: ModelProviderAccount,
     adapter: ErasedProviderAccountAdapter,
     credential: unknown,
-    cached: { accessToken: string; accessTokenExpiresAt: number }
+    cached: { accessToken: string; accessTokenExpiresAt: number },
+    credentialVersion: number
   ): ProviderAccess {
     const expiresIn = Math.max(0, Math.floor((cached.accessTokenExpiresAt - this.now()) / 1000));
     return {
       accessToken: cached.accessToken,
+      credentialVersion,
+      expiresAt: cached.accessTokenExpiresAt,
       expiresIn,
       ...(account.externalAccountId ? { externalAccountId: account.externalAccountId } : {}),
       providerMetadata: adapter.runtimeMetadata(credential, account.externalAccountId),
@@ -374,6 +438,15 @@ export class ModelProviderAccountBroker {
       );
     } catch {
       // Usage attribution must not invalidate already-persisted authentication state.
+    }
+  }
+
+  private requireBudget(request: ProviderAccessRequest): void {
+    if (request.deadlineAt !== undefined && this.now() >= request.deadlineAt) {
+      throw new ModelProviderAccountBrokerError(
+        "deadline_exceeded",
+        "Provider access deadline exceeded"
+      );
     }
   }
 

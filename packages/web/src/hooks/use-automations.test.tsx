@@ -5,10 +5,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
-import { useAutomations } from "./use-automations";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
+import { useAutomation, useAutomations } from "./use-automations";
 
+let authSession: { data: { user: { id: string } } | null; status: string } = {
+  data: { user: { id: "user-1" } },
+  status: "authenticated",
+};
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+  useAuthSession: () => authSession,
 }));
 
 function automation(id: string, name: string): AutomationListItem {
@@ -19,12 +24,14 @@ function automation(id: string, name: string): AutomationListItem {
     harness: "opencode",
     triggerType: "schedule",
     scheduleCron: "0 9 * * *",
+    scheduleOnceAt: null,
     scheduleTz: "UTC",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     enabled: true,
     nextRunAt: null,
     consecutiveFailures: 0,
+    maxRetries: 0,
     createdBy: "user-1",
     userId: "11111111111111111111111111111111",
     createdAt: 1,
@@ -35,7 +42,9 @@ function automation(id: string, name: string): AutomationListItem {
     repositories: [],
     environmentIds: [],
     providerSelections: {},
+    ownerTeamId: null,
     recentExecutions: [],
+    capabilities: { canRead: true, canManage: true, canTrigger: true },
   };
 }
 
@@ -83,13 +92,11 @@ describe("useAutomations", () => {
   });
 
   it("replaces loaded pages when the search changes", async () => {
-    const fetcher = vi.fn(
-      async (path: string): Promise<ListAutomationsResponse> => ({
-        automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => ({
+      automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result, rerender } = renderHook(({ search }) => useAutomations(search), {
       initialProps: { search: "Daily" },
       wrapper: wrapper(fetcher),
@@ -100,6 +107,35 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
     expect(result.current.automations).not.toContain(firstAutomation);
+  });
+
+  it("scopes every cursor page and replaces pages when the team changes", async () => {
+    const scoped = {
+      ...firstAutomation,
+      ownerTeamId: "team/one",
+      capabilities: { canRead: true, canManage: false, canTrigger: true },
+    };
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
+      if (path.includes("teamId=team-2")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      if (path.includes("cursor=")) {
+        return { automations: [secondAutomation], hasMore: false, nextCursor: null };
+      }
+      return { automations: [scoped], hasMore: true, nextCursor: "next" };
+    });
+    const { result, rerender } = renderHook(({ teamId }) => useAutomations("Daily", teamId), {
+      initialProps: { teamId: "team/one" },
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([scoped]));
+    await act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.automations).toEqual([scoped, secondAutomation]));
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/automations?limit=25&search=Daily&teamId=team%2Fone&cursor=next"
+    );
+    rerender({ teamId: "team-2" });
+    await waitFor(() => expect(result.current.automations).toEqual([secondAutomation]));
   });
 
   it("rebuilds later cursor pages when the first page changes", async () => {
@@ -169,13 +205,11 @@ describe("useAutomations", () => {
   });
 
   it("does not request another page after the final page", async () => {
-    const fetcher = vi.fn(
-      async (): Promise<ListAutomationsResponse> => ({
-        automations: [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => ({
+      automations: [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result } = renderHook(() => useAutomations(""), {
       wrapper: wrapper(fetcher),
     });
@@ -204,5 +238,58 @@ describe("useAutomations", () => {
     expect(
       fetcher.mock.calls.filter(([path]) => String(path).includes("cursor=")).map(([path]) => path)
     ).toEqual(["/api/automations?limit=25&cursor=next"]);
+  });
+
+  it.each([
+    [403, []],
+    [404, []],
+    [500, [firstAutomation]],
+  ])("after a %i refetch shows %j for a loaded list", async (status, expected) => {
+    let failure: SwrFetchError | null = null;
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => {
+      if (failure) throw failure;
+      return { automations: [firstAutomation], hasMore: false, nextCursor: null };
+    });
+    const { result } = renderHook(() => useAutomations("", "team-1"), {
+      wrapper: wrapper(fetcher),
+    });
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+
+    failure = new SwrFetchError(status);
+    await act(async () => {
+      await result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.error).toBe(failure));
+    expect(result.current.automations).toEqual(expected);
+  });
+});
+
+describe("useAutomation", () => {
+  beforeEach(() => {
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+  });
+
+  it("reports a requested automation as loading while the auth session resolves", async () => {
+    authSession = { data: null, status: "loading" };
+    const fetcher = vi.fn(async () => ({ automation: firstAutomation }));
+    const { result, rerender } = renderHook(() => useAutomation("auto-2"), {
+      wrapper: wrapper(fetcher),
+    });
+    expect(result.current).toMatchObject({ automation: null, loading: true });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+    rerender();
+    await waitFor(() => expect(result.current.automation?.id).toBe("auto-2"));
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("is not loading without an id", () => {
+    authSession = { data: null, status: "loading" };
+    const { result } = renderHook(() => useAutomation(undefined), {
+      wrapper: wrapper(vi.fn()),
+    });
+    expect(result.current.loading).toBe(false);
   });
 });

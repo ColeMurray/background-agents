@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
+import { isValidModel } from "@open-inspect/shared/models";
+import { HarnessAdmissionError, resolveHarnessInitialization } from "../../../harness-admission";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
 import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
@@ -57,10 +58,6 @@ const initRequestSchema = z.object({
   scmLogin: z.string().nullable().optional(),
   scmName: z.string().nullable().optional(),
   scmEmail: z.string().nullable().optional(),
-  scmToken: z.string().nullable().optional(),
-  scmTokenEncrypted: z.string().nullable().optional(),
-  scmRefreshTokenEncrypted: z.string().nullable().optional(),
-  scmTokenExpiresAt: z.number().nullable().optional(),
   scmUserId: z.string().nullable().optional(),
   parentSessionId: z.string().nullable().optional(),
   spawnSource: spawnSourceSchema.optional(),
@@ -92,7 +89,6 @@ export class SessionInitHandler {
     private readonly participantRepository: ParticipantRepository,
     private readonly durableObjectId: string,
     private readonly scheduleWarmSandbox: () => void,
-    private readonly encryptScmToken: (token: string) => Promise<string>,
     private readonly generateId: (bytes?: number) => string,
     private readonly now: () => number = Date.now
   ) {}
@@ -137,21 +133,16 @@ export class SessionInitHandler {
       return Response.json({ sessionId, status: "created" });
     }
 
-    // Current SessionInitInput never sends token fields. Accept them here only
-    // so already-running pre-cutover producers remain readable.
-    let encryptedToken = body.scmTokenEncrypted ?? null;
-    if (body.scmToken) {
-      try {
-        encryptedToken = await this.encryptScmToken(body.scmToken);
-        log.debug("Encrypted SCM token for storage");
-      } catch (error) {
-        log.error("Failed to encrypt SCM token", {
-          error: error instanceof Error ? error : String(error),
-        });
-      }
+    const harness = getValidHarnessOrDefault(body.harness);
+    let selection;
+    try {
+      selection = resolveHarnessInitialization(harness, body);
+    } catch (cause) {
+      if (cause instanceof HarnessAdmissionError)
+        return Response.json({ error: cause.message }, { status: cause.status });
+      throw cause;
     }
-
-    const model = getValidModelOrDefault(body.model);
+    const { model } = selection;
     if (body.model && !isValidModel(body.model)) {
       log.warn("Invalid model name, using default", {
         requested_model: body.model,
@@ -159,7 +150,7 @@ export class SessionInitHandler {
       });
     }
 
-    const reasoningEffort = validateReasoningEffort(model, body.reasoningEffort ?? undefined, log);
+    const reasoningEffort = validateReasoningEffort(model, selection.reasoningEffort, log, harness);
     const baseBranch = hasRepoOwner
       ? body.branch || body.defaultBranch || DEFAULT_BASE_BRANCH
       : null;
@@ -201,7 +192,7 @@ export class SessionInitHandler {
         repoName,
         repoId: hasRepoOwner ? body.repoId : null,
         baseBranch,
-        harness: getValidHarnessOrDefault(body.harness),
+        harness,
         model,
         reasoningEffort,
         status: "created",
@@ -253,9 +244,6 @@ export class SessionInitHandler {
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
         scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: encryptedToken,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
         role: "owner",
         joinedAt: now,
       });

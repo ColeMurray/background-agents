@@ -85,7 +85,8 @@ async function seedFixture(): Promise<void> {
     {
       id: "shared-private",
       visibility: "private",
-      ownerTeamId: "team_alpha",
+      // Team-owned collaborator grants require membership, so share within the collaborator's team.
+      ownerTeamId: "team_beta",
       userId: "outsider",
       cost: 32,
     },

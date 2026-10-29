@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
 import { ChildSessionListItem, SessionListItem } from "./session-list-item";
 
@@ -11,6 +11,7 @@ expect.extend(matchers);
 
 const mocks = vi.hoisted(() => ({
   allowedPermissions: new Set<string>(),
+  canManageLifecycle: false,
 }));
 
 vi.mock("next/link", () => ({
@@ -29,7 +30,11 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 
 beforeEach(() => {
   mocks.allowedPermissions = new Set();
+  mocks.canManageLifecycle = false;
 });
+
+// Vitest globals are disabled, so Testing Library never registers its own cleanup.
+afterEach(cleanup);
 
 function session(unread = false): SessionItem {
   return {
@@ -44,6 +49,15 @@ function session(unread = false): SessionItem {
     environmentId: null,
     createdAt: 1,
     updatedAt: 2,
+    capabilities: {
+      canRead: true,
+      canCollaborate: false,
+      canManageLifecycle: mocks.canManageLifecycle,
+      canDelete: false,
+      canSandbox: false,
+      canManageCollaborators: false,
+      canChangeVisibility: false,
+    },
     readState: unread
       ? { latestMessageId: "message-1", version: 1, unread: true }
       : { latestMessageId: null, version: 0, unread: false },
@@ -62,14 +76,15 @@ function renderItem(unread = false) {
   );
 }
 
-it("fails closed when sessions.lifecycle is denied", () => {
+it("uses the server lifecycle denial even when the workspace permission is granted", () => {
+  mocks.allowedPermissions.add("sessions.lifecycle");
   renderItem();
 
   expect(screen.queryByRole("button", { name: "Session actions" })).not.toBeInTheDocument();
 });
 
-it("shows rename and archive actions when sessions.lifecycle is allowed", async () => {
-  mocks.allowedPermissions.add("sessions.lifecycle");
+it("shows rename and archive actions when the server allows lifecycle management", async () => {
+  mocks.canManageLifecycle = true;
   renderItem();
 
   fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
@@ -92,6 +107,52 @@ it("keeps mark-as-read available without sessions.lifecycle", async () => {
   expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeInTheDocument();
   expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
   expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
+});
+
+it("offers mark-all-as-read on a parent whose descendants are unread", async () => {
+  const onMarkHierarchyRead = vi.fn(async () => undefined);
+  render(
+    <SessionListItem
+      session={session()}
+      isActive={false}
+      isMobile={false}
+      hasUnreadDescendants
+      onArchive={vi.fn()}
+      onMarkLatestMessageRead={vi.fn()}
+      onMarkHierarchyRead={onMarkHierarchyRead}
+    />
+  );
+
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark all as read" }));
+
+  expect(screen.queryByRole("menuitem", { name: "Mark as read" })).not.toBeInTheDocument();
+  await waitFor(() => expect(onMarkHierarchyRead).toHaveBeenCalledWith("session-1"));
+});
+
+it("omits mark-all-as-read when no descendant is unread", async () => {
+  render(
+    <SessionListItem
+      session={session(true)}
+      isActive={false}
+      isMobile={false}
+      hasUnreadDescendants={false}
+      onArchive={vi.fn()}
+      onMarkLatestMessageRead={vi.fn()}
+      onMarkHierarchyRead={vi.fn()}
+    />
+  );
+
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Session actions" }), {
+    button: 0,
+    ctrlKey: false,
+  });
+
+  expect(await screen.findByRole("menuitem", { name: "Mark as read" })).toBeInTheDocument();
+  expect(screen.queryByRole("menuitem", { name: "Mark all as read" })).not.toBeInTheDocument();
 });
 
 it("keeps an open child session menu trigger measurable", async () => {

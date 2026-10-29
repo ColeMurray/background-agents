@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModalClient, type ModalClient } from "../client";
 import { SandboxLaunchRejectedError } from "../provider";
 import { ModalSandboxProvider } from "./modal-provider";
+import { scmCloneIdentity } from "../sandbox-env";
 import { resolveSandboxDashboardUrl } from "../../session/sandbox-access";
 
+const scmIdentity = scmCloneIdentity("github");
 const config = {
   sessionId: "session-1",
   sandboxId: "sandbox-1",
@@ -51,13 +53,100 @@ function fixture(confirmation: unknown) {
   };
   return {
     client,
-    provider: new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm"),
+    provider: new ModalSandboxProvider(client as unknown as ModalClient, "modal-vm", "github"),
   };
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("distinct Modal backend identities", () => {
+  it.each(["modal", "modal-vm"] as const)(
+    "rejects explicit conflicting pairs before %s create or restore allocation",
+    async (backend) => {
+      const { client } = fixture(backend);
+      const provider = new ModalSandboxProvider(
+        client as unknown as ModalClient,
+        backend,
+        "github"
+      );
+      for (const sandboxSettings of [
+        { cpuCores: 4, cpuLimitCores: 2 },
+        { memoryMib: 8192, memoryLimitMib: 4096 },
+      ]) {
+        await expect(provider.createSandbox({ ...config, sandboxSettings })).rejects.toMatchObject({
+          name: "SandboxProviderError",
+          errorType: "permanent",
+        });
+        await expect(
+          provider.restoreFromSnapshot({ ...config, snapshotImageId: "im-1", sandboxSettings })
+        ).rejects.toMatchObject({
+          name: "SandboxProviderError",
+          errorType: "permanent",
+        });
+      }
+      expect(client.createSandbox).not.toHaveBeenCalled();
+      expect(client.restoreSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["modal", "modal-vm"] as const)(
+    "rejects cap-only settings below default requests before %s allocation",
+    async (backend) => {
+      const { client } = fixture(backend);
+      const provider = new ModalSandboxProvider(
+        client as unknown as ModalClient,
+        backend,
+        "github"
+      );
+      for (const request of [undefined, null]) {
+        for (const sandboxSettings of [
+          { cpuCores: request, cpuLimitCores: backend === "modal-vm" ? 0.25 : 0.0625 },
+          { memoryMib: request, memoryLimitMib: backend === "modal-vm" ? 1024 : 64 },
+        ]) {
+          await expect(provider.createSandbox({ ...config, sandboxSettings })).rejects.toThrow(
+            "must be greater than or equal"
+          );
+          await expect(
+            provider.restoreFromSnapshot({ ...config, snapshotImageId: "im-1", sandboxSettings })
+          ).rejects.toThrow("must be greater than or equal");
+        }
+      }
+      expect(client.createSandbox).not.toHaveBeenCalled();
+      expect(client.restoreSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects conflicting VM build resources before allocation or binding", async () => {
+    const { provider, client } = fixture("modal-vm");
+    const bind = vi.fn();
+    for (const resources of [
+      { cpuCores: 4, cpuLimitCores: 2 },
+      { memoryMib: 8192, memoryLimitMib: 4096 },
+      { cpuLimitCores: 0.25 },
+      { cpuCores: null, cpuLimitCores: 0.25 },
+      { memoryLimitMib: 1024 },
+      { memoryMib: null, memoryLimitMib: 1024 },
+    ]) {
+      await expect(
+        provider.triggerImageBuild({ ...build, resources, onProviderSessionCreated: bind })
+      ).rejects.toThrow("must be greater than or equal");
+    }
+    expect(client.createImageBuildSandbox).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+    expect(client.startImageBuildSandbox).not.toHaveBeenCalled();
+  });
+
+  it("ignores conflicting resource settings for standard Modal builds", async () => {
+    const { client } = fixture("modal");
+    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal", "github");
+    await provider.triggerImageBuild({
+      ...build,
+      resources: { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 },
+      onProviderSessionCreated: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(client.createImageBuildSandbox).toHaveBeenCalledOnce();
+    expect(client.startImageBuildSandbox).toHaveBeenCalledOnce();
+  });
   it("retries a lost VM capture response while retaining the source", async () => {
     const { client, provider } = fixture("modal-vm");
     client.snapshotSandbox.mockRejectedValueOnce(new Error("response lost"));
@@ -74,7 +163,7 @@ describe("distinct Modal backend identities", () => {
   });
   it("selects the immutable backend on both launch paths without altering generic resources", async () => {
     const { provider, client } = fixture("modal-vm");
-    const settings = { cpuCores: 3, memoryMib: null };
+    const settings = { cpuCores: 3, memoryMib: null, cpuLimitCores: 4, memoryLimitMib: null };
     await provider.createSandbox({ ...config, sandboxSettings: settings });
     await provider.restoreFromSnapshot({
       ...config,
@@ -96,6 +185,21 @@ describe("distinct Modal backend identities", () => {
     expect(provider.capabilities.snapshotRequiresShutdown).toBe(true);
   });
 
+  it.each(["modal", "modal-vm"] as const)("forwards image-build caps to %s", async (backend) => {
+    const { client } = fixture(backend);
+    const provider = new ModalSandboxProvider(client as unknown as ModalClient, backend, "github");
+    const resources = { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: null };
+    await provider.triggerImageBuild({
+      ...build,
+      resources,
+      onProviderSessionCreated: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(client.createImageBuildSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources, sandboxBackend: backend }),
+      build.correlation
+    );
+  });
+
   it.each([undefined, null, false, "modal", "future-backend", { unexpected: true }])(
     "returns rejected create/restore handles before cleanup with confirmation %j",
     async (value) => {
@@ -110,7 +214,7 @@ describe("distinct Modal backend identities", () => {
 
   it("accepts older standard Modal responses without a backend echo", async () => {
     const { client } = fixture(undefined);
-    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal");
+    const provider = new ModalSandboxProvider(client as unknown as ModalClient, "modal", "github");
     await expect(provider.createSandbox(config)).resolves.toMatchObject({
       providerObjectId: "sb-1",
     });
@@ -172,7 +276,11 @@ describe("distinct Modal backend identities", () => {
       )
     );
     const client = createModalClient("test-secret", "workspace");
-    const result = await client.createImageBuildSandbox({ ...build, sandboxBackend: "modal-vm" });
+    const result = await client.createImageBuildSandbox({
+      ...build,
+      scmIdentity,
+      sandboxBackend: "modal-vm",
+    });
     expect(result).toMatchObject({ providerSessionId: "sb-1", sandboxBackend: { invalid: true } });
   });
 
@@ -190,20 +298,58 @@ describe("distinct Modal backend identities", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const client = createModalClient("test-secret", "workspace");
-    await client.createSandbox({ ...config, sandboxBackend: "modal-vm" });
+    const sandboxSettings = {
+      cpuCores: 0.5,
+      memoryMib: 2048,
+      cpuLimitCores: 2,
+      memoryLimitMib: null,
+    };
+    await client.createSandbox({
+      ...config,
+      scmIdentity,
+      sandboxBackend: "modal-vm",
+      sandboxSettings,
+    });
     fetchMock.mockResolvedValue(
       Response.json({
         success: true,
         data: { sandbox_id: "sandbox-1", modal_object_id: "sb-1", sandbox_backend: "modal-vm" },
       })
     );
-    await client.restoreSandbox({ ...config, snapshotImageId: "im-1", sandboxBackend: "modal-vm" });
+    await client.restoreSandbox({
+      ...config,
+      scmIdentity,
+      snapshotImageId: "im-1",
+      sandboxBackend: "modal-vm",
+      sandboxSettings,
+    });
     for (const [, init] of fetchMock.mock.calls) {
       expect(JSON.parse(init.body)).toMatchObject({
         sandbox_backend: "modal-vm",
         retire_sandbox_id: "prior-generation",
+        sandbox_settings: sandboxSettings,
       });
     }
+  });
+
+  it("serializes image-build resource caps without dropping null resets", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        success: true,
+        data: { provider_session_id: "sb-1", sandbox_backend: "modal-vm" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const resources = { cpuCores: 0.5, memoryMib: 2048, cpuLimitCores: 2, memoryLimitMib: null };
+    await createModalClient("test-secret", "workspace").createImageBuildSandbox({
+      ...build,
+      scmIdentity,
+      sandboxBackend: "modal-vm",
+      resources,
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      sandbox_settings: resources,
+    });
   });
 
   it("leaves VM retirement to the control plane after capture", async () => {

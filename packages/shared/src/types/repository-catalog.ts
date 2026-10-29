@@ -62,6 +62,7 @@ export const controlPlaneReposResponseSchema = z.object({
   repos: z.array(enrichedRepositorySchema),
   cached: z.boolean(),
   cachedAt: z.string(),
+  teamHasRepositoryGrants: z.boolean().optional(),
 });
 
 export type ControlPlaneReposResponse = z.infer<typeof controlPlaneReposResponseSchema>;

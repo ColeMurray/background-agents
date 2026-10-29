@@ -1,6 +1,5 @@
 """Authentication utilities for Open-Inspect sandbox runtime."""
 
-from .github_app import generate_installation_token
 from .internal import (
     AuthConfigurationError,
     require_secret,
@@ -9,7 +8,6 @@ from .internal import (
 
 __all__ = [
     "AuthConfigurationError",
-    "generate_installation_token",
     "require_secret",
     "verify_internal_token",
 ]

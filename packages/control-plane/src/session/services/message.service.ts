@@ -115,8 +115,15 @@ export class MessageService {
     this.eventStream = new SessionEventStream(deps.eventRepository);
   }
 
-  enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
+  enqueuePrompt(
+    request: EnqueuePromptRequest
+  ): Promise<{ messageId: string; status: "queued"; deduplicated: boolean }> {
     return this.deps.messageQueue.enqueuePromptFromApi(request);
+  }
+
+  /** Whether the session queued a prompt under this clientRequestId. */
+  hasPromptRequest(clientRequestId: string): boolean {
+    return this.deps.repository.getMessageByClientRequestId(clientRequestId) !== null;
   }
 
   async stop(): Promise<{ status: "stopping" }> {

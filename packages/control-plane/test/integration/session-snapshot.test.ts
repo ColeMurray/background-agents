@@ -8,11 +8,41 @@ import {
   openClientWs,
   queryDO,
   seedEvents,
+  serviceFetch,
   waitForSandboxStatus,
 } from "./helpers";
 
 describe("session snapshot synchronization", () => {
   beforeEach(cleanD1Tables);
+
+  it.each(["22222222222222222222222222222222", null])(
+    "returns the D1 ownerUserId for a private snapshot despite a stale DO owner (%s)",
+    async (ownerUserId) => {
+      const name = `snapshot-owner-${crypto.randomUUID()}`;
+      const { stub } = await initNamedSession(name, { userId: "stale-runtime-owner" });
+      await waitForSandboxStatus(stub, "failed");
+      await env.DB.prepare("UPDATE sessions SET user_id = ?, visibility = 'private' WHERE id = ?")
+        .bind(ownerUserId, name)
+        .run();
+
+      expect(
+        await queryDO<{ user_id: string }>(
+          stub,
+          "SELECT user_id FROM participants WHERE role = 'owner'"
+        )
+      ).toEqual([{ user_id: "stale-runtime-owner" }]);
+
+      const response = await serviceFetch(`https://test.local/sessions/${name}`);
+
+      expect(response.status).toBe(200);
+      const snapshot = await response.json<SessionSnapshot>();
+      expect(snapshot.session).toMatchObject({
+        ownerUserId,
+        visibility: "private",
+        capabilities: { canRead: true, canSandbox: false },
+      });
+    }
+  );
 
   it("returns a secret-free snapshot with stable event identities", async () => {
     const name = `snapshot-${Date.now()}`;

@@ -9,52 +9,7 @@ import {
   WS_CLOSE_TRY_AGAIN_LATER,
 } from "@open-inspect/shared/types/websocket";
 import { useSessionTransport } from "./use-session-transport";
-
-class FakeWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  static instances: FakeWebSocket[] = [];
-
-  onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  readyState = FakeWebSocket.CONNECTING;
-  sentMessages: Array<Record<string, unknown>> = [];
-
-  constructor(readonly url: string) {
-    FakeWebSocket.instances.push(this);
-  }
-
-  send(data: string) {
-    this.sentMessages.push(JSON.parse(data) as Record<string, unknown>);
-  }
-
-  close(code = 1000, reason = "") {
-    this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code, reason, wasClean: true } as CloseEvent);
-  }
-
-  open() {
-    this.readyState = FakeWebSocket.OPEN;
-    this.onopen?.(new Event("open"));
-  }
-
-  serverClose(code: number, wasClean = false) {
-    this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code, reason: "", wasClean } as CloseEvent);
-  }
-
-  receiveRaw(data: string) {
-    this.onmessage?.({ data } as MessageEvent);
-  }
-
-  receive(message: ServerMessage) {
-    this.receiveRaw(JSON.stringify(message));
-  }
-}
+import { FakeWebSocket } from "@/test/fake-session-websocket";
 
 describe("useSessionTransport", () => {
   let onMessage: ReturnType<typeof vi.fn<(message: ServerMessage) => void>>;
@@ -77,7 +32,18 @@ describe("useSessionTransport", () => {
     return { ...rendered, socket };
   }
 
+  function setVisibility(value: DocumentVisibilityState) {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(value);
+  }
+
+  function setOnline(value: boolean) {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(value);
+  }
+
   beforeEach(() => {
+    setVisibility("visible");
+    setOnline(true);
+    vi.spyOn(Math, "random").mockReturnValue(0);
     FakeWebSocket.instances = [];
     onMessage = vi.fn<(message: ServerMessage) => void>();
     onClose = vi.fn<() => void>();
@@ -91,6 +57,7 @@ describe("useSessionTransport", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -256,6 +223,86 @@ describe("useSessionTransport", () => {
     expect(result.current.connecting).toBe(false);
   });
 
+  it.each(["initial", "authorization refresh"])(
+    "treats a mint 404 during %s as terminal, including manual reconnect and re-enable",
+    async (stage) => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValue(Response.json({ error: "Not found" }, { status: 404 }));
+      if (stage === "authorization refresh") {
+        fetchMock.mockResolvedValueOnce(Response.json({ token: "original-token" }));
+      }
+      const rendered = renderHook(
+        ({ enabled }) => useSessionTransport("session-1", { onMessage, onClose }, enabled),
+        { initialProps: { enabled: true } }
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      if (stage === "authorization refresh") {
+        act(() => {
+          FakeWebSocket.instances[0].open();
+          FakeWebSocket.instances[0].serverClose(4010, true);
+        });
+        await act(async () => vi.advanceTimersByTimeAsync(0));
+      }
+
+      expect(rendered.result.current).toMatchObject({
+        sessionGone: true,
+        connected: false,
+        connecting: false,
+        reconnecting: false,
+        authError: null,
+        connectionError: null,
+      });
+      act(() => rendered.result.current.reconnect());
+      rendered.rerender({ enabled: false });
+      rendered.rerender({ enabled: true });
+      await act(async () => vi.advanceTimersByTimeAsync(300_000));
+      expect(fetchMock).toHaveBeenCalledTimes(stage === "initial" ? 1 : 2);
+      expect(FakeWebSocket.instances).toHaveLength(stage === "initial" ? 0 : 1);
+      expect(rendered.result.current.sessionGone).toBe(true);
+      rendered.unmount();
+    }
+  );
+
+  it("ignores a previous session's late mint 404 and clears gone for a different session", async () => {
+    let resolveOld!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveOld = resolve))
+    );
+    const rendered = renderHook(
+      ({ sessionId }) => useSessionTransport(sessionId, { onMessage, onClose }),
+      { initialProps: { sessionId: "old-session" } }
+    );
+    rendered.rerender({ sessionId: "new-session" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => resolveOld(Response.json({ error: "Not found" }, { status: 404 })));
+    expect(rendered.result.current.sessionGone).toBe(false);
+    expect(rendered.result.current.authError).toBeNull();
+    act(() => FakeWebSocket.instances[0].open());
+    expect(rendered.result.current.connected).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    act(() => rendered.result.current.reconnect());
+    await waitFor(() => expect(rendered.result.current.sessionGone).toBe(true));
+    rendered.rerender({ sessionId: "third-session" });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(rendered.result.current.sessionGone).toBe(false);
+    expect(FakeWebSocket.instances[1].url).toContain("/sessions/third-session/ws");
+  });
+
+  it("ignores a superseded same-session mint 404 after manual reconnect", async () => {
+    let resolveOld!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (resolveOld = resolve))
+    );
+    const { result } = renderTransport();
+    act(() => result.current.reconnect());
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await act(async () => resolveOld(new Response(null, { status: 404 })));
+    expect(result.current.sessionGone).toBe(false);
+    act(() => FakeWebSocket.instances[0].open());
+    expect(result.current.connected).toBe(true);
+  });
+
   it("refreshes a rejected credential once, then reports an auth error", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
@@ -356,48 +403,75 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  it("reports session expiry on close code 4002 without reconnecting", async () => {
-    const { result, socket } = await openSocket();
-
-    act(() => {
-      socket.serverClose(4002);
-    });
-
-    await waitFor(() => {
-      expect(result.current.connectionError).toBe("Session expired. Please reconnect.");
-    });
-    expect(FakeWebSocket.instances).toHaveLength(1);
-  });
-
-  it("fetches a fresh credential and reconnects after authorization revocation", async () => {
+  it("reconnects with a fresh credential after session expiry (4002)", async () => {
+    // A missing server-side client identity requires a new subscribe handshake.
     vi.useFakeTimers();
     fetchMock
       .mockResolvedValueOnce(Response.json({ token: "original-token" }))
-      .mockResolvedValueOnce(Response.json({ token: "refreshed-token" }));
+      .mockResolvedValueOnce(Response.json({ token: "fresh-token" }));
     const rendered = renderTransport();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    const original = FakeWebSocket.instances[0];
     act(() => {
-      original.open();
-      original.serverClose(4010, true);
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(4002, true);
     });
-    // Every scheduled reconnect reports the wait, not just the backoff ones.
+    expect(rendered.result.current.connectionError).toBeNull();
     expect(rendered.result.current.reconnecting).toBe(true);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const replacement = FakeWebSocket.instances[1];
-    act(() => replacement.open());
-    expect(replacement.sentMessages).toEqual([
-      expect.objectContaining({ token: "refreshed-token" }),
+    act(() => FakeWebSocket.instances[1].open());
+    expect(FakeWebSocket.instances[1].sentMessages).toEqual([
+      expect.objectContaining({ token: "fresh-token" }),
     ]);
     rendered.unmount();
   });
+
+  it.each(["visible", "hidden"] as const)(
+    "renews authorization once a %s tab is visible",
+    async (visibility) => {
+      vi.useFakeTimers();
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ token: "original-token" }))
+        .mockResolvedValueOnce(Response.json({ token: "refreshed-token" }));
+      const rendered = renderTransport();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const original = FakeWebSocket.instances[0];
+      act(() => {
+        original.open();
+        setVisibility(visibility);
+        original.serverClose(4010, true);
+      });
+      // Every scheduled reconnect reports the wait, not just the backoff ones.
+      expect(rendered.result.current.reconnecting).toBe(true);
+
+      if (visibility === "hidden") {
+        await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        expect(rendered.result.current.reconnecting).toBe(true);
+        setVisibility("visible");
+        act(() => document.dispatchEvent(new Event("visibilitychange")));
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const replacement = FakeWebSocket.instances[1];
+      act(() => replacement.open());
+      expect(replacement.sentMessages).toEqual([
+        expect.objectContaining({ token: "refreshed-token" }),
+      ]);
+      rendered.unmount();
+    }
+  );
 
   it("retries a clean transient server failure with the cached credential", async () => {
     vi.useFakeTimers();
@@ -549,21 +623,44 @@ describe("useSessionTransport", () => {
     rendered.unmount();
   });
 
-  it("retries a transient close on a backoff schedule that outlasts an outage", async () => {
+  it.each([WS_CLOSE_GOING_AWAY, 4002])(
+    "jitters each retry after close %i, including at the cap",
+    async (code) => {
+      vi.useFakeTimers();
+      const rendered = renderTransport();
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      vi.mocked(Math.random)
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0.5)
+        .mockReturnValueOnce(1)
+        .mockReturnValueOnce(0)
+        .mockReturnValueOnce(0.5)
+        .mockReturnValueOnce(1)
+        .mockReturnValueOnce(0);
+      const delaysMs = [1_000, 1_500, 2_000, 8_000, 12_000, 15_000, 30_000];
+      for (const [attempt, delayMs] of delaysMs.entries()) {
+        act(() => FakeWebSocket.instances[attempt].serverClose(code, true));
+        await act(async () => vi.advanceTimersByTimeAsync(delayMs - 1));
+        expect(FakeWebSocket.instances).toHaveLength(attempt + 1);
+        await act(async () => vi.advanceTimersByTimeAsync(1));
+        expect(FakeWebSocket.instances).toHaveLength(attempt + 2);
+      }
+      expect(Math.random).toHaveBeenCalledTimes(delaysMs.length);
+      rendered.unmount();
+    }
+  );
+
+  it("keeps retrying a transient outage at the capped backoff without asking the user", async () => {
     vi.useFakeTimers();
     const rendered = renderTransport();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // Past the ten attempts that used to end in a "Connection lost" banner.
     const expectedDelaysMs = [
-      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+      1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000,
     ];
-    // A restart of the Node host takes seconds to a minute; the budget has to
-    // outlast it, not the ~31s five attempts bought.
-    expect(expectedDelaysMs.reduce((total, delay) => total + delay, 0)).toBeGreaterThanOrEqual(
-      150_000
-    );
 
     for (const [attempt, delayMs] of expectedDelaysMs.entries()) {
       act(() => FakeWebSocket.instances[attempt].serverClose(WS_CLOSE_GOING_AWAY, true));
@@ -576,15 +673,119 @@ describe("useSessionTransport", () => {
       });
       expect(FakeWebSocket.instances).toHaveLength(attempt + 2);
     }
-    expect(rendered.result.current.connectionError).toBeNull();
-
     act(() =>
       FakeWebSocket.instances[expectedDelaysMs.length].serverClose(WS_CLOSE_GOING_AWAY, true)
     );
-    expect(rendered.result.current.connectionError).toBe(
-      "Connection lost. Please check your network and try reconnecting."
-    );
-    expect(rendered.result.current.reconnecting).toBe(false);
+    expect(rendered.result.current.connectionError).toBeNull();
+    expect(rendered.result.current.reconnecting).toBe(true);
+    rendered.unmount();
+  });
+
+  it("keeps an existing connection open when the tab becomes hidden", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    act(() => FakeWebSocket.instances[0].open());
+    setVisibility("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+
+    expect(rendered.result.current.connected).toBe(true);
+    expect(rendered.result.current.isOpen()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    rendered.unmount();
+  });
+
+  it("holds a hidden-tab retry and reconnects immediately when visible", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].open());
+
+    setVisibility("hidden");
+    act(() => FakeWebSocket.instances[0].serverClose(1006));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(rendered.result.current.reconnecting).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    setVisibility("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // The return restarts the backoff: a network still waking up after sleep
+    // gets the 1s retry, not the 2s one the earlier close had earned.
+    act(() => FakeWebSocket.instances[1].serverClose(1006));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    rendered.unmount();
+  });
+
+  it("holds a retry while offline and reconnects when the network returns", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => FakeWebSocket.instances[0].open());
+
+    setOnline(false);
+    act(() => FakeWebSocket.instances[0].serverClose(1006));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    setOnline(true);
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    rendered.unmount();
+  });
+
+  it.each(["offline", "hidden"])("holds an armed retry when the tab becomes %s", async (state) => {
+    // 4002 drops the credential; an ineligible retry must not attempt a token mint.
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(4002, true);
+    });
+
+    if (state === "offline") setOnline(false);
+    else setVisibility("hidden");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(rendered.result.current.reconnecting).toBe(true);
+
+    setOnline(true);
+    setVisibility("visible");
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(2);
     rendered.unmount();
   });
 
@@ -612,32 +813,6 @@ describe("useSessionTransport", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     // The token from the first connect is reused.
     expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    rendered.unmount();
-  });
-
-  it("gives up after exhausting reconnect attempts", async () => {
-    vi.useFakeTimers();
-    const rendered = renderTransport();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    // Never mark the sockets healthy, so repeated failures exhaust the budget.
-    for (let attempt = 0; attempt < 11; attempt++) {
-      const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
-      act(() => {
-        socket.serverClose(1006);
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
-    }
-
-    expect(FakeWebSocket.instances).toHaveLength(11);
-    expect(rendered.result.current.connectionError).toBe(
-      "Connection lost. Please check your network and try reconnecting."
-    );
 
     rendered.unmount();
   });

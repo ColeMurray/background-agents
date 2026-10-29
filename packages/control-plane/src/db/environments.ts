@@ -11,6 +11,7 @@
 import type { Environment, EnvironmentRepository } from "@open-inspect/shared/types/environments";
 import { z } from "zod";
 import { parseJsonStringArray } from "./json-columns";
+import { MAX_D1_QUERY_PARAMETERS } from "./query-limits";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export interface EnvironmentRow {
@@ -64,6 +65,7 @@ export function toEnvironment(
 ): Environment {
   return {
     id: row.id,
+    ownerTeamId: row.owner_team_id,
     name: row.name,
     description: row.description,
     prebuildEnabled: row.prebuild_enabled === 1,
@@ -124,22 +126,44 @@ export class EnvironmentStore {
     return row ? withValidatedOwnerTeam(row) : null;
   }
 
+  /** Load an admission snapshot in one round trip, chunked within D1's bound-parameter limit. */
+  async getByIds(ids: readonly string[]): Promise<EnvironmentRow[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (!uniqueIds.length) return [];
+    const statements: SqlStatement[] = [];
+    for (let start = 0; start < uniqueIds.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = uniqueIds.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+      statements.push(
+        this.db
+          .prepare(`SELECT * FROM environments WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+          .bind(...chunk)
+      );
+    }
+    const results = await this.db.batch<EnvironmentRow>(statements);
+    return results.flatMap((result) => result.results.map(withValidatedOwnerTeam));
+  }
+
   /**
-   * Look up an environment by name, case-insensitively (names are unique under
-   * lower(name)). Used to answer the uniqueness pre-check with a 409 before the
-   * insert would trip the unique index.
+   * Look up a case-insensitive name within its exact team or workspace scope.
+   * Used to answer the uniqueness pre-check before the insert trips the index.
    */
-  async getByName(name: string): Promise<EnvironmentRow | null> {
+  async getByName(name: string, ownerTeamId: string | null): Promise<EnvironmentRow | null> {
     const row = await this.db
-      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?)")
-      .bind(name)
+      .prepare("SELECT * FROM environments WHERE lower(name) = lower(?) AND owner_team_id IS ?")
+      .bind(name, ownerTeamId)
       .first<EnvironmentRow>();
     return row ? withValidatedOwnerTeam(row) : null;
   }
 
-  async list(): Promise<{ environments: EnvironmentRow[]; total: number }> {
+  /** Every environment, or only those with this exact owner (null: workspace-owned). */
+  async list(
+    ownerTeamId?: string | null
+  ): Promise<{ environments: EnvironmentRow[]; total: number }> {
     const result = await this.db
-      .prepare("SELECT * FROM environments ORDER BY created_at DESC")
+      .prepare(
+        `SELECT * FROM environments ${ownerTeamId === undefined ? "" : "WHERE owner_team_id IS ?"} ORDER BY created_at DESC`
+      )
+      .bind(...(ownerTeamId === undefined ? [] : [ownerTeamId]))
       .all<EnvironmentRow>();
     const environments = (result.results || []).map(withValidatedOwnerTeam);
     return { environments, total: environments.length };

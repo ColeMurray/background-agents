@@ -46,7 +46,6 @@ def _patch_paths(
             .replace("/app/sandbox_runtime/bin", str(bin_src))
             .replace("/app/opencode-deps", str(deps_cache))
             .replace("/usr/local/bin", str(bin_dest))
-            .replace("/home/sandbox/.local/bin", str(bin_dest))
         )
         yield
 

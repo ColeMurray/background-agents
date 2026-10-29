@@ -1,141 +1,30 @@
 import { describe, it, expect } from "vitest";
 import { normalizeGitHubEvent } from "./normalizer";
-import { GITHUB_WEBHOOK_EVENT_CATALOG } from "./webhook-types";
-import type { GitHubAutomationEvent } from "../types";
-
-// ─── Shared fixture data ───────────────────────────────────────────────────────
-
-const repo = {
-  name: "my-app",
-  owner: { login: "acme-org" },
-};
-
-const sender = { login: "dev-user" };
-
-const basePR = {
-  number: 42,
-  title: "Add new feature",
-  body: "This PR adds a great new feature.",
-  user: { login: "pr-author" },
-  head: { ref: "feature/my-feature", sha: "abc1234def5678" },
-  base: { ref: "main" },
-  labels: [{ name: "enhancement" }, { name: "review-needed" }],
-  changed_files: 3,
-};
-
-const pullRequestOpenedPayload = {
-  action: "opened",
-  repository: repo,
+import {
+  GITHUB_WEBHOOK_EVENT_CATALOG,
+  checkSuiteEventSchema,
+  issueCommentEventSchema,
+  issuesEventSchema,
+  pullRequestEventSchema,
+  pullRequestReviewCommentEventSchema,
+  workflowRunEventSchema,
+} from "./webhook-types";
+import { githubAutomationEventSchema, type GitHubAutomationEvent } from "../types";
+import {
+  repo,
   sender,
-  pull_request: basePR,
-};
-
-const pullRequestSynchronizePayload = {
-  action: "synchronize",
-  repository: repo,
-  sender,
-  pull_request: {
-    ...basePR,
-    head: { ref: "feature/my-feature", sha: "deadbeef99" },
-  },
-};
-
-const pullRequestClosedPayload = {
-  action: "closed",
-  repository: repo,
-  sender,
-  pull_request: {
-    ...basePR,
-    merged: true,
-  },
-};
-
-const issueCommentPayload = {
-  action: "created",
-  repository: repo,
-  sender,
-  issue: {
-    id: 10010,
-    number: 10,
-    title: "Bug report",
-  },
-  comment: {
-    id: 9001,
-    user: { login: "commenter-user" },
-    body: "This is a helpful comment.",
-  },
-};
-
-const reviewCommentPayload = {
-  action: "created",
-  repository: repo,
-  sender,
-  pull_request: basePR,
-  comment: {
-    id: 5555,
-    user: { login: "reviewer-user" },
-    body: "Please fix this line.",
-    path: "src/index.ts",
-    diff_hunk: "@@ -1,3 +1,4 @@\n+import foo from 'bar';",
-  },
-};
-
-const checkSuiteCompletedPayload = {
-  action: "completed",
-  repository: repo,
-  sender,
-  check_suite: {
-    id: 77777,
-    head_branch: "feature/my-feature",
-    head_sha: "abc1234def5678",
-    conclusion: "failure",
-    pull_requests: [{ number: 42 }, { number: 43 }],
-  },
-};
-
-const workflowRunCompletedPayload = {
-  action: "completed",
-  repository: repo,
-  sender,
-  workflow_run: {
-    id: 123456789,
-    run_attempt: 1,
-    name: "CI",
-    conclusion: "failure",
-    head_branch: "main",
-    head_sha: "abc1234def5678",
-    path: ".github/workflows/ci.yml",
-    html_url: "https://github.com/acme-org/my-app/actions/runs/123456789",
-  },
-};
-
-const issuesOpenedPayload = {
-  action: "opened",
-  repository: repo,
-  sender,
-  issue: {
-    id: 50101,
-    number: 101,
-    title: "New bug found",
-    body: "Steps to reproduce...",
-    user: { login: "reporter" },
-    labels: [],
-  },
-};
-
-const issuesLabeledPayload = {
-  action: "labeled",
-  repository: repo,
-  sender,
-  issue: {
-    id: 50101,
-    number: 101,
-    title: "New bug found",
-    body: "Steps to reproduce...",
-    user: { login: "reporter" },
-    labels: [{ name: "bug" }, { name: "priority:high" }],
-  },
-};
+  basePR,
+  pullRequestOpenedPayload,
+  pullRequestSynchronizePayload,
+  pullRequestClosedPayload,
+  issueCommentPayload,
+  reviewCommentPayload,
+  checkSuiteCompletedPayload,
+  workflowRunCompletedPayload,
+  issuesOpenedPayload,
+  issuesLabeledPayload,
+  CATALOG_PAYLOADS,
+} from "../../../test-fixtures/github-webhook-payloads";
 
 // ─── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -182,6 +71,23 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.triggerKey).toBe("pr:42:synchronize:deadbeef99");
       expect(event!.concurrencyKey).toBe("pr:42");
       expect(event!.meta).toMatchObject({ sha: "deadbeef99", action: "synchronize" });
+    });
+  });
+
+  describe("pull_request.ready_for_review", () => {
+    it("gives each ready transition at the same head SHA its own trigger key", () => {
+      const ready = (deliveryId: string) =>
+        normalizeGitHubEvent(
+          "pull_request",
+          { ...pullRequestOpenedPayload, action: "ready_for_review" },
+          deliveryId
+        );
+
+      const first = ready("delivery-1");
+
+      expect(first!.triggerKey).toBe("pr:42:ready_for_review:abc1234def5678:delivery-1");
+      expect(ready("delivery-2")!.triggerKey).not.toBe(first!.triggerKey);
+      expect(ready("delivery-1")!.triggerKey).toBe(first!.triggerKey);
     });
   });
 
@@ -784,25 +690,103 @@ const CONDITION_SOURCE_FIELD = {
   actor: "actor",
   conclusion: "conclusion",
   workflow_name: "workflowName",
+  draft: "pullRequest",
 } as const satisfies Record<string, keyof GitHubAutomationEvent>;
 
-/** A payload per catalog event type. */
-const CATALOG_PAYLOADS: Record<string, [event: string, payload: Record<string, unknown>]> = {
-  "pull_request.opened": ["pull_request", pullRequestOpenedPayload],
-  "pull_request.synchronize": ["pull_request", pullRequestSynchronizePayload],
-  "pull_request.closed": ["pull_request", pullRequestClosedPayload],
-  "issue_comment.created": ["issue_comment", issueCommentPayload],
-  "pull_request_review_comment.created": ["pull_request_review_comment", reviewCommentPayload],
-  "check_suite.completed": ["check_suite", checkSuiteCompletedPayload],
-  "workflow_run.completed": ["workflow_run", workflowRunCompletedPayload],
-  // The shared opened fixture covers the unlabelled case; a catalog entry that
-  // promises `label` has to be checked against a payload that carries labels.
-  "issues.opened": [
-    "issues",
-    { ...issuesOpenedPayload, issue: { ...issuesOpenedPayload.issue, labels: [{ name: "bug" }] } },
-  ],
-  "issues.labeled": ["issues", issuesLabeledPayload],
-};
+const RAW_EVENT_SCHEMAS = {
+  pull_request: pullRequestEventSchema,
+  issue_comment: issueCommentEventSchema,
+  pull_request_review_comment: pullRequestReviewCommentEventSchema,
+  check_suite: checkSuiteEventSchema,
+  workflow_run: workflowRunEventSchema,
+  issues: issuesEventSchema,
+} as const;
+
+describe("GitHub repository routing identity", () => {
+  it.each(Object.entries(CATALOG_PAYLOADS))(
+    "%s carries the numeric repository id through normalization and schema boundaries",
+    (eventType, [header, payload]) => {
+      const schema = RAW_EVENT_SCHEMAS[header as keyof typeof RAW_EVENT_SCHEMAS];
+      for (const repositoryId of [1, repo.id, Number.MAX_SAFE_INTEGER]) {
+        const raw = { ...payload, repository: { ...repo, id: repositoryId } };
+        expect(schema.parse(raw).repository).toHaveProperty("id", repositoryId);
+
+        const event = normalizeGitHubEvent(header, raw);
+        expect(event).toMatchObject({
+          eventType,
+          repositoryId,
+          repoOwner: repo.owner.login,
+          repoName: repo.name,
+          actor: sender.login,
+        });
+        expect(githubAutomationEventSchema.parse(event)).toEqual(event);
+      }
+    }
+  );
+
+  it.each(Object.entries(CATALOG_PAYLOADS))(
+    "%s rejects missing or invalid repository ids without falling back to owner/name",
+    (_eventType, [header, payload]) => {
+      const schema = RAW_EVENT_SCHEMAS[header as keyof typeof RAW_EVENT_SCHEMAS];
+      const invalidRepositories = [
+        undefined,
+        null,
+        {},
+        { name: repo.name, owner: repo.owner },
+        ...[
+          undefined,
+          null,
+          String(repo.id),
+          0,
+          -1,
+          1.5,
+          Number.MAX_SAFE_INTEGER + 1,
+          NaN,
+          Infinity,
+        ].map((id) => ({ ...repo, id })),
+      ];
+
+      for (const repository of invalidRepositories) {
+        const raw = { ...payload, repository };
+        expect(schema.safeParse(raw).success).toBe(false);
+        expect(normalizeGitHubEvent(header, raw)).toBeNull();
+      }
+    }
+  );
+
+  it("preserves routing identity when a repository is renamed or transferred", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      ...pullRequestOpenedPayload,
+      repository: { ...repo, name: "renamed-app", owner: { login: "new-org" } },
+    });
+
+    expect(event).toMatchObject({
+      repositoryId: repo.id,
+      repoOwner: "new-org",
+      repoName: "renamed-app",
+    });
+  });
+
+  it("does not substitute the PR base repository id for a missing webhook repository id", () => {
+    expect(
+      normalizeGitHubEvent("pull_request", {
+        ...pullRequestOpenedPayload,
+        repository: { name: repo.name, owner: repo.owner },
+        pull_request: { ...basePR, base: { ...basePR.base, repo: { id: repo.id } } },
+      })
+    ).toBeNull();
+  });
+
+  it("still accepts an absent sender without guessing an actor", () => {
+    const event = normalizeGitHubEvent("pull_request", {
+      ...pullRequestOpenedPayload,
+      sender: undefined,
+    });
+
+    expect(event).toMatchObject({ repositoryId: repo.id });
+    expect(event?.actor).toBeUndefined();
+  });
+});
 
 describe("GITHUB_WEBHOOK_EVENT_CATALOG supportedConditions", () => {
   it.each(GITHUB_WEBHOOK_EVENT_CATALOG.map((entry) => [`${entry.event}.${entry.action}`, entry]))(

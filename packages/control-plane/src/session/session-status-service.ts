@@ -53,36 +53,45 @@ export class SessionStatusService {
    * refreshed in the same-status case).
    */
   async transition(status: SessionStatus): Promise<boolean> {
+    return this.beginTransition(status);
+  }
+
+  /**
+   * Commit local status synchronously, then return its projection promise.
+   * A local write failure throws before callers can start dependent work.
+   */
+  beginTransition(status: SessionStatus): Promise<boolean> {
     const session = this.repository.getSession();
-    if (!session) return false;
+    if (!session) return Promise.resolve(false);
 
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
-      await this.syncSessionIndexStatusAndAdmission(
+      return this.syncSessionIndexStatusAndAdmission(
         publicSessionId,
         status,
         session.updated_at,
         session.status_revision
-      ).catch((error) =>
-        this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
-      );
-      if (isTurnSettled(status)) {
-        this.syncSessionMetrics(publicSessionId);
-      }
-      return false;
+      )
+        .catch((error) =>
+          this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
+        )
+        .then(() => {
+          if (isTurnSettled(status)) {
+            this.syncSessionMetrics(publicSessionId);
+          }
+          return false;
+        });
     }
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    await this.projectTransition(
+    return this.projectTransition(
       session,
       publicSessionId,
       status,
       updatedAt,
       session.status_revision + 1
-    );
-
-    return true;
+    ).then(() => true);
   }
 
   /**

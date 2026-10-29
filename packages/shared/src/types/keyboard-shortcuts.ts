@@ -54,9 +54,9 @@ export const KEYBOARD_SHORTCUT_DEFINITIONS = {
 
 export type KeyboardShortcutAction = keyof typeof KEYBOARD_SHORTCUT_DEFINITIONS;
 export type GlobalKeyboardShortcutAction = {
-  [Action in KeyboardShortcutAction]: (typeof KEYBOARD_SHORTCUT_DEFINITIONS)[Action]["global"] extends true
-    ? Action
-    : never;
+  [
+    Action in KeyboardShortcutAction
+  ]: (typeof KEYBOARD_SHORTCUT_DEFINITIONS)[Action]["global"] extends true ? Action : never;
 }[KeyboardShortcutAction];
 export type KeyboardShortcutPreferences = Record<KeyboardShortcutAction, KeyboardShortcutBinding>;
 

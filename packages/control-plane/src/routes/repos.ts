@@ -8,17 +8,22 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
+import { resolveCatalogScope } from "./team-ownership";
 import type { SqlDatabase } from "../db/sql-database";
 import {
-  enrichedRepositorySchema,
   repoMetadataSchema,
   type EnrichedRepository,
   type InstallationRepository,
   type RepoMetadata,
 } from "@open-inspect/shared/types/repository-catalog";
-import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
+import {
+  REPOS_CACHE_KEY,
+  cachedReposListSchema,
+  reposCacheIdentity,
+  type CachedReposList,
+} from "../repos/cache";
+import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
-import { z } from "zod";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
   type RequestContext,
@@ -28,39 +33,12 @@ import {
   requirePermission,
 } from "./shared";
 
+export { REPOS_CACHE_KEY, reposCacheIdentity } from "../repos/cache";
+
 const logger = createLogger("router:repos");
 
-export const REPOS_CACHE_KEY = "repos:list:v3";
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
-const REPOS_CACHE_KV_TTL_SECONDS = 3600;
-
-export async function reposCacheIdentity(
-  env: Pick<
-    Env,
-    "SCM_PROVIDER" | "GITHUB_APP_INSTALLATION_ID" | "GITLAB_NAMESPACE" | "GITLAB_ACCESS_TOKEN"
-  >
-): Promise<string> {
-  const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
-  let identity: string[] = [provider];
-  if (provider === "github") identity = [provider, env.GITHUB_APP_INSTALLATION_ID ?? ""];
-  if (provider === "gitlab") {
-    identity = [provider, env.GITLAB_NAMESPACE ?? "", env.GITLAB_ACCESS_TOKEN ?? ""];
-  }
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(identity)))
-  );
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-const cachedReposListSchema = z.object({
-  repos: z.array(enrichedRepositorySchema),
-  cachedAt: z.string(),
-  scmIdentity: z.string(),
-  // Missing in entries cached before this field was added.
-  freshUntil: z.number().optional(),
-});
-
-type CachedReposList = z.infer<typeof cachedReposListSchema>;
+const REPOS_CACHE_KV_TTL_MS = 3600 * 1000;
 
 type ReposRefreshResult =
   | { ok: true; repos: EnrichedRepository[]; cachedAt: string }
@@ -131,7 +109,7 @@ async function refreshReposCache(
     await cacheStore.put(
       REPOS_CACHE_KEY,
       JSON.stringify({ repos: enrichedRepos, cachedAt, scmIdentity, freshUntil }),
-      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+      { ttlMs: REPOS_CACHE_KV_TTL_MS }
     );
     logger.info("Repos cache refreshed", {
       trace_id: traceId,
@@ -164,6 +142,16 @@ async function handleListRepos(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
+  const teamId = new URL(request.url).searchParams.get("teamId");
+  const scope = await resolveCatalogScope(request, ctx, teamId, "/repos");
+  if (scope instanceof Response) return scope;
+  const grants = scope?.grants;
+  const filterRepos = (repos: EnrichedRepository[]) => {
+    if (!grants || grants.some((grant) => grant.grant_kind === "installation")) return repos;
+    const ids = new Set(grants.map((grant) => grant.repo_external_id));
+    return repos.filter((repo) => ids.has(repo.id));
+  };
+  const teamScope = grants ? { teamHasRepositoryGrants: grants.length > 0 } : {};
   const cacheStore = env.REPOS_CACHE;
   const scmIdentity = await reposCacheIdentity(env);
 
@@ -194,7 +182,8 @@ async function handleListRepos(
     }
 
     return json({
-      repos: cached.repos,
+      repos: filterRepos(cached.repos),
+      ...teamScope,
       cached: true,
       cachedAt: cached.cachedAt,
     });
@@ -225,7 +214,8 @@ async function handleListRepos(
   }
 
   return json({
-    repos: result.repos,
+    repos: filterRepos(result.repos),
+    ...teamScope,
     cached: false,
     cachedAt: result.cachedAt,
   });
@@ -325,7 +315,7 @@ async function handleListBranches(
   _request: Request,
   env: Env,
   params: { owner: string; name: string },
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const repository = repositoryParams(params);
   if (repository instanceof Response) return repository;
@@ -333,8 +323,15 @@ async function handleListBranches(
 
   try {
     const provider = createRouteSourceControlProvider(env);
-    const branches = await provider.listBranches({ owner, name });
-    return json({ branches });
+    const result = await provider.listBranches(
+      { owner, name },
+      {
+        backgroundTasks: ctx.executionCtx,
+        metrics: ctx.metrics,
+        traceId: ctx.trace_id,
+      }
+    );
+    return json(result);
   } catch (e) {
     if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       return error("SCM provider not configured", 500);

@@ -1,19 +1,13 @@
 /**
- * Dynamic repository fetching from the control plane. A cached resource
- * (in-memory → control plane → KV, fail open to an empty list); an empty
- * repo list surfaces to the user as a clarification asking for the
- * repository name.
+ * Team-scoped repository fetching from the control plane.
  */
 
-import { z } from "zod";
 import {
   controlPlaneReposResponseSchema,
-  repoConfigSchema,
   type ControlPlaneRepo,
   type RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
-import type { Env } from "../types";
-import { createCachedResource } from "../cached-resource";
+import type { Env, LinearChannelScope } from "../types";
 import { fetchControlPlaneJson } from "../control-plane";
 
 function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
@@ -35,38 +29,21 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
   };
 }
 
-const repoConfigsSchema = z.array(repoConfigSchema);
-
-const reposResource = createCachedResource<RepoConfig[]>({
-  name: "repos",
-  kvKey: "repos:cache",
-  load: async (env, traceId) => {
-    const body = await fetchControlPlaneJson(env, "/repos", traceId);
-    // Throws on a malformed body so the resource falls back to the KV
-    // last-known-good copy. Returning [] here would instead publish "no
-    // repositories" as a successful load and overwrite that copy.
-    return controlPlaneReposResponseSchema.parse(body).repos.map(toRepoConfig);
-  },
-  deserialize: (cached) => {
-    const result = repoConfigsSchema.safeParse(cached);
-    return result.success ? result.data : null;
-  },
-  fallback: [],
-});
-
-export async function getAvailableRepos(env: Env, traceId?: string): Promise<RepoConfig[]> {
-  return reposResource.get(env, traceId);
-}
-
 /**
- * Clear the in-memory cache (for testing).
+ * Read the repositories visible to one Linear team. Reads are live and fail closed:
+ * a denied, unavailable, or malformed response throws rather than widening to a
+ * cached or empty catalog.
  */
-export function clearReposLocalCache(): void {
-  reposResource.invalidate();
+export async function getAvailableRepos(
+  env: Env,
+  scope: LinearChannelScope,
+  traceId?: string
+): Promise<RepoConfig[]> {
+  const body = await fetchControlPlaneJson(env, "/repos", scope, traceId);
+  return controlPlaneReposResponseSchema.parse(body).repos.map(toRepoConfig);
 }
 
-export async function buildRepoDescriptions(env: Env, traceId?: string): Promise<string> {
-  const repos = await getAvailableRepos(env, traceId);
+export function buildRepoDescriptions(repos: RepoConfig[]): string {
   if (repos.length === 0) return "No repositories are currently available.";
 
   return repos

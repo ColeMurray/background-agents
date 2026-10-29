@@ -7,7 +7,8 @@ import type { DiffSelection } from "./session-diffs";
 
 interface SessionFileLinks {
   resolve: DiffFileLinkResolver;
-  open(selection: DiffSelection): void;
+  /** `returnFocusTo` is the control that opened the file; focus returns there on close. */
+  open(selection: DiffSelection, returnFocusTo: HTMLElement): void;
 }
 
 const SessionFileLinksContext = createContext<SessionFileLinks | null>(null);
@@ -21,7 +22,7 @@ export function SessionFileLinksProvider({
   children,
 }: {
   manifest: SessionDiffManifest | null;
-  onOpen: (selection: DiffSelection) => void;
+  onOpen: (selection: DiffSelection, returnFocusTo: HTMLElement) => void;
   children: ReactNode;
 }) {
   // Keep one manifest per revision: SWR revalidation hands back a new object for the same

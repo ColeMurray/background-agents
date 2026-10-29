@@ -5,6 +5,22 @@
 import type { JsonPathFilter, WebhookAutomationEvent } from "../types";
 import { buildWebhookContextBlock } from "./context";
 
+const DELIVERY_FIELDS: ReadonlySet<string> = new Set(["idempotencyKey", "sessionKey"]);
+
+export interface WebhookDeliveryOptions {
+  idempotencyKey?: string;
+  sessionKey?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function omitDeliveryFields(body: unknown): unknown {
+  if (!isRecord(body) || !Object.keys(body).some((key) => DELIVERY_FIELDS.has(key))) return body;
+  return Object.fromEntries(Object.entries(body).filter(([key]) => !DELIVERY_FIELDS.has(key)));
+}
+
 /**
  * Normalize a webhook payload into a WebhookAutomationEvent.
  * Unlike other normalizers, this always succeeds (no event filtering).
@@ -12,25 +28,20 @@ import { buildWebhookContextBlock } from "./context";
 export function normalizeWebhookEvent(
   automationId: string,
   body: unknown,
-  idempotencyKey?: string
+  { idempotencyKey, sessionKey }: WebhookDeliveryOptions = {}
 ): WebhookAutomationEvent {
   const deliveryId = idempotencyKey || generateDeliveryId();
-
-  // Strip idempotencyKey from body before including in context
-  let contextBody = body;
-  if (body && typeof body === "object" && "idempotencyKey" in (body as Record<string, unknown>)) {
-    const { idempotencyKey: _, ...rest } = body as Record<string, unknown>;
-    contextBody = rest;
-  }
+  const triggerKey = idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`;
 
   return {
     source: "webhook",
     eventType: "webhook.received",
     automationId,
-    triggerKey: idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`,
-    concurrencyKey: idempotencyKey ? `webhook:idem:${idempotencyKey}` : `webhook:${deliveryId}`,
+    triggerKey,
+    concurrencyKey: sessionKey ? `webhook:session:${sessionKey}` : triggerKey,
+    sessionKey,
     body,
-    contextBlock: buildWebhookContextBlock(contextBody),
+    contextBlock: buildWebhookContextBlock(omitDeliveryFields(body)),
     meta: { deliveryId, receivedAt: Date.now() },
   };
 }

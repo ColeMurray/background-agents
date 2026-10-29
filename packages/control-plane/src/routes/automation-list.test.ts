@@ -103,6 +103,7 @@ describe("automation listing routes", () => {
       expect(mockStore.list).toHaveBeenCalledWith({
         limit: DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
         cursor: null,
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
       expect(mockStore.listRecentExecutionsForAutomationIds).toHaveBeenCalledWith(["auto-1"], 10);
       expect(body.automations[0]).toMatchObject({ recentExecutions: [] });
@@ -137,6 +138,7 @@ describe("automation listing routes", () => {
         nameSearch: "Daily sync",
         limit: 10,
         cursor: { createdAt: 123, id: "auto-9" },
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
 
@@ -152,6 +154,7 @@ describe("automation listing routes", () => {
         cursor: null,
         repoOwner: "acme",
         repoName: "web-app",
+        viewer: expect.objectContaining({ kind: "user", userId: "user-1" }),
       });
     });
 

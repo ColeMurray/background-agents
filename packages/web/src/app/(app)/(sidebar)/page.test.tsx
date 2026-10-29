@@ -1,265 +1,16 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
-import {
-  DEFAULT_KEYBOARD_SHORTCUTS,
-  type KeyboardShortcutPreferences,
-} from "@open-inspect/shared/types/keyboard-shortcuts";
-import Home from "./page";
+import { DEFAULT_KEYBOARD_SHORTCUTS } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { readStoredPromptDraft, writeStoredPromptDraft } from "@/lib/prompt-drafts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-
-expect.extend(matchers);
-
-const mocks = vi.hoisted(() => ({
-  routerPush: vi.fn(),
-  mutateMock: vi.fn(),
-  reposValue: [] as Array<{
-    id: number;
-    fullName: string;
-    owner: string;
-    name: string;
-    description: string | null;
-    private: boolean;
-    defaultBranch: string;
-  }>,
-  loadingReposValue: false,
-  environmentsLoadingValue: false,
-  environmentsValue: [] as Array<{
-    id: string;
-    name: string;
-    description: string | null;
-    prebuildEnabled: boolean;
-    createdAt: number;
-    updatedAt: number;
-    repositories: Array<{
-      repoOwner: string;
-      repoName: string;
-      repoId: number | null;
-      baseBranch: string;
-    }>;
-  }>,
-  enabledModelsValue: [] as string[],
-  enabledModelOptionsValue: [] as Array<{
-    category: string;
-    models: Array<{ id: string; name: string; description: string }>;
-  }>,
-  providerAccountsValue: [] as Array<{
-    id: string;
-    provider: "openai" | "xai" | "anthropic";
-    displayName: string;
-    externalAccountId: string | null;
-    status: "active";
-    createdBy: null;
-    updatedBy: null;
-    lastVerifiedAt: null;
-    lastUsedAt: null;
-    createdAt: number;
-    updatedAt: number;
-    archivedAt: null;
-  }>,
-  providerAccountsLoadingValue: false,
-  skillPreview: {
-    skills: [
-      {
-        skillId: "skill-1",
-        revisionId: "revision-1",
-        name: "review-pr",
-        description: "Review a pull request",
-        revisionNumber: 1,
-        revisionSha256: "abc",
-        totalBytes: 10,
-        assignmentSources: [],
-      },
-    ],
-    totalBytes: 10,
-    ignoredProfileSkillIds: [],
-  },
-  keyboardShortcuts: null as unknown as KeyboardShortcutPreferences,
-  canCreateSession: true,
-}));
-
-const repo = {
-  id: 1,
-  fullName: "open-inspect/background-agents",
-  owner: "open-inspect",
-  name: "background-agents",
-  description: null,
-  private: true,
-  defaultBranch: "main",
-};
-
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
-}));
-
-vi.mock("@/hooks/use-current-user-authorization", () => ({
-  useCurrentUserAuthorization: () => ({
-    hasPermission: (permission: string) =>
-      permission === "sessions.create" && mocks.canCreateSession,
-  }),
-}));
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mocks.routerPush }),
-}));
-
-vi.mock("swr", () => ({
-  // Home uses the default export only for the picker's prebuild-status text.
-  default: () => ({ data: undefined, isLoading: false }),
-  mutate: mocks.mutateMock,
-}));
-
-vi.mock("@/hooks/use-environments", () => ({
-  ENVIRONMENTS_KEY: "/api/environments",
-  useEnvironments: () => ({
-    environments: mocks.environmentsValue,
-    loading: mocks.environmentsLoadingValue,
-  }),
-}));
-
-vi.mock("@/components/sidebar-layout", () => ({
-  useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
-}));
-
-vi.mock("@/components/model-reasoning-selector", () => ({
-  ModelReasoningSelector: ({
-    disabled,
-    harness,
-    onHarnessChange,
-  }: {
-    disabled?: boolean;
-    harness?: string | null;
-    onHarnessChange?: (harness: "opencode" | "claude") => void;
-  }) => (
-    <>
-      <button
-        type="button"
-        disabled={disabled}
-        aria-label={harness ? `Agent, model and effort: ${harness}` : "Model and effort"}
-        data-agent-editable={onHarnessChange ? "true" : "false"}
-      >
-        Model and effort
-      </button>
-      {onHarnessChange && (
-        <>
-          <button type="button" onClick={() => onHarnessChange("claude")}>
-            Switch agent to claude
-          </button>
-          <button type="button" onClick={() => onHarnessChange("opencode")}>
-            Switch agent to opencode
-          </button>
-        </>
-      )}
-    </>
-  ),
-}));
-
-vi.mock("@/hooks/use-repos", () => ({
-  useRepos: () => ({ repos: mocks.reposValue, loading: mocks.loadingReposValue }),
-}));
-
-vi.mock("@/hooks/use-branches", () => ({
-  useBranches: () => ({ branches: [{ name: "main" }], loading: false }),
-}));
-
-vi.mock("@/hooks/use-enabled-models", () => ({
-  useEnabledModels: () => ({
-    enabledModels: mocks.enabledModelsValue,
-    enabledModelOptions: mocks.enabledModelOptionsValue,
-    loading: false,
-  }),
-}));
-
-vi.mock("@/hooks/use-keyboard-shortcuts", () => ({
-  useKeyboardShortcuts: () => ({
-    shortcuts: mocks.keyboardShortcuts,
-    labels: {
-      "send-prompt":
-        mocks.keyboardShortcuts["send-prompt"].code === "KeyJ" ? "Alt+J" : "Cmd/Ctrl+Enter",
-      "open-command-menu": "Cmd/Ctrl+K",
-      "new-session": "Cmd/Ctrl+Shift+O",
-      "toggle-sidebar": "Cmd/Ctrl+/",
-    },
-  }),
-}));
-
-vi.mock("@/hooks/use-provider-accounts", () => ({
-  useProviderAccounts: () => ({
-    providers: [],
-    accounts: mocks.providerAccountsValue,
-    defaults: [],
-    loading: mocks.providerAccountsLoadingValue,
-    error: undefined,
-    refresh: vi.fn(),
-  }),
-}));
-
-vi.mock("@/hooks/use-managed-skills", () => ({
-  useSkillProfiles: () => ({ profiles: [], loading: false }),
-  useSkillResolutionPreview: () => ({
-    preview: mocks.skillPreview,
-    loading: false,
-    error: undefined,
-    suggestions: { status: "ready", skills: mocks.skillPreview.skills },
-  }),
-}));
-
-beforeAll(() => {
-  Element.prototype.scrollIntoView = vi.fn();
-});
-
-beforeEach(() => {
-  mocks.reposValue = [repo];
-  mocks.loadingReposValue = false;
-  mocks.environmentsLoadingValue = false;
-  mocks.environmentsValue = [];
-  mocks.enabledModelsValue = [DEFAULT_MODEL];
-  mocks.enabledModelOptionsValue = [
-    {
-      category: "Anthropic",
-      models: [{ id: DEFAULT_MODEL, name: "Claude Sonnet 4.6", description: "" }],
-    },
-  ];
-  mocks.providerAccountsValue = [];
-  mocks.providerAccountsLoadingValue = false;
-  mocks.keyboardShortcuts = DEFAULT_KEYBOARD_SHORTCUTS;
-  mocks.canCreateSession = true;
-  mocks.routerPush.mockReset();
-  mocks.mutateMock.mockReset();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === "/api/sessions") {
-        return Response.json({ sessionId: "session-1", status: "created" });
-      }
-      if (url === "/api/sessions/session-1/prompt") {
-        return Response.json({ ok: true });
-      }
-      return Response.json({ error: "unexpected request" }, { status: 500 });
-    })
-  );
-});
-
-afterEach(() => {
-  cleanup();
-  localStorage.clear();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function sessionCreateBody(): Record<string, unknown> {
-  const calls = vi.mocked(fetch).mock.calls;
-  const createCall = calls.find(([input]) => String(input) === "/api/sessions");
-  expect(createCall).toBeDefined();
-  return JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>;
-}
+import { environment, mocks, repo, sessionCreateBody } from "./page.test-fixture";
+import Home from "./page";
 
 function activeAnthropicAccount(id: string): (typeof mocks.providerAccountsValue)[number] {
   return { ...activeOpenAiAccount(id), provider: "anthropic", displayName: "Owner Claude" };
@@ -283,6 +34,45 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("creates sessions using the saved personal-memory preference without a composer override", async () => {
+    render(<Home />);
+    expect(
+      screen.queryByRole("checkbox", { name: "Include my personal memories" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Do some work" },
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+    expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+  });
+
+  it("shows the first prompt's server denial reason in a toast without navigating", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).endsWith("/prompt")
+        ? Response.json(
+            {
+              error: "Forbidden",
+              code: "session_action_denied",
+              reason_code: "missing_permission",
+            },
+            { status: 403 }
+          )
+        : Response.json({ sessionId: "session-1", status: "created" })
+    );
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith("Failed to send prompt (missing_permission)")
+    );
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
   it("does not render session creation UI without session creation permission", () => {
     mocks.canCreateSession = false;
 
@@ -526,16 +316,6 @@ describe("Home", () => {
     expect(body).not.toHaveProperty("branch");
   });
 
-  const environment = {
-    id: "env-1",
-    name: "full-stack",
-    description: null,
-    prebuildEnabled: false,
-    createdAt: 1,
-    updatedAt: 1,
-    repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 1, baseBranch: "main" }],
-  };
-
   it("persists an environment selection and restores it on the next visit", async () => {
     mocks.environmentsValue = [environment];
     const user = userEvent.setup();
@@ -622,30 +402,6 @@ describe("Home", () => {
     });
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe(selection);
     expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
-  });
-
-  it("continues hydrating when legacy provider selection migration fails", async () => {
-    const accountId = "a".repeat(32);
-    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
-    const selection = JSON.stringify({ openai: { mode: "provider_account", accountId } });
-    localStorage.setItem("open-inspect-last-provider-selections", selection);
-    const setItem = localStorage.setItem.bind(localStorage);
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation((key, value) => {
-      if (key === "open-inspect-last-provider-selections:v1") throw new Error("Quota exceeded");
-      setItem(key, value);
-    });
-    const user = userEvent.setup();
-    render(<Home />);
-
-    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    expect(sessionCreateBody()).toMatchObject({
-      providerSelections: { openai: { mode: "provider_account", accountId } },
-    });
-    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBeNull();
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(selection);
   });
 
   it("waits for provider accounts and removes a stale stored selection", async () => {
@@ -739,6 +495,26 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /docs/i });
   });
 
+  it("requests the skill preview for the stored target before showing its count", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "open-inspect/background-agents");
+    mocks.reposValue = [];
+    mocks.loadingReposValue = true;
+    const { rerender } = render(<Home />);
+
+    expect(mocks.skillResolutionPreview).toHaveBeenLastCalledWith(
+      { repoOwner: "open-inspect", repoName: "background-agents" },
+      { mode: "all" }
+    );
+    expect(screen.getByRole("button", { name: /all skills/i })).not.toHaveTextContent("(1)");
+
+    mocks.reposValue = [repo];
+    mocks.loadingReposValue = false;
+    rerender(<Home />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /all skills/i })).toHaveTextContent("(1)")
+    );
+  });
+
   it("surfaces the error and stays put when the initial prompt fails", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
@@ -762,6 +538,165 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Investigate logs"
+    );
+  });
+
+  it("restores an unsent prompt draft after a reload", async () => {
+    const { unmount } = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "A long prompt that should survive a refresh" },
+    });
+    unmount();
+
+    render(<Home />);
+
+    expect(await screen.findByPlaceholderText("What do you want to build?")).toHaveValue(
+      "A long prompt that should survive a refresh"
+    );
+  });
+
+  it("clears the stored prompt draft once the session starts", async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Ship it"
+    );
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
+  });
+
+  it("sends once and preserves a newer stored draft when delivery finishes", async () => {
+    let resolvePrompt!: (response: Response) => void;
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) =>
+      String(input).endsWith("/prompt")
+        ? new Promise<Response>((resolve) => {
+            resolvePrompt = resolve;
+          })
+        : originalFetch(input, init)
+    );
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "  Ship it  " } });
+    await waitFor(() => expect(sessionCreateBody()).toBeDefined());
+    const form = input.closest("form")!;
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    await waitFor(() => expect(resolvePrompt).toBeDefined());
+    writeStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session", {
+      prompt: "A newer draft",
+      pendingRequest: null,
+    });
+    let draftAtNavigation: string | undefined;
+    mocks.routerPush.mockImplementation(() => {
+      draftAtNavigation = readStoredPromptDraft(
+        "open-inspect-prompt-draft:user-1:new-session"
+      )?.prompt;
+    });
+    await act(async () => resolvePrompt(Response.json({ ok: true })));
+    expect(mocks.routerPush).toHaveBeenCalledExactlyOnceWith("/session/session-1");
+    expect(draftAtNavigation).toBe("A newer draft");
+    expect(mocks.mutateMock.mock.calls).toEqual([
+      [isUnarchivedSessionListKey],
+      [isSessionInboxKey],
+    ]);
+    expect(mocks.mutateMock.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.routerPush.mock.invocationCallOrder[0]
+    );
+    const sent = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt"));
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(String(sent[0][1]?.body))).toMatchObject({ content: "Ship it" });
+    view.unmount();
+    expect(fetch).not.toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything());
+  });
+
+  it("does not send to a session whose acquisition was superseded during submission", async () => {
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input) =>
+      String(input) === "/api/sessions"
+        ? new Promise<Response>((resolve) => {
+            resolveCreate = resolve;
+          })
+        : Promise.resolve(Response.json({ ok: true }))
+    );
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    await waitFor(() => expect(resolveCreate).toBeDefined());
+    fireEvent.submit(input.closest("form")!);
+    // Losing creation permission makes the warm request unusable, even while sending.
+    mocks.canCreateSession = false;
+    view.rerender(<Home />);
+    await act(async () => resolveCreate(Response.json({ sessionId: "stale", status: "created" })));
+    expect(fetch).toHaveBeenCalledWith("/api/sessions/stale/archive", expect.anything());
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(
+      false
+    );
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Ship it"
+    );
+  });
+
+  it("retries an attachment-only prompt without recreating or reuploading, then clears before navigation", async () => {
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = () => "blob:preview";
+        static revokeObjectURL = revoke;
+      }
+    );
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let rejectPrompt = true;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).endsWith("/attachments")) {
+        return Promise.resolve(
+          Response.json({ attachmentId: "a".repeat(32), mimeType: "image/png" })
+        );
+      }
+      if (String(input).endsWith("/prompt") && rejectPrompt) {
+        rejectPrompt = false;
+        return Promise.resolve(Response.json({ error: "Please retry" }, { status: 500 }));
+      }
+      return originalFetch(input, init);
+    });
+    const view = render(<Home />);
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["image"], "design.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Please retry");
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+    expect(screen.getByRole("img", { name: "design.png" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(revoke).toHaveBeenCalledWith("blob:preview");
+    expect(revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.routerPush.mock.invocationCallOrder[0]
+    );
+    const sent = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/prompt"));
+    expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
+      content: "See the attached files.",
+      attachments: [{ attachmentId: "a".repeat(32), name: "design.png" }],
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/attachments"))
+    ).toHaveLength(1);
   });
 
   it("sends the default harness with a model it can run", async () => {
@@ -779,6 +714,25 @@ describe("Home", () => {
 
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ harness: "opencode", model: openAiModel })
+    );
+  });
+
+  it("uses the Codex default effort when changing the model", async () => {
+    mocks.enabledModelsValue = ["openai/gpt-5.6-sol", "openai/gpt-6.1-sol"];
+    localStorage.setItem("open-inspect-last-selected-harness", "codex");
+    localStorage.setItem("open-inspect-last-selected-model", "openai/gpt-5.6-sol");
+    render(<Home />);
+    await screen.findByRole("button", { name: "Agent, model and effort: codex" });
+    fireEvent.click(screen.getByRole("button", { name: "Switch model to GPT-6.1" }));
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+        reasoningEffort: "low",
+      })
     );
   });
 

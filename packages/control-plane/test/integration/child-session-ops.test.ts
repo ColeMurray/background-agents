@@ -4,6 +4,7 @@ import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { runInSessionDO } from "./session-do-access";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
+import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSession,
@@ -14,6 +15,8 @@ import {
   openClientWs,
   collectMessages,
   seedMessage,
+  seedActiveUser,
+  serviceFetch,
   TEST_SESSION_PROVIDER_AUTH,
 } from "./helpers";
 
@@ -135,6 +138,23 @@ describe("Child session operations (list, get, cancel)", () => {
       updatedAt: now,
     });
     return id;
+  }
+
+  async function isolateChild(id: string, scope: "private" | "moved") {
+    if (scope === "private") {
+      const ownerId = "22222222222222222222222222222222";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, id)
+        .run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
+      ).run();
+      await env.DB.prepare("UPDATE sessions SET owner_team_id = 'team_other' WHERE id = ?")
+        .bind(id)
+        .run();
+    }
   }
 
   describe("GET /sessions/:parentId/children", () => {
@@ -507,7 +527,222 @@ describe("Child session operations (list, get, cancel)", () => {
     });
   });
 
+  describe("independently scoped children", () => {
+    it.each(["private", "moved"] as const)(
+      "hides a %s child from its parent sandbox's list, detail and cancel",
+      async (scope) => {
+        const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+          childStatus: "active",
+        });
+        await isolateChild(childName, scope);
+        const headers = { Authorization: `Bearer ${sandboxToken}` };
+
+        const listed = await SELF.fetch(`https://test.local/sessions/${pName}/children`, {
+          headers,
+        });
+        expect(listed.status).toBe(200);
+        const body = await listed.json<{ children: Array<{ id: string }> }>();
+        expect(body.children.map(({ id }) => id)).not.toContain(childName);
+
+        const detail = await SELF.fetch(
+          `https://test.local/sessions/${pName}/children/${childName}?include=result,trajectory`,
+          { headers }
+        );
+        expect(detail.status).toBe(404);
+        expect(await detail.json()).toEqual({ error: "Child session not found" });
+
+        const cancelled = await SELF.fetch(
+          `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+          { method: "POST", headers }
+        );
+        expect(cancelled.status).toBe(404);
+        expect((await store.get(childName))?.status).toBe("active");
+      }
+    );
+
+    it.each(["private", "moved"] as const)(
+      "refuses nested cancellation of a %s descendant before cancelling its parent",
+      async (scope) => {
+        const { pName, childName, sandboxToken, store } = await setupParentAndChild({
+          childStatus: "active",
+        });
+        const grandchildName = await setupNestedSession(store, childName, 2, "isolated-grandchild");
+        await isolateChild(grandchildName, scope);
+        const url = `https://test.local/sessions/${pName}/children/${childName}/cancel`;
+        const headers = { Authorization: `Bearer ${sandboxToken}` };
+
+        const denied = await SELF.fetch(url, { method: "POST", headers });
+        expect(denied.status).toBe(404);
+        expect((await store.get(childName))?.status).toBe("active");
+        expect((await store.get(grandchildName))?.status).toBe("active");
+
+        const directOnly = await SELF.fetch(url, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ cancelNested: false }),
+        });
+        expect(directOnly.status).toBe(200);
+        expect((await store.get(childName))?.status).toBe("cancelled");
+        expect((await store.get(grandchildName))?.status).toBe("active");
+      }
+    );
+
+    it("lets the private child's active canonical owner read and cancel it", async () => {
+      const { pName, childName, parentStub, sandboxToken, store } = await setupParentAndChild({
+        childStatus: "active",
+      });
+      const ownerId = "33333333333333333333333333333333";
+      await serviceFetch("https://test.local/me/authorization", {
+        as: { userId: ownerId, role: "member" },
+      });
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, childName)
+        .run();
+      await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+          ownerId
+        );
+      });
+      const url = `https://test.local/sessions/${pName}/children`;
+      const headers = { Authorization: `Bearer ${sandboxToken}` };
+      const list = await SELF.fetch(url, { headers });
+      expect((await list.json<{ children: Array<{ id: string }> }>()).children).toEqual([
+        expect.objectContaining({ id: childName }),
+      ]);
+      expect((await SELF.fetch(`${url}/${childName}`, { headers })).status).toBe(200);
+      expect(
+        (await SELF.fetch(`${url}/${childName}/cancel`, { method: "POST", headers })).status
+      ).toBe(200);
+      expect((await store.get(childName))?.status).toBe("cancelled");
+    });
+
+    it.each([
+      ["prompt", { content: "Continue" }],
+      ["cancel", { cancelNested: false }],
+    ] as const)(
+      "requires the parent prompt author's current team membership to %s a team child",
+      async (action, body) => {
+        const { pName, childName, parentStub, childStub, sandboxToken, store } =
+          await setupParentAndChild({ childStatus: "active" });
+        const authorId = "33333333333333333333333333333333";
+        await serviceFetch("https://test.local/me/authorization", {
+          as: { userId: authorId, role: "member" },
+        });
+        await env.DB.prepare(
+          "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_child_ops', 'child-ops', 'Child Ops', 1, 1)"
+        ).run();
+        await env.DB.prepare(
+          "UPDATE sessions SET owner_team_id = 'team_child_ops', visibility = 'team' WHERE id IN (?, ?)"
+        )
+          .bind(pName, childName)
+          .run();
+        await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
+          state.storage.sql.exec(
+            "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+            authorId
+          );
+        });
+        const url = `https://test.local/sessions/${pName}/children/${childName}/${action}`;
+        const init = {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        };
+
+        expect((await SELF.fetch(url, init)).status).toBe(404);
+        expect((await store.get(childName))?.status).toBe("active");
+        const [messages] = await queryDO<{ count: number }>(
+          childStub,
+          "SELECT COUNT(*) AS count FROM messages"
+        );
+        expect(messages?.count).toBe(0);
+
+        await new TeamMembershipStore(env.DB).add("team_child_ops", authorId);
+        expect((await SELF.fetch(url, init)).status).toBe(200);
+      }
+    );
+
+    it("checks a private grandchild before a human cancels any descendants", async () => {
+      const { pName, childName, store } = await setupParentAndChild({ childStatus: "active" });
+      const grandchildName = await setupNestedSession(store, childName, 2, "private-grandchild");
+      await isolateChild(grandchildName, "private");
+
+      const response = await serviceFetch(
+        `https://test.local/sessions/${pName}/children/${childName}/cancel`,
+        { method: "POST", as: { userId: "11111111111111111111111111111111", role: "member" } }
+      );
+      expect(response.status).toBe(404);
+      expect((await store.get(childName))?.status).toBe("active");
+      expect((await store.get(grandchildName))?.status).toBe("active");
+    });
+  });
+
   describe("POST /sessions/:parentId/children/:childId/prompt", () => {
+    it("does not prompt a private child for an unverified parent prompt author", async () => {
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
+      const ownerId = "22222222222222222222222222222222";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, childName)
+        .run();
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Child session not found" });
+    });
+
+    it("lets the private child's canonical owner send a parent follow-up", async () => {
+      const { pName, childName, parentStub, sandboxToken } = await setupParentAndChild();
+      const ownerId = "22222222222222222222222222222222";
+      await seedActiveUser(ownerId);
+      await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
+        .bind(ownerId, childName)
+        .run();
+      await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+          ownerId
+        );
+      });
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(200);
+    });
+
+    it("refuses a prompt when the child moved to another team", async () => {
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
+      await env.DB.prepare(
+        "INSERT INTO teams (id, slug, name, created_at, updated_at) VALUES ('team_other', 'other', 'Other', 1, 1)"
+      ).run();
+      await env.DB.prepare("UPDATE sessions SET owner_team_id = 'team_other' WHERE id = ?")
+        .bind(childName)
+        .run();
+
+      const response = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sandboxToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "child_moved" });
+    });
+
     it("queues a follow-up in the direct child as the parent prompt author", async () => {
       const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
 

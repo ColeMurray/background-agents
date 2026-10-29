@@ -45,6 +45,8 @@ class TestCreateSandboxVnc:
 
         handle = await SandboxManager().create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 vnc_enabled=True,
@@ -71,7 +73,12 @@ class TestCreateSandboxVnc:
         )
 
         handle = await SandboxManager().create_sandbox(
-            SandboxConfig(repo_owner="acme", repo_name="repo")
+            SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
+                repo_owner="acme",
+                repo_name="repo",
+            )
         )
 
         assert handle.vnc_url is None
@@ -96,6 +103,8 @@ class TestRestoreSandboxVnc:
         )
 
         handle = await SandboxManager().restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-1",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
             vnc_enabled=True,

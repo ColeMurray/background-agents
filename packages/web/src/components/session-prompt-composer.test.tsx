@@ -16,6 +16,9 @@ const FULL_CAPABILITIES: SessionCapabilities = {
   read: true,
   collaborate: true,
   lifecycle: true,
+  delete: false,
+  manageCollaborators: false,
+  changeVisibility: false,
   sandboxAccess: true,
   exportTrace: true,
 };

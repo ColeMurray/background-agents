@@ -34,6 +34,7 @@ from .launch_policy import (
     parse_launch,
 )
 from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from .termination import terminate_and_wait
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
@@ -80,9 +81,9 @@ class ModalBuildSessionService:
         repositories: list[dict],
         callback_url: str,
         failure_callback_url: str,
+        clone_host: str,
+        clone_username: str,
         clone_token: str = "",
-        clone_host: str | None = None,
-        clone_username: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -90,9 +91,10 @@ class ModalBuildSessionService:
         sandbox_backend: ModalBackend = "modal",
     ) -> BuildSessionLaunch:
         start_time = time.time()
-        docker = parse_launch(sandbox_backend, sandbox_settings)
-        if sandbox_backend == "modal":
-            docker = parse_launch(sandbox_backend, None)  # Preserve standard build sizing.
+        # Standard builds retain provider sizing and ignore session resource settings.
+        docker = parse_launch(
+            sandbox_backend, sandbox_settings if sandbox_backend == "modal-vm" else None
+        )
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
         for name in RESERVED_USER_ENV_KEYS:
@@ -119,9 +121,9 @@ class ModalBuildSessionService:
         )
         inject_vcs_env_vars(
             env_vars,
-            clone_token or None,
             clone_host=clone_host,
             clone_username=clone_username,
+            clone_token=clone_token,
         )
 
         command = ("python", "-m", "sandbox_runtime.entrypoint", MODAL_IMAGE_BUILD_START_ARGUMENT)
@@ -220,7 +222,7 @@ class ModalBuildSessionService:
         try:
             sandbox, _tags = await self._resolve(build_id, provider_session_id)
             termination_start = time.time()
-            exit_code = await sandbox.terminate.aio(wait=True)
+            exit_code = await terminate_and_wait(sandbox)
         except BuildSessionNotFoundError:
             log.info(
                 "sandbox.terminate_build_not_found",

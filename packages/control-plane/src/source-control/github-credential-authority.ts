@@ -1,7 +1,11 @@
 import { z } from "zod";
+import { APIError } from "better-auth/api";
+import { OAuthProviderError } from "../auth/user/providers/types";
+import { AdmissionDeniedError } from "../auth/user/admission-policy";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 
 const providerAccountSchema = z.object({
+  id: z.string().min(1),
   providerId: z.string().min(1),
   accountId: z.string().min(1),
   userId: z.string().min(1),
@@ -11,13 +15,50 @@ const providerAccessTokenSchema = z.object({
   accessToken: z.string(),
 });
 
+/** Retrieval failures may omit optional attribution; integrity errors must not. */
+export class GitHubAttributionUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("GitHub attribution is unavailable", { cause });
+    this.name = "GitHubAttributionUnavailableError";
+  }
+}
+
+async function retrieveAttribution<T>(retrieve: () => Promise<T>): Promise<T> {
+  try {
+    return await retrieve();
+  } catch (cause) {
+    if (
+      (cause instanceof OAuthProviderError &&
+        cause.failure !== "provider_unavailable" &&
+        cause.failure !== "provider_rejected") ||
+      cause instanceof AdmissionDeniedError ||
+      (cause instanceof APIError && cause.body?.code === "AMBIGUOUS_ACCOUNT")
+    )
+      throw cause;
+    throw new GitHubAttributionUnavailableError(cause);
+  }
+}
+
+export async function resolveGitHubAccountProfile(
+  accountClient: ProviderAccountClient,
+  selection: ProviderAccountSelection
+): Promise<unknown | null> {
+  const response = await retrieveAttribution(() =>
+    accountClient.getAccessToken({ body: selection })
+  );
+  const token = providerAccessTokenSchema.parse(response);
+  if (token.accessToken === "") return null;
+  return retrieveAttribution(() => accountClient.accountInfo({ query: selection }));
+}
+
 export interface GitHubAccountSelection {
+  readonly id: string;
   readonly subject: string;
   readonly resolveProfile: () => Promise<unknown | null>;
 }
 
 export interface ProviderAccountSelection {
-  readonly providerId: "github";
+  /** Local user_identities row ID, not the provider subject. */
   readonly accountId: string;
   readonly userId: string;
 }
@@ -72,7 +113,7 @@ export async function resolveGitHubCredentialAuthority(
     const accountClient = context.getUserAuth().api;
     const parsedAccounts = z
       .array(providerAccountSchema)
-      .safeParse(await accountClient.listUserAccounts({ headers }));
+      .safeParse(await retrieveAttribution(() => accountClient.listUserAccounts({ headers })));
     if (
       !parsedAccounts.success ||
       parsedAccounts.data.some((account) => account.userId !== userId)
@@ -88,18 +129,14 @@ export async function resolveGitHubCredentialAuthority(
       kind: "browser_session",
       githubAccount: githubAccount
         ? {
+            id: githubAccount.id,
             subject: githubAccount.accountId,
             resolveProfile: async () => {
               const selection: ProviderAccountSelection = {
-                providerId: "github",
-                accountId: githubAccount.accountId,
+                accountId: githubAccount.id,
                 userId,
               };
-              const token = providerAccessTokenSchema.parse(
-                await accountClient.getAccessToken({ body: selection })
-              );
-              if (token.accessToken === "") return null;
-              return accountClient.accountInfo({ query: selection });
+              return resolveGitHubAccountProfile(accountClient, selection);
             },
           }
         : null,

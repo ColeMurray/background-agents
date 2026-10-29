@@ -3,6 +3,7 @@ import { z } from "zod";
 export const slackInteractionPayloadSchema = z.object({
   type: z.string(),
   action_id: z.string().optional(),
+  block_id: z.string().optional(),
   value: z.string().optional(),
   trigger_id: z.string().optional(),
   actions: z

@@ -414,6 +414,8 @@ class TestExpectedTunnelPortsEnvVar:
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 settings={"tunnelPorts": [3000, 5173]},
@@ -444,7 +446,14 @@ class TestExpectedTunnelPortsEnvVar:
         )
 
         manager = SandboxManager()
-        await manager.create_sandbox(SandboxConfig(repo_owner="acme", repo_name="repo"))
+        await manager.create_sandbox(
+            SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
+                repo_owner="acme",
+                repo_name="repo",
+            )
+        )
 
         assert EXPECTED_TUNNEL_PORTS_ENV_VAR not in captured["env"]
 
@@ -479,6 +488,8 @@ class TestExpectedTunnelPortsEnvVar:
 
         manager = SandboxManager()
         await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={"repo_owner": "acme", "repo_name": "repo"},
             settings={"tunnelPorts": [3000]},
@@ -606,6 +617,8 @@ class TestServicePortEnvVars:
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 code_server_enabled=True,
@@ -623,6 +636,8 @@ class TestServicePortEnvVars:
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 code_server_enabled=False,
@@ -640,6 +655,8 @@ class TestServicePortEnvVars:
         manager = SandboxManager()
         await manager.create_sandbox(
             SandboxConfig(
+                clone_host="github.com",
+                clone_username="x-access-token",
                 repo_owner="acme",
                 repo_name="repo",
                 settings={"terminalEnabled": True, "terminalPort": 7000},

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isEnvironmentId } from "./environments";
+import { repositoryPairInputSchema, sessionListRepositorySchema } from "./repositories";
 
 export const teamRoleSchema = z.enum(["lead", "member"]);
 export type TeamRole = z.infer<typeof teamRoleSchema>;
@@ -10,13 +11,19 @@ export type TeamJoinPolicy = z.infer<typeof teamJoinPolicySchema>;
 export const sessionVisibilitySchema = z.enum(["team", "workspace", "private"]);
 export type SessionVisibility = z.infer<typeof sessionVisibilitySchema>;
 
+export const teamDefaultVisibilitySchema = z.enum(["team", "workspace"]);
+export type TeamDefaultVisibility = z.infer<typeof teamDefaultVisibilitySchema>;
+
+export const teamSettingsSchema = z.strictObject({ requireTeamOnCreate: z.boolean() });
+export type TeamSettings = z.infer<typeof teamSettingsSchema>;
+
 export const teamRowSchema = z.object({
   id: z.string(),
   slug: z.string(),
   name: z.string(),
   description: z.string().nullable(),
   join_policy: teamJoinPolicySchema,
-  default_visibility: sessionVisibilitySchema,
+  default_visibility: teamDefaultVisibilitySchema,
   default_environment_id: z.string().nullable(),
   grants_version: z.number().int(),
   archived_at: z.number().nullable(),
@@ -30,7 +37,7 @@ export interface Team {
   name: string;
   description: string | null;
   joinPolicy: TeamJoinPolicy;
-  defaultVisibility: SessionVisibility;
+  defaultVisibility: TeamDefaultVisibility;
   defaultEnvironmentId: string | null;
   grantsVersion: number;
   archivedAt: number | null;
@@ -52,6 +59,7 @@ export const createTeamRequestSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().nullable().optional(),
   joinPolicy: teamJoinPolicySchema.default("invite_only"),
+  defaultVisibility: teamDefaultVisibilitySchema.optional(),
 });
 
 export const updateTeamRequestSchema = z.object({
@@ -59,7 +67,7 @@ export const updateTeamRequestSchema = z.object({
   name: createTeamRequestSchema.shape.name.optional(),
   description: z.string().nullable().optional(),
   joinPolicy: teamJoinPolicySchema.optional(),
-  defaultVisibility: sessionVisibilitySchema.optional(),
+  defaultVisibility: teamDefaultVisibilitySchema.optional(),
   defaultEnvironmentId: z
     .string()
     .refine(isEnvironmentId, "Invalid environment ID")
@@ -68,6 +76,11 @@ export const updateTeamRequestSchema = z.object({
 });
 
 export const teamCapabilitiesSchema = z.object({
+  // Independently deployed web clients must fail closed against older server responses.
+  canReadTeamSessions: z.boolean().default(false),
+  canReadTeamRepositories: z.boolean().default(false),
+  canReadTeamEnvironments: z.boolean().default(false),
+  canReadAutomations: z.boolean().default(false),
   canJoin: z.boolean(),
   canLeave: z.boolean(),
   canEditMetadata: z.boolean(),
@@ -75,6 +88,7 @@ export const teamCapabilitiesSchema = z.object({
   canManageRepositories: z.boolean(),
   canManageBindings: z.boolean(),
   canManageAutomations: z.boolean(),
+  canManageEnvironments: z.boolean(),
   canManageSecrets: z.boolean(),
   canArchive: z.boolean(),
 });
@@ -85,7 +99,7 @@ export const teamResponseSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   joinPolicy: teamJoinPolicySchema,
-  defaultVisibility: sessionVisibilitySchema,
+  defaultVisibility: teamDefaultVisibilitySchema,
   defaultEnvironmentId: z.string().nullable(),
   grantsVersion: z.number().int(),
   archivedAt: z.number().nullable(),
@@ -101,6 +115,120 @@ export const teamMemberSchema = teamMembershipSchema.extend({
   avatarUrl: z.string().nullable(),
 });
 
+export const workspaceTeamCapabilitiesSchema = z.object({
+  canListAllTeams: z.boolean().default(false),
+});
+
 export const meTeamsResponseSchema = z.object({
   teams: z.array(teamResponseSchema.extend({ role: teamRoleSchema })),
+  capabilities: workspaceTeamCapabilitiesSchema.default({ canListAllTeams: false }),
+  // Older control-plane responses omit the setting during independent rollouts.
+  requireTeamOnCreate: z.boolean().default(false),
+});
+
+// Session modules depend on team settings; keep this wire schema cycle-free.
+const teamInboxSessionSchema = z.object({
+  ownerTeamId: z.string().nullable(),
+  visibility: sessionVisibilitySchema,
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  status: z.enum(["created", "active", "completed", "failed", "archived", "cancelled"]),
+  parentSessionId: z.string().nullable(),
+  spawnSource: z.enum(["user", "agent", "automation", "github-bot", "linear-bot", "slack-bot"]),
+  environmentId: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  repositories: z.array(sessionListRepositorySchema).optional(),
+  pullRequestSummary: z
+    .object({
+      total: z.number(),
+      open: z.number(),
+      draft: z.number(),
+      merged: z.number(),
+      closed: z.number(),
+    })
+    .optional(),
+  readState: z.union([
+    z.object({ latestMessageId: z.null(), unread: z.literal(false), version: z.number() }),
+    z.object({ latestMessageId: z.string(), unread: z.boolean(), version: z.number() }),
+  ]),
+  capabilities: z.object({
+    canRead: z.boolean(),
+    canCollaborate: z.boolean(),
+    canManageLifecycle: z.boolean(),
+    canDelete: z.boolean(),
+    canSandbox: z.boolean(),
+    canManageCollaborators: z.boolean(),
+    canChangeVisibility: z.boolean(),
+  }),
+});
+const teamInboxItemSchema = z.object({
+  rootSession: teamInboxSessionSchema,
+  descendantSessions: z.array(teamInboxSessionSchema),
+});
+const teamInboxPageSchema = z.discriminatedUnion("hasMore", [
+  z.object({
+    items: z.array(teamInboxItemSchema),
+    hasMore: z.literal(true),
+    nextCursor: z.string().min(1),
+  }),
+  z.object({
+    items: z.array(teamInboxItemSchema),
+    hasMore: z.literal(false),
+    nextCursor: z.null(),
+  }),
+]);
+
+/** A bucket page when requested, otherwise the first page of all inbox buckets. */
+export const teamSessionsResponseSchema = z.union([
+  teamInboxPageSchema,
+  z.object({
+    categories: z.record(
+      z.enum(["needs_attention", "in_progress", "finished"]),
+      teamInboxPageSchema
+    ),
+  }),
+]);
+export type TeamSessionsResponse = z.infer<typeof teamSessionsResponseSchema>;
+
+export const MAX_TEAM_REPOSITORY_GRANTS = 500;
+
+export const addTeamRepositoryGrantRequestSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("installation") }),
+  z.strictObject({
+    kind: z.literal("repository"),
+    repoExternalId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    owner: repositoryPairInputSchema.shape.repoOwner,
+    name: repositoryPairInputSchema.shape.repoName,
+  }),
+]);
+export type AddTeamRepositoryGrantRequest = z.infer<typeof addTeamRepositoryGrantRequestSchema>;
+
+const grantFields = {
+  id: z.string(),
+  teamId: z.string(),
+  createdAt: z.number(),
+};
+export const teamRepositoryGrantSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...grantFields,
+    kind: z.literal("installation"),
+    repoExternalId: z.null(),
+    owner: z.null(),
+    name: z.null(),
+  }),
+  z.object({
+    ...grantFields,
+    kind: z.literal("repository"),
+    repoExternalId: z.number().int().positive(),
+    owner: z.string(),
+    name: z.string(),
+  }),
+]);
+export type TeamRepositoryGrant = z.infer<typeof teamRepositoryGrantSchema>;
+export const teamRepositoryGrantsResponseSchema = z.object({
+  grants: z.array(teamRepositoryGrantSchema),
 });

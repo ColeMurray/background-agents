@@ -10,8 +10,10 @@ import {
   type AutomationTriggerType,
   type TriggerCondition,
 } from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_RETRIES } from "@open-inspect/shared/types/automations";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -43,6 +45,7 @@ const COMMON_TIMEZONES = [
   "Australia/Sydney",
 ];
 const COMMON_SET = new Set(COMMON_TIMEZONES);
+const RETRY_OPTIONS = Array.from({ length: MAX_AUTOMATION_RETRIES + 1 }, (_, retries) => retries);
 const ALL_TIMEZONES = Intl.supportedValuesOf("timeZone");
 const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
   schedule: "Schedule",
@@ -75,6 +78,7 @@ interface AutomationTriggerFieldsProps {
 interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFieldsProps {
   eventTypeError: string;
   slackChannelError: string;
+  slackBotAllowListError: string;
   conditionErrors: string[];
 }
 
@@ -98,8 +102,8 @@ export function AutomationTriggerTypeField({
       {mode === "create" ? (
         <>
           <FieldDescription className="my-1">
-            Scheduled automations run on a repeating timer. Other types run when the connected
-            service sends an event (for example a GitHub webhook or Sentry alert).
+            Scheduled automations run once or on a repeating timer. Other types run when the
+            connected service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
           <TriggerTypeSelector
             value={value.type}
@@ -129,6 +133,7 @@ export function AutomationTriggerConfigurationFields({
   onChange,
   eventTypeError,
   slackChannelError,
+  slackBotAllowListError,
   conditionErrors,
 }: AutomationTriggerConfigurationFieldsProps) {
   const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
@@ -160,50 +165,123 @@ export function AutomationTriggerConfigurationFields({
     <>
       {isSchedule && (
         <>
-          <fieldset>
-            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
-            <CronPicker
-              value={value.scheduleCron}
-              onChange={(scheduleCron) => update({ scheduleCron })}
-              timezone={value.scheduleTz}
-            />
-            <FieldDescription>
-              How often this automation runs. Use a preset or a five-field cron expression (minute,
-              hour, day of month, month, day of week).
-            </FieldDescription>
-          </fieldset>
           <div>
             <label
-              id="automation-timezone-label"
-              htmlFor="automation-timezone"
+              htmlFor="automation-schedule-mode"
               className="block text-sm font-medium text-foreground mb-1.5"
             >
-              Timezone
+              Schedule
             </label>
-            <Combobox
-              id="automation-timezone"
-              labelId="automation-timezone-label"
-              value={value.scheduleTz}
-              onChange={(scheduleTz) => update({ scheduleTz })}
-              items={TIMEZONE_GROUPS}
-              maxDisplayed={20}
-              searchable
-              searchPlaceholder="Search timezones..."
-              filterFn={(option, query) =>
-                option.label.toLowerCase().includes(query) ||
-                String(option.value).toLowerCase().includes(query)
-              }
-              dropdownWidth="w-64"
-              triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+            <Select
+              value={value.scheduleMode}
+              disabled={mode === "edit"}
+              onValueChange={(scheduleMode: "recurring" | "once") => update({ scheduleMode })}
             >
-              <span className="truncate flex-1 text-left">
-                {value.scheduleTz.replace(/_/g, " ")}
-              </span>
-              <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
-            </Combobox>
+              <SelectTrigger id="automation-schedule-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="recurring">Recurring</SelectItem>
+                <SelectItem value="once">Run once</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {value.scheduleMode === "once" ? (
+            <div>
+              <label
+                htmlFor="automation-once-at"
+                className="block text-sm font-medium text-foreground mb-1.5"
+              >
+                Run at
+              </label>
+              <Input
+                id="automation-once-at"
+                type="datetime-local"
+                value={value.scheduleOnceAt}
+                required
+                onChange={(event) => update({ scheduleOnceAt: event.target.value })}
+              />
+              <FieldDescription>
+                Choose a future time in your local timezone (
+                {Intl.DateTimeFormat().resolvedOptions().timeZone}). This automation runs once.
+                Pause or delete it to cancel pending starts, including retries.
+              </FieldDescription>
+            </div>
+          ) : (
+            <>
+              <fieldset>
+                <legend className="block text-sm font-medium text-foreground mb-1.5">Repeat</legend>
+                <CronPicker
+                  value={value.scheduleCron}
+                  onChange={(scheduleCron) => update({ scheduleCron })}
+                  timezone={value.scheduleTz}
+                />
+                <FieldDescription>
+                  How often this automation runs. Use a preset or a five-field cron expression
+                  (minute, hour, day of month, month, day of week).
+                </FieldDescription>
+              </fieldset>
+              <div>
+                <label
+                  id="automation-timezone-label"
+                  htmlFor="automation-timezone"
+                  className="block text-sm font-medium text-foreground mb-1.5"
+                >
+                  Timezone
+                </label>
+                <Combobox
+                  id="automation-timezone"
+                  labelId="automation-timezone-label"
+                  value={value.scheduleTz}
+                  onChange={(scheduleTz) => update({ scheduleTz })}
+                  items={TIMEZONE_GROUPS}
+                  maxDisplayed={20}
+                  searchable
+                  searchPlaceholder="Search timezones..."
+                  filterFn={(option, query) =>
+                    option.label.toLowerCase().includes(query) ||
+                    String(option.value).toLowerCase().includes(query)
+                  }
+                  dropdownWidth="w-64"
+                  triggerClassName="flex w-full items-center gap-1.5 px-3 py-2 text-sm border border-border bg-input text-foreground hover:border-foreground/20 transition"
+                >
+                  <span className="truncate flex-1 text-left">
+                    {value.scheduleTz.replace(/_/g, " ")}
+                  </span>
+                  <ChevronDownIcon className="w-3 h-3 text-muted-foreground" />
+                </Combobox>
+                <FieldDescription>
+                  The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
+                  local time here).
+                </FieldDescription>
+              </div>
+            </>
+          )}
+          <div>
+            <label
+              htmlFor="automation-max-retries"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Retries
+            </label>
+            <Select
+              value={String(value.maxRetries)}
+              onValueChange={(maxRetries) => update({ maxRetries: Number(maxRetries) })}
+            >
+              <SelectTrigger id="automation-max-retries" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RETRY_OPTIONS.map((retries) => (
+                  <SelectItem key={retries} value={String(retries)}>
+                    {retries === 0 ? "No retries" : `Up to ${retries}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <FieldDescription>
-              The schedule is evaluated in this time zone (for example, &quot;9:00&quot; is 9:00
-              local time here).
+              When a scheduled run fails to start, try again after a short wait that doubles each
+              time. Manual runs, and runs that fail after they start, are not retried.
             </FieldDescription>
           </div>
         </>
@@ -296,6 +374,37 @@ export function AutomationTriggerConfigurationFields({
             <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
         </fieldset>
+      )}
+
+      {value.type === "slack_event" && (
+        <div>
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-foreground">
+                Trigger on bot messages
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Let messages posted by other bots and integrations start runs. Requires a Slack User
+                include condition listing the bot IDs (and any people) allowed to trigger it. This
+                app&apos;s own messages never trigger.
+              </span>
+            </span>
+            <Switch
+              aria-label="Trigger on bot messages"
+              checked={value.includeBotMessages}
+              onCheckedChange={(checked) => update({ includeBotMessages: checked })}
+            />
+          </label>
+          {value.includeBotMessages && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Bot messages are untrusted input and can start autonomous work. List only bots you
+              trust in the Slack User condition.
+            </p>
+          )}
+          {slackBotAllowListError && (
+            <p className="mt-1 text-xs text-destructive">{slackBotAllowListError}</p>
+          )}
+        </div>
       )}
     </>
   );

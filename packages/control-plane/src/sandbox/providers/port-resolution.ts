@@ -33,7 +33,7 @@ export interface SandboxPortPlan {
 }
 
 /** Effective service ports from settings, with shared defaults. */
-export function resolveServicePorts(sandboxSettings: SandboxSettings | undefined): {
+function resolveServicePorts(sandboxSettings: SandboxSettings | undefined): {
   codeServerPort: number;
   terminalPort: number;
   vncPort: number;
@@ -46,7 +46,7 @@ export function resolveServicePorts(sandboxSettings: SandboxSettings | undefined
 }
 
 /** Validated, capped list of user-configured tunnel ports (invalid entries dropped). */
-export function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
+function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
   if (!rawPorts) return [];
   const ports: number[] = [];
   for (const value of rawPorts) {

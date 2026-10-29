@@ -28,6 +28,7 @@ const defaults: Record<AutomationEventSource, () => AutomationEvent> = {
       meta: {},
       repoOwner: "test-owner",
       repoName: "test-repo",
+      repositoryId: 9001,
     }) as GitHubAutomationEvent,
   linear: () =>
     ({

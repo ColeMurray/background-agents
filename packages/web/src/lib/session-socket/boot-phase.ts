@@ -34,6 +34,7 @@ const BOOT_PHASE_LABELS: Record<BootPhaseName, string> = {
   sync: "Cloning repository",
   setup: "Running setup.sh",
   start: "Starting services",
+  memory: "Loading memories",
   skills: "Installing skills",
   harness: "Starting agent",
 };

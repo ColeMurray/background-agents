@@ -17,23 +17,19 @@ const correlation = { request_id: "request-1", trace_id: "trace-1" };
 function baseResources() {
   return {
     triggerImageBuild: vi.fn(async (_config: ImageBuildProviderTriggerConfig) => undefined),
-    getBuildSandbox: vi.fn(
-      async (): Promise<DaytonaSandboxResponse | null> => ({
-        id: SOURCE_ID,
-        state: "started",
-        labels: { openinspect_expires_at: String(Date.now() + 60 * 60_000) },
-      })
-    ),
+    getBuildSandbox: vi.fn(async (): Promise<DaytonaSandboxResponse | null> => ({
+      id: SOURCE_ID,
+      state: "started",
+      labels: { openinspect_expires_at: String(Date.now() + 60 * 60_000) },
+    })),
     stopBuildSandboxForCapture: vi.fn(async (): Promise<"stopped" | "stopping"> => "stopped"),
     captureBuildSnapshot: vi.fn(async () => undefined),
-    getBuildSnapshot: vi.fn(
-      async (): Promise<DaytonaSnapshotResponse | null> => ({
-        id: "snapshot-1",
-        name: "oi-image-abc",
-        state: "active",
-        sourceSandboxId: SOURCE_ID,
-      })
-    ),
+    getBuildSnapshot: vi.fn(async (): Promise<DaytonaSnapshotResponse | null> => ({
+      id: "snapshot-1",
+      name: "oi-image-abc",
+      state: "active",
+      sourceSandboxId: SOURCE_ID,
+    })),
     deleteBuildSandbox: vi.fn(async () => undefined),
     deleteProviderImage: vi.fn(async () => undefined),
     findBuildSandboxByName: vi.fn(async (): Promise<DaytonaSandboxResponse | null> => null),
@@ -61,7 +57,7 @@ function plan(overrides: Partial<ImageBuildPlan> = {}): ImageBuildPlan {
     buildTimeoutMs: 1_800_000,
     correlation,
     callbackToken: "a".repeat(64),
-    cloneAuth: { type: "credential_helper", host: "github.com", username: "x", token: "clone-1" },
+    cloneAuth: { type: "credential_helper", token: "clone-1" },
     ...overrides,
   };
 }

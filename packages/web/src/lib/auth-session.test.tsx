@@ -23,6 +23,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  sessionStorage.clear();
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
@@ -198,13 +199,28 @@ describe("signOut", () => {
     expect(mocks.mutate).toHaveBeenCalledWith("/api/auth/get-session", null, false);
   });
 
+  it("removes stored prompt drafts but keeps other preferences", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ success: true })));
+    sessionStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Secret plan");
+    sessionStorage.setItem("open-inspect-prompt-draft:user-2:session-1", "{}");
+    sessionStorage.setItem("open-inspect-sidebar-open", "true");
+
+    await signOut();
+
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-2:session-1")).toBeNull();
+    expect(sessionStorage.getItem("open-inspect-sidebar-open")).toBe("true");
+  });
+
   it("does not clear local state when server-side sign-out fails", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(Response.json({ error: "Unavailable" }, { status: 503 }))
     );
+    sessionStorage.setItem("open-inspect-prompt-draft:user-1:new-session", "Draft");
 
     await expect(signOut()).rejects.toThrow("Sign-out failed with status 503");
     expect(mocks.mutate).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBe("Draft");
   });
 });

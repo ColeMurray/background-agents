@@ -56,6 +56,7 @@ describe("MessageService", () => {
     vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
       messageId: "msg-1",
       status: "queued",
+      deduplicated: false,
     });
 
     const result = await service.enqueuePrompt({
@@ -64,7 +65,7 @@ describe("MessageService", () => {
       source: "web",
     });
 
-    expect(result).toEqual({ messageId: "msg-1", status: "queued" });
+    expect(result).toEqual({ messageId: "msg-1", status: "queued", deduplicated: false });
     expect(messageQueue.enqueuePromptFromApi).toHaveBeenCalledWith({
       content: "hello",
       authorId: "user-1",

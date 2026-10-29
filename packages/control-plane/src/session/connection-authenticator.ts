@@ -2,9 +2,11 @@ import { isSessionPromptable } from "@open-inspect/shared/types/session-activity
 import type { EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import {
   checkSessionAccess,
+  type AccessDenialReason,
   type AccessDecision,
   type SessionAction,
   type SessionAccessRow,
+  type SessionCapabilities,
   type SessionViewer,
 } from "@open-inspect/shared";
 import {
@@ -39,9 +41,11 @@ import { WS_AUTHORIZATION_LEASE_MS } from "./authorization-lease";
 import { canManageSessionBudget } from "./budget-authorization";
 import {
   legacyPermissionForAction,
+  resolverDecides,
   type TeamsEnforcementMode,
 } from "../authorization/teams-enforcement";
 import type { ClientCommandAuthorization } from "./message-router";
+import { effectiveSessionCapabilities } from "../authorization/session-admission";
 
 /**
  * Maximum age of a WebSocket authentication token (in milliseconds).
@@ -65,8 +69,17 @@ export interface SessionConnectionAuthenticatorDeps {
   schedulePullRequestRefresh: (trigger: "open" | "manual") => void;
   scmProviderName: SourceControlProviderName;
   /** Resolve the current D1 session scope and user's authorization on every gated action. */
-  resolveSessionViewer: (userId: string) => Promise<SessionViewerResolution>;
+  resolveSessionViewer: (
+    userId: string,
+    options?: { includeMemberships?: boolean }
+  ) => Promise<SessionViewerResolution>;
   auditPrivateBreakGlass: (userId: string, row: SessionAccessRow) => Promise<void>;
+  auditShadowDenied: (
+    userId: string,
+    row: SessionAccessRow,
+    reason: AccessDenialReason,
+    connectionId: string
+  ) => Promise<void>;
   /** The session-scoped logger; upgrade/subscribe paths also receive request-scoped children. */
   log: Logger;
 }
@@ -116,6 +129,8 @@ export interface SessionUpgradeAdmission {
  * snapshot handoff), and post-hibernation client identity recovery.
  */
 export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
+  private readonly shadowDenials = new WeakMap<SessionWebSocket, Set<string>>();
+
   constructor(private readonly deps: SessionConnectionAuthenticatorDeps) {}
 
   /**
@@ -380,7 +395,9 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       // Authorization is intentionally sampled once at the start of this
       // subscription request. A concurrent role change takes effect when this
       // bounded lease expires, not midway through an in-flight request.
-      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id);
+      const resolution = await this.deps.resolveSessionViewer(participant.canonical_user_id, {
+        includeMemberships: true,
+      });
       const read = resolution.kind === "valid" ? this.decide(resolution, "read") : null;
       if (resolution.kind !== "valid" || !read?.allowed) {
         log.warn("ws.connect", {
@@ -432,7 +449,6 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
           return;
         }
       }
-
       const enrichment = await this.deps.snapshotReader.resolveSessionSnapshotEnrichment();
       const clientInfo: ClientInfo = {
         participantId: participant.id,
@@ -451,7 +467,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
             ws,
             clientInfo,
             enrichment,
-            this.decide(resolution, "sandbox").allowed,
+            effectiveSessionCapabilities(resolution.viewer, resolution.row, resolution.mode),
             canManageSessionBudget(resolution.row.ownerUserId, resolution.authorization)
           )
         );
@@ -468,6 +484,7 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
         wsManager.close(ws, WS_CLOSE_INTERNAL_ERROR, "Session activation failed");
         return;
       }
+      this.observeShadowReadDenial(ws, resolution);
       log.info("ws.connect", {
         event: "ws.connect",
         ws_type: "client",
@@ -493,20 +510,21 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
     ws: SessionWebSocket,
     client: ClientInfo,
     enrichment: Parameters<SessionSnapshotReader["readSessionSnapshot"]>[0],
-    canAccessSandbox: boolean,
+    capabilities: SessionCapabilities,
     canManageBudget: boolean
   ): boolean {
     const { wsManager, snapshotReader } = this.deps;
     const snapshot = snapshotReader.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
-    const authorizedSnapshot = canAccessSandbox
+    const authorizedSnapshot = capabilities.canSandbox
       ? snapshot
       : redactSessionSnapshotSandboxAccess(snapshot);
     if (
       !wsManager.send(ws, {
         type: "subscribed",
         ...authorizedSnapshot,
+        session: { ...authorizedSnapshot.session, capabilities },
         participantId: client.participantId,
         participant: {
           participantId: client.participantId,
@@ -540,15 +558,60 @@ export class SessionConnectionAuthenticator implements SessionUpgradeAdmission {
       );
       return { kind: "revoked" };
     }
+    this.observeShadowReadDenial(ws, resolution);
     const decision = this.decide(resolution, action);
     return decision.allowed ? { kind: "allowed" } : { kind: "denied", reason: decision.reason };
+  }
+
+  /** Observe only allowed reads; a hypothetical denial must never revoke the lease. */
+  private observeShadowReadDenial(
+    ws: SessionWebSocket,
+    resolution: Extract<SessionViewerResolution, { kind: "valid" }>
+  ): void {
+    if (resolution.mode !== "shadow") return;
+    try {
+      const decision = checkSessionAccess(resolution.viewer, resolution.row, "read");
+      if (decision.allowed) return;
+      const key = JSON.stringify([resolution.row.id, decision.reason]);
+      let observed = this.shadowDenials.get(ws);
+      if (observed?.has(key)) return;
+      const connection = this.deps.wsManager.classify(ws);
+      if (connection.kind !== "client" || !connection.wsId) {
+        throw new Error("Missing WebSocket ID for shadow audit");
+      }
+      const connectionId = connection.wsId;
+      if (!observed) {
+        observed = new Set();
+        this.shadowDenials.set(ws, observed);
+      }
+      // Reserve synchronously so pending or failed writes cannot cause a retry storm.
+      observed.add(key);
+      this.deps.backgroundTasks.submit(
+        () =>
+          this.deps.auditShadowDenied(
+            resolution.authorization.userId,
+            resolution.row,
+            decision.reason,
+            connectionId
+          ),
+        {
+          name: "session.shadow_denied",
+          context: { user_id: resolution.authorization.userId, session_id: resolution.row.id },
+        }
+      );
+    } catch (error) {
+      this.deps.log.error("WebSocket shadow denial audit failed", {
+        user_id: resolution.authorization.userId,
+        error: error instanceof Error ? error : String(error),
+      });
+    }
   }
 
   private decide(
     resolution: Extract<SessionViewerResolution, { kind: "valid" }>,
     action: SessionAction
   ): AccessDecision {
-    if (resolution.mode === "on" || resolution.row.visibility === "private") {
+    if (resolverDecides(resolution.mode, resolution.row, action)) {
       return checkSessionAccess(resolution.viewer, resolution.row, action);
     }
     return resolution.authorization.permissions.includes(legacyPermissionForAction(action))

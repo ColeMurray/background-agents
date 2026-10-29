@@ -6,6 +6,10 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
+import type { CredentialScope } from "./credential-scope";
+import type { BackgroundTasks } from "../platform-ports";
+
+export type { CredentialScope } from "./credential-scope";
 
 /**
  * Repository information.
@@ -133,6 +137,21 @@ export interface GetRepositoryConfig {
   owner: string;
   /** Repository name */
   name: string;
+}
+
+export interface ListBranchesResult {
+  branches: { name: string }[];
+  cached: boolean;
+  cachedAt: string;
+}
+
+/** Host capabilities for keeping refreshes alive and measuring provider work. */
+export interface ListBranchesContext {
+  backgroundTasks: BackgroundTasks;
+  metrics: {
+    time<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  };
+  traceId?: string;
 }
 
 /**
@@ -305,6 +324,10 @@ export interface PullRequestSnapshot {
  * Defines the contract for source control platform operations.
  * Implementations wrap provider-specific APIs (GitHub, GitLab, Bitbucket).
  *
+ * App-level credential scope:
+ * - GitHub honors CredentialScope when minting installation tokens.
+ * - GitLab uses a deployment-wide PAT and does not narrow it by scope.
+ *
  * Error handling:
  * - Methods should throw SourceControlProviderError with appropriate errorType
  * - "transient" errors (network issues) can be retried
@@ -398,16 +421,22 @@ export interface SourceControlProvider {
    * List branches for a repository.
    *
    * @param config - Repository identifier (owner/name)
-   * @returns Array of branch names
+   * @returns Branch names and cache provenance
    * @throws SourceControlProviderError on configuration or API errors
    */
-  listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
+  listBranches(
+    config: GetRepositoryConfig,
+    context: ListBranchesContext
+  ): Promise<ListBranchesResult>;
 
   /**
    * Resolve one branch tip with app-level credentials. A confirmed 404 is
    * absence; authentication, throttling, and transport failures throw.
    */
-  getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null>;
+  getBranchHead(
+    config: GetRepositoryConfig & { branch: string },
+    scope: CredentialScope
+  ): Promise<string | null>;
 
   /**
    * Resolve a branch, tag, or commit-ish to the commit it names.
@@ -419,7 +448,10 @@ export interface SourceControlProvider {
    * @returns The resolved commit, or null when the ref does not exist
    * @throws SourceControlProviderError
    */
-  resolveCommit(config: GetRepositoryConfig & { ref: string }): Promise<ResolvedCommit | null>;
+  resolveCommit(
+    config: GetRepositoryConfig & { ref: string },
+    scope: CredentialScope
+  ): Promise<ResolvedCommit | null>;
 
   /**
    * List every entry reachable from a commit, recursively.
@@ -432,7 +464,8 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError
    */
   listTree(
-    config: GetRepositoryConfig & { commitSha: string; path?: string | null }
+    config: GetRepositoryConfig & { commitSha: string; path?: string | null },
+    scope: CredentialScope
   ): Promise<RepositoryTree>;
 
   /**
@@ -451,21 +484,28 @@ export interface SourceControlProvider {
    *   largest body the caller is willing to accept
    * @throws SourceControlProviderError, including when the blob is too large
    */
-  readBlob(config: GetRepositoryConfig & { blobId: string; maxBytes: number }): Promise<Uint8Array>;
+  readBlob(
+    config: GetRepositoryConfig & { blobId: string; maxBytes: number },
+    scope: CredentialScope
+  ): Promise<Uint8Array>;
 
   /**
    * Read the current state of a pull request.
    *
-   * App-authenticated: credentials come from provider-level configuration
-   * (matching listRepositories), never a caller token — the webhook and
-   * read-through freshness paths run with no user in the loop.
+   * App-authenticated: credentials come from provider-level configuration,
+   * never a caller token — the webhook and read-through freshness paths run
+   * with no user in the loop. GitHub honors the caller's scope; GitLab's
+   * deployment-wide PAT is not narrowed by it.
    *
    * @param config - PR identifier; include repositoryExternalId when known
    *   so a 404 triggers a resolve-by-id + single retry (rename tolerance)
    * @returns Current PR snapshot
    * @throws SourceControlProviderError
    */
-  getPullRequest(config: GetPullRequestConfig): Promise<PullRequestSnapshot>;
+  getPullRequest(
+    config: GetPullRequestConfig,
+    scope: CredentialScope
+  ): Promise<PullRequestSnapshot>;
 
   /**
    * Generate authentication for git push operations.
@@ -477,7 +517,7 @@ export interface SourceControlProvider {
    * @returns Git push authentication context with app token
    * @throws SourceControlProviderError
    */
-  generatePushAuth(): Promise<GitPushAuthContext>;
+  generatePushAuth(scope: CredentialScope): Promise<GitPushAuthContext>;
 
   /**
    * Generate credentials for the sandbox's git credential helper.
@@ -485,12 +525,13 @@ export interface SourceControlProvider {
    * Called per request from inside the sandbox via
    * `POST /sessions/:id/scm-credentials`. The returned `username` is the
    * provider-specific basic-auth username (e.g. `x-access-token` for GitHub),
-   * and `password` is a freshly minted token. `expiresAtEpochMs` lets the
-   * client side cache the credentials until shortly before they expire.
+   * and `password` is a scoped installation token for GitHub or the
+   * deployment-wide PAT for GitLab. `expiresAtEpochMs` lets the client side
+   * cache the credentials until shortly before they expire.
    *
    * @throws SourceControlProviderError on configuration or upstream errors
    */
-  generateCredentialHelperAuth(): Promise<CredentialHelperAuth>;
+  generateCredentialHelperAuth(scope: CredentialScope): Promise<CredentialHelperAuth>;
 
   /**
    * Build provider-specific URL for manual pull request creation.

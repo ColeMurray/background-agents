@@ -4,7 +4,7 @@ description: Fan one scheduled firing out across up to 10 repositories, each in 
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-02"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/MULTI_REPO_AUTOMATIONS.md
@@ -13,6 +13,8 @@ relatedCode:
   - packages/web/src/components/automations/run-history.tsx
   - packages/control-plane/src/routes/automation-validation.ts
   - packages/control-plane/src/scheduler/scheduler.ts
+  - packages/control-plane/src/automation/authorization-guard.ts
+  - packages/control-plane/src/routes/automation-runs.ts
 ---
 
 A scheduled automation can target several repositories at once; every firing then runs the same instructions in one session per repository.
@@ -45,6 +47,8 @@ flowchart TB
 
 If one repository cannot be resolved when the firing starts (for example the GitHub App lost access), only that repository's run fails and the others continue. If every target fails to resolve, the firing finishes immediately as Failed.
 
+Authorization failures are different from per-repository resolution failures. For a team automation, the execution user must still belong to the active team, and current team grants must cover the resolved launch targets, including every repository in an environment. Missing grant coverage rejects the firing rather than launching only the granted subset. Team-owned environments must belong to the automation's owning team. See [Ownership and execution](/automations/first-automation#ownership-and-execution).
+
 ## Changing the selection mid-flight
 
 You can add or remove repositories at any time, including while a firing is in progress. Each run snapshots its repository and branch when it starts, so:
@@ -58,6 +62,8 @@ Duplicate repositories in the selection are rejected on save rather than silentl
 ## Run history
 
 A single-repository firing renders as a flat row. A multi-repository firing renders as one expandable row summarizing its targets, for example "10 repositories" followed by "8 completed, 1 failed, 1 running" and the total duration. Expand the row to see each repository with its own status badge, branch, duration, session title, failure reason if any, and **View session** link.
+
+Session titles and links are available only when you can read the linked session. Otherwise its session ID, title, and artifact summary are redacted from history responses; automation read access does not grant session access.
 
 The row's status is derived from its children:
 

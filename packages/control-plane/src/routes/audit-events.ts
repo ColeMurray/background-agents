@@ -44,7 +44,12 @@ async function handleListAuditEvents(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const query = parseQuery(request, auditEventQuery);
+  const query = parseQuery(
+    request,
+    auditEventQuery.extend({
+      teamId: z.string().min(1, { error: "Invalid teamId" }).optional(),
+    })
+  );
   if (query instanceof Response) return query;
 
   const result = await new AuditEventStore(ctx.db).list(query);

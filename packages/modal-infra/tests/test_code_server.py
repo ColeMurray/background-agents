@@ -1,11 +1,11 @@
 """Tests for code-server integration in SandboxManager and SandboxSupervisor."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.sandbox.launch import SandboxLauncher
-from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
+from src.sandbox.manager import SandboxConfig, SandboxManager
 from src.sandbox.tunnels import SandboxTunnels, TunnelUrls
 
 
@@ -23,107 +23,8 @@ class TestGenerateCodeServerPassword:
         assert len(passwords) == 20
 
 
-class TestResolveCodeServerTunnel:
-    """SandboxTunnels._resolve_tunnels tests for code-server port."""
-
-    @pytest.mark.asyncio
-    async def test_returns_tunnel_url_on_success(self):
-        tunnel = MagicMock()
-        tunnel.url = "https://tunnel.example.com"
-
-        sandbox = MagicMock()
-        sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
-
-        resolved = await SandboxTunnels._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
-        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_on_exception_after_retries(self):
-        sandbox = MagicMock()
-        sandbox.tunnels.side_effect = Exception("tunnel unavailable")
-
-        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxTunnels._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff_seconds=0.0
-            )
-        assert resolved == {}
-        assert sandbox.tunnels.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_when_port_missing_after_retries(self):
-        sandbox = MagicMock()
-        sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
-
-        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxTunnels._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff_seconds=0.0
-            )
-        assert resolved == {}
-
-    @pytest.mark.asyncio
-    async def test_retries_then_succeeds(self):
-        tunnel = MagicMock()
-        tunnel.url = "https://tunnel.example.com"
-
-        sandbox = MagicMock()
-        sandbox.tunnels.side_effect = [
-            Exception("not ready"),
-            {CODE_SERVER_PORT: tunnel},
-        ]
-
-        with patch("src.sandbox.tunnels.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxTunnels._resolve_tunnels(
-                sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff_seconds=0.0
-            )
-        assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
-        assert sandbox.tunnels.call_count == 2
-
-
 class TestCreateSandboxCodeServer:
     """create_sandbox populates code-server fields on the returned handle."""
-
-    @pytest.mark.asyncio
-    async def test_handle_contains_code_server_fields(self, monkeypatch):
-        captured = {}
-
-        async def fake_create_aio(*args, **kwargs):
-            captured["env"] = kwargs.get("env")
-            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
-
-            class FakeSandbox:
-                object_id = "obj-123"
-                stdout = None
-
-            return FakeSandbox()
-
-        fake_create = MagicMock()
-        fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
-
-        monkeypatch.setattr(
-            SandboxTunnels,
-            "resolve",
-            AsyncMock(return_value=TunnelUrls("https://cs.example.com", None, None, None)),
-        )
-
-        manager = SandboxManager()
-        config = SandboxConfig(
-            repo_owner="acme",
-            repo_name="repo",
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-123",
-            code_server_enabled=True,
-        )
-
-        handle = await manager.create_sandbox(config)
-
-        assert handle.code_server_url == "https://cs.example.com"
-        assert handle.code_server_password is not None
-        assert len(handle.code_server_password) > 0
-        # Password should be injected into sandbox env vars
-        assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
-        # Code-server port should be in encrypted_ports
-        assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
 
     @pytest.mark.asyncio
     async def test_code_server_skipped_when_disabled(self, monkeypatch):
@@ -149,6 +50,8 @@ class TestCreateSandboxCodeServer:
 
         manager = SandboxManager()
         config = SandboxConfig(
+            clone_host="github.com",
+            clone_username="x-access-token",
             repo_owner="acme",
             repo_name="repo",
             control_plane_url="https://cp.example.com",
@@ -166,56 +69,6 @@ class TestCreateSandboxCodeServer:
 
 class TestRestoreSandboxCodeServer:
     """restore_from_snapshot populates code-server fields on the returned handle."""
-
-    @pytest.mark.asyncio
-    async def test_handle_contains_code_server_fields(self, monkeypatch):
-        captured = {}
-
-        class FakeImage:
-            object_id = "img-123"
-
-        def fake_from_id(*args, **kwargs):
-            return FakeImage()
-
-        async def fake_create_aio(*args, **kwargs):
-            captured["env"] = kwargs.get("env")
-            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
-
-            class FakeSandbox:
-                object_id = "obj-456"
-                stdout = None
-
-            return FakeSandbox()
-
-        fake_create = MagicMock()
-        fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", fake_from_id)
-        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
-        monkeypatch.setattr(
-            SandboxTunnels,
-            "resolve",
-            AsyncMock(return_value=TunnelUrls("https://cs-restored.example.com", None, None, None)),
-        )
-
-        manager = SandboxManager()
-        handle = await manager.restore_from_snapshot(
-            snapshot_image_id="img-abc",
-            session_config={
-                "repo_owner": "acme",
-                "repo_name": "repo",
-                "provider": "anthropic",
-                "model": "claude-sonnet-4-6",
-                "session_id": "sess-1",
-            },
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-456",
-            code_server_enabled=True,
-        )
-
-        assert handle.code_server_url == "https://cs-restored.example.com"
-        assert handle.code_server_password is not None
-        assert captured["env"]["CODE_SERVER_PASSWORD"] == handle.code_server_password
-        assert captured["encrypted_ports"] == [CODE_SERVER_PORT]
 
     @pytest.mark.asyncio
     async def test_code_server_skipped_when_disabled(self, monkeypatch):
@@ -247,6 +100,8 @@ class TestRestoreSandboxCodeServer:
 
         manager = SandboxManager()
         handle = await manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
             snapshot_image_id="img-abc",
             session_config={
                 "repo_owner": "acme",

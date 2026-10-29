@@ -161,6 +161,11 @@ class TestDenylist:
         env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
         assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
+    def test_harness_env_disables_file_based_auto_memory(self, tmp_path: Path) -> None:
+        # Auto memory would add a competing memory system to the system prompt.
+        env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
+        assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+
     def test_harness_env_sets_config_dir_and_policy(self, tmp_path: Path) -> None:
         env = harness_env(tmp_path, ClaudeCredential.oauth_token("tok"))
         assert env["CLAUDE_CONFIG_DIR"] == str(tmp_path)

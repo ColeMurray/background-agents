@@ -91,6 +91,15 @@ cannot create a Vercel project. Apply, then publish the project id so the workfl
 gh variable set VERCEL_DOCS_PROJECT_ID --body "$(terraform output -raw docs_site_project_id)"
 ```
 
+If the `Terraform` workflow applies this environment, give it the same two settings as repository
+variables. Otherwise its next apply on `main` uses the defaults and destroys the docs project and
+its domain:
+
+```bash
+gh variable set DOCS_SITE_ENABLED --body true
+gh variable set DOCS_CUSTOM_DOMAIN --body docs.backgroundagents.dev
+```
+
 The workflow also needs `VERCEL_API_TOKEN` (a secret) and `VERCEL_TEAM_ID` (a variable or secret,
 shared with `Deploy Web`). The project deliberately has no git integration, so nothing deploys it
 except this workflow — do not connect the repository to it from the Vercel dashboard, which would

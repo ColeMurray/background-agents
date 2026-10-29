@@ -95,9 +95,7 @@ export const modelProviderAccountSchema = z.strictObject({
 export type ModelProviderAccount = z.infer<typeof modelProviderAccountSchema>;
 
 export type ModelProviderAccountReconnectMethod =
-  | "device_authorization"
-  | "authorization_code"
-  | "refresh_token";
+  "device_authorization" | "authorization_code" | "refresh_token";
 
 /**
  * Canonical reconnect capability for provider accounts.

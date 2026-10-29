@@ -5,6 +5,7 @@ import type {
   AnalyticsRunOrderBy,
   AnalyticsRunsResponse,
   AutomationTriggerType,
+  GitHubAutomationEvent,
   ConditionConfigMap,
   ConditionType,
   JsonPathFilter,
@@ -15,6 +16,9 @@ import type {
 } from "..";
 import type {
   Automation,
+  AutomationRun,
+  AutomationRunStatus,
+  AutomationInvocationStatus,
   AutomationRepositoryInput,
   CreateAutomationRequest,
   CreateEnvironmentInput,
@@ -149,4 +153,22 @@ it("preserves public trigger type shapes", () => {
   expectTypeOf<Automation["triggerConfig"]>().toEqualTypeOf<TriggerConfig | null>();
 
   void config;
+});
+
+it("requires numeric GitHub event identity and adds terminal grant-denial statuses", () => {
+  expectTypeOf<GitHubAutomationEvent>().toExtend<{ repositoryId: number }>();
+  expectTypeOf<AutomationRunStatus>().toEqualTypeOf<
+    "starting" | "running" | "retrying" | "completed" | "failed" | "skipped" | "unauthorized"
+  >();
+  expectTypeOf<AutomationRun["status"]>().toEqualTypeOf<AutomationRunStatus>();
+  expectTypeOf<AutomationInvocationStatus>().toEqualTypeOf<
+    | "starting"
+    | "running"
+    | "retrying"
+    | "completed"
+    | "failed"
+    | "partial_failed"
+    | "skipped"
+    | "unauthorized"
+  >();
 });

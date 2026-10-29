@@ -5,12 +5,11 @@
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import { AutomationStore } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
+import { createScheduler } from "../scheduler/factory";
 import {
   AutomationExecutionUnauthorizedError,
   AutomationTriggerBlockedError,
-  Scheduler,
-} from "../scheduler/scheduler";
-import { hydrateAutomation } from "../automation/hydrate";
+} from "../scheduler/contracts";
 import { Hono } from "hono";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -25,7 +24,11 @@ import type { Env } from "../types";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { createLogger } from "../logger";
-import { AUTOMATION_MANAGE, admittedAutomation } from "./automation-shared";
+import {
+  AUTOMATION_MANAGE,
+  admittedAutomation,
+  hydrateAutomationResponse,
+} from "./automation-shared";
 
 const logger = createLogger("router:automations");
 
@@ -51,7 +54,9 @@ async function handlePauseAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -70,17 +75,31 @@ async function handleResumeAutomation(
   // For event-driven automations, resume with null next_run_at.
   let nextRunAt: number | null;
   if (existing.trigger_type === "schedule") {
-    if (!existing.schedule_cron) {
+    if (existing.schedule_once_at != null) {
+      if (existing.schedule_once_at <= Date.now()) {
+        return error(
+          "Cannot resume a one-shot whose scheduled time has passed; choose a future time first",
+          400
+        );
+      }
+      nextRunAt = existing.schedule_once_at;
+    } else if (!existing.schedule_cron) {
       return error("Cannot resume: automation has no cron schedule", 400);
+    } else {
+      nextRunAt = nextCronOccurrence(existing.schedule_cron, existing.schedule_tz).getTime();
     }
-    nextRunAt = nextCronOccurrence(existing.schedule_cron, existing.schedule_tz).getTime();
   } else {
     nextRunAt = null;
   }
 
   const result = await ctx.db.batch([store.bindResume(id, nextRunAt)]);
   const resumed = result[0]?.meta.changes === 1;
-  if (!resumed) return error("Automation not found", 404);
+  if (!resumed) {
+    if (existing.schedule_once_at != null && (await store.getById(id))) {
+      return error("Automation schedule changed; reload and retry", 409);
+    }
+    return error("Automation not found", 404);
+  }
 
   logger.info("automation.resumed", {
     event: "automation.resumed",
@@ -92,7 +111,9 @@ async function handleResumeAutomation(
 
   const row = await store.getById(id);
   return json({
-    automation: row ? await hydrateAutomation(ctx.db, row) : null,
+    automation: row
+      ? await hydrateAutomationResponse(ctx, row, admittedAutomation(ctx).viewer)
+      : null,
   });
 }
 
@@ -116,10 +137,10 @@ async function handleTriggerAutomation(
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await new Scheduler(ctx.db, env, ctx.executionCtx).trigger(
+    triggerResult = await createScheduler(ctx.db, env, ctx.executionCtx).trigger(
       id,
       requesterUserId,
-      requesterEnrichment ?? undefined
+      requesterEnrichment
     );
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
@@ -130,10 +151,21 @@ async function handleTriggerAutomation(
       trace_id: ctx.trace_id,
     });
     if (triggerError instanceof AutomationTriggerBlockedError) {
-      return error("A run is already active for this automation", 409);
+      return triggerError.reason === "team_grants_changed"
+        ? json(
+            {
+              error: "Team repository grants changed; retry the trigger",
+              code: "team_grants_changed",
+            },
+            409
+          )
+        : error("A run is already active for this automation", 409);
     }
     if (triggerError instanceof AutomationExecutionUnauthorizedError) {
-      return json({ error: "Execution authorization required" }, 403);
+      return json(
+        { error: "Execution authorization required", reason_code: triggerError.reason },
+        403
+      );
     }
     return error("Failed to trigger automation", 500);
   }

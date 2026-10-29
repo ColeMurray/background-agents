@@ -3,7 +3,11 @@ import {
   type ModelProviderSelections,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
-import { harnessSupportsProviderAuth, type HarnessId } from "@open-inspect/shared/harnesses";
+import {
+  getHarnessCapabilities,
+  harnessSupportsProviderAuth,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
@@ -63,6 +67,14 @@ async function resolveProvider(
   stores: ProviderAccountResolutionStores,
   policy: ProviderAccountSelectionPolicy
 ): Promise<SessionModelProviderAuthInput> {
+  // Preserve the complete routing shape without binding unreachable strict-harness accounts.
+  const capabilities = getHarnessCapabilities(input.harness);
+  if (
+    capabilities.selectionPolicy === "strict" &&
+    capabilities.providerAuth[provider] === undefined
+  ) {
+    return apiKey(provider, "harness_fallback");
+  }
   const explicit = input.explicit?.[provider];
   if (explicit?.mode === "api_key") return apiKey(provider, "explicit");
   if (explicit?.mode === "provider_account") {
@@ -76,7 +88,12 @@ async function resolveProvider(
   }
 
   const providerDefault = await stores.defaults.get(provider);
-  if (!providerDefault) return noSelectionFallback(provider);
+  if (!providerDefault) {
+    // A strict harness has no legacy scoped-OAuth path; with nothing selected it
+    // runs on the API key (platform key or user secret), as Anthropic does.
+    if (capabilities.selectionPolicy === "strict") return apiKey(provider, "api_key_fallback");
+    return noSelectionFallback(provider);
+  }
   if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {
     return apiKey(provider, "harness_fallback");
   }

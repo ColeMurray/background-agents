@@ -51,6 +51,7 @@ export class AnalyticsDashboardStore {
       harness,
       automation,
       billing,
+      sessionOrigins,
       ...pullRequestAndRunResults
     ] = await this.db.batch([
       analytics.prepareSummary(sessionFilters),
@@ -61,6 +62,7 @@ export class AnalyticsDashboardStore {
       analytics.prepareBreakdown(sessionFilters, "harness"),
       analytics.prepareBreakdown(sessionFilters, "automation"),
       billingStatement,
+      analytics.prepareSessionOrigins(sessionFilters),
       ...pullRequestStatements,
       runs.prepareList({ ...sessionFilters, limit: DASHBOARD_RUNS_LIMIT, orderBy: "cost" }),
     ]);
@@ -78,6 +80,7 @@ export class AnalyticsDashboardStore {
       },
       summary: analytics.decodeSummary(summary),
       timeseries: analytics.decodeTimeseries(timeseries),
+      sessionOrigins: analytics.decodeSessionOrigins(sessionOrigins),
       breakdowns: {
         repository: analytics.decodeBreakdown(repository, "repo"),
         user: analytics.decodeBreakdown(user, "user"),

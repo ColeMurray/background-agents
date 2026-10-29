@@ -4,23 +4,24 @@ import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MAX_AUTOMATION_INVOCATION_LIST_LIMIT } from "@open-inspect/shared/types/automations";
-import { describeCron } from "@open-inspect/shared/cron";
+import { describeAutomationSchedule } from "@/lib/automation-schedule";
 import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
 import { useEnvironments } from "@/hooks/use-environments";
 import { RunHistory } from "@/components/automations/run-history";
+import { AutomationDetailSkeleton } from "@/components/automations/automation-detail-skeleton";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { ConditionSummary } from "@/components/automations/condition-summary";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { BackIcon, PencilIcon } from "@/components/ui/icons";
+import { BackIcon, CopyIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
-import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { canAccessAutomation } from "@/lib/automation-authorization";
+import { useAutomationActions } from "@/hooks/use-automation-actions";
+import { useAutomationScope } from "@/hooks/use-automation-scope";
+import { useCanCreateAutomation } from "@/hooks/use-can-create-automation";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -28,9 +29,12 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const { id } = use(params);
   const { isOpen } = useSidebarContext();
   const router = useRouter();
-  const { automation, loading, mutate } = useAutomation(id);
-  const { authorization } = useCurrentUserAuthorization();
-  const { environments } = useEnvironments();
+  const { teamId, navigation } = useAutomationScope();
+  // Matches the create page's gate; a copy the viewer can't own in the source's
+  // team starts in this entry scope instead.
+  const { canCreate: canDuplicate } = useCanCreateAutomation(teamId);
+  const { automation, loading } = useAutomation(id);
+  const { environments } = useEnvironments({ ownerTeamId: automation?.ownerTeamId });
   // "Load more" grows the fetch limit rather than paging by offset: the
   // endpoint returns newest-first, so a larger limit re-fetches the head plus
   // the next page in one request. The endpoint refuses limits past its
@@ -45,59 +49,47 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     invocations,
     total: totalInvocations,
     loading: loadingInvocations,
-    mutate: mutateInvocations,
   } = useAutomationInvocations(id, historyLimit, 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const { act, actionError } = useAutomationActions();
   const reasoningLabel = automation
     ? (automation.reasoningEffort ??
       (getReasoningConfig(automation.model) ? "Model default" : "Not supported"))
     : null;
 
-  const handleAction = async (action: "pause" | "resume" | "trigger") => {
-    setActionError(null);
-    try {
-      const res = await browserApiFetch(`/api/automations/${id}/${action}`, { method: "POST" });
-      if (!res.ok) {
-        setActionError(`Failed to ${action} automation`);
-        return;
-      }
-      mutate();
-      mutateInvocations();
-    } catch (error) {
-      console.error(`Failed to ${action} automation:`, error);
-      setActionError(`Failed to ${action} automation`);
-    }
-  };
-
+  // Deletion evicts the cached automation before navigation; keep the skeleton up
+  // meanwhile instead of flashing "not found".
+  const [deleting, setDeleting] = useState(false);
   const handleDelete = async () => {
-    setActionError(null);
-    try {
-      const res = await browserApiFetch(`/api/automations/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        setActionError("Failed to delete automation");
-        return;
-      }
-      router.push("/automations");
-    } catch (error) {
-      console.error("Failed to delete automation:", error);
-      setActionError("Failed to delete automation");
-    }
+    setDeleting(true);
+    if (await act(id, "delete")) router.push(navigation.list);
+    else setDeleting(false);
   };
 
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+  const collapsedHeader = !isOpen && (
+    <header className="border-b border-border-muted flex-shrink-0">
+      <div className="px-4 py-3 flex items-center gap-2">
+        <CollapsedSidebarControls />
+        <Link
+          href={navigation.list}
+          className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+          aria-label="Back to automations"
+        >
+          <BackIcon className="w-4 h-4" />
+        </Link>
       </div>
-    );
+    </header>
+  );
+
+  if (loading || (deleting && !automation)) {
+    return <AutomationDetailSkeleton header={collapsedHeader} />;
   }
 
   if (!automation) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
-        <Link href="/automations">
+        <Link href={navigation.list}>
           <Button variant="outline" size="sm">
             Back to Automations
           </Button>
@@ -106,25 +98,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
     );
   }
 
-  const canManage = canAccessAutomation("automations.manage", authorization, automation);
-  const canTrigger = canAccessAutomation("automations.trigger", authorization, automation);
+  const { canManage, canTrigger } = automation.capabilities;
 
   return (
     <div className="h-full flex flex-col">
-      {!isOpen && (
-        <header className="border-b border-border-muted flex-shrink-0">
-          <div className="px-4 py-3 flex items-center gap-2">
-            <CollapsedSidebarControls />
-            <Link
-              href="/automations"
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              aria-label="Back to automations"
-            >
-              <BackIcon className="w-4 h-4" />
-            </Link>
-          </div>
-        </header>
-      )}
+      {collapsedHeader}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-3xl mx-auto">
@@ -153,11 +131,21 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-none sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
               {canManage && (
-                <Link href={`/automations/${id}/edit`} className="w-full sm:w-auto">
+                <Link href={navigation.edit(id)} className="w-full sm:w-auto">
                   <Button variant="outline" size="sm" className="w-full sm:w-auto">
                     <span className="flex items-center gap-1.5">
                       <PencilIcon className="w-3.5 h-3.5" />
                       Edit
+                    </span>
+                  </Button>
+                </Link>
+              )}
+              {canDuplicate && (
+                <Link href={navigation.duplicate(id)} className="w-full sm:w-auto">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
+                    <span className="flex items-center gap-1.5">
+                      <CopyIcon className="w-3.5 h-3.5" />
+                      Duplicate
                     </span>
                   </Button>
                 </Link>
@@ -167,7 +155,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                   variant="outline"
                   size="sm"
                   className="w-full sm:w-auto"
-                  onClick={() => handleAction("trigger")}
+                  onClick={() => void act(id, "trigger")}
                 >
                   Trigger Now
                 </Button>
@@ -178,7 +166,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     variant="outline"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() => handleAction("pause")}
+                    onClick={() => void act(id, "pause")}
                   >
                     Pause
                   </Button>
@@ -187,7 +175,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                     variant="outline"
                     size="sm"
                     className="w-full sm:w-auto"
-                    onClick={() => handleAction("resume")}
+                    onClick={() => void act(id, "resume")}
                   >
                     Resume
                   </Button>
@@ -233,9 +221,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <dt className="text-muted-foreground">Trigger</dt>
                 <dd className="text-foreground">
                   {automation.triggerType === "schedule"
-                    ? automation.scheduleCron
-                      ? describeCron(automation.scheduleCron, automation.scheduleTz)
-                      : "Schedule (no cron)"
+                    ? describeAutomationSchedule(automation)
                     : {
                         sentry: "Sentry Alert",
                         webhook: "Inbound Webhook",
@@ -274,6 +260,14 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 automation.triggerConfig.conditions.length > 0 && (
                   <ConditionSummary conditions={automation.triggerConfig.conditions} />
                 )}
+              {automation.triggerType === "slack_event" && (
+                <div>
+                  <dt className="text-muted-foreground">Bot messages</dt>
+                  <dd className="text-foreground">
+                    {automation.triggerConfig?.slack?.includeBotMessages ? "Trigger" : "Ignored"}
+                  </dd>
+                </div>
+              )}
               {automation.environmentIds.length > 0 && (
                 <div className="sm:col-span-2">
                   <dt className="text-muted-foreground">Environments</dt>
@@ -325,7 +319,11 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
                 <div>
                   <dt className="text-muted-foreground">Next Run</dt>
                   <dd className="text-foreground">
-                    {automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleString() : "—"}
+                    {automation.nextRunAt
+                      ? new Date(automation.nextRunAt).toLocaleString(undefined, {
+                          timeZone: automation.scheduleTz,
+                        })
+                      : "—"}
                   </dd>
                 </div>
               )}

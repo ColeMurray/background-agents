@@ -10,7 +10,13 @@
  * never stop working; environments join them.
  */
 
-import type { Env, AgentSessionWebhookIssue, IssueSession, StaticTargetConfig } from "./types";
+import type {
+  Env,
+  AgentSessionWebhookIssue,
+  IssueSession,
+  StaticTargetConfig,
+  LinearChannelScope,
+} from "./types";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { LinearApiClient } from "./utils/linear-client";
@@ -114,11 +120,12 @@ export interface TargetIntegration {
  */
 export async function resolveTargetIntegration(
   env: Env,
-  target: SessionTarget
+  target: SessionTarget,
+  scope: LinearChannelScope
 ): Promise<TargetIntegration> {
   const callbackRepoFullName = targetSettingsRepoFullName(target);
   const settingsRepo = callbackRepoFullName.toLowerCase();
-  const config = await getLinearConfig(env, settingsRepo);
+  const config = await getLinearConfig(env, settingsRepo, scope);
   return {
     config,
     enabled: config.enabledRepos === null || config.enabledRepos.includes(settingsRepo),
@@ -151,13 +158,14 @@ function repositoryTarget(owner: string, name: string, fullName?: string): Sessi
 export async function resolveStoredSessionTarget(
   env: Env,
   session: IssueSession,
-  traceId: string
+  traceId: string,
+  scope: LinearChannelScope
 ): Promise<SessionTarget | null> {
   if (session.repoOwner && session.repoName) {
     return repositoryTarget(session.repoOwner, session.repoName);
   }
   if (session.environmentId) {
-    const environment = await getEnvironmentById(env, session.environmentId, traceId);
+    const environment = await getEnvironmentById(env, session.environmentId, scope, traceId);
     if (environment) return { kind: "environment", environment };
     log.warn("target.stored_environment_not_found", {
       trace_id: traceId,
@@ -176,10 +184,11 @@ export async function resolveStoredSessionTarget(
 async function resolveMappedTarget(
   env: Env,
   config: StaticTargetConfig,
-  traceId: string
+  traceId: string,
+  scope: LinearChannelScope
 ): Promise<SessionTarget | null> {
   if ("environmentId" in config) {
-    const environment = await getEnvironmentById(env, config.environmentId, traceId);
+    const environment = await getEnvironmentById(env, config.environmentId, scope, traceId);
     if (!environment) {
       log.warn("target.environment_not_found", {
         trace_id: traceId,
@@ -201,6 +210,8 @@ export interface ResolveSessionTargetParams {
   projectInfo: { id: string; name: string } | null | undefined;
   comment: { body: string } | null | undefined;
   traceId: string;
+  scope: LinearChannelScope;
+  teamId: string | null;
 }
 
 export interface ResolvedSessionTarget {
@@ -215,14 +226,27 @@ export interface ResolvedSessionTarget {
 export async function resolveSessionTarget(
   params: ResolveSessionTargetParams
 ): Promise<ResolvedSessionTarget | null> {
-  const { env, client, agentSessionId, issue, labelNames, projectInfo, comment, traceId } = params;
+  const {
+    env,
+    client,
+    agentSessionId,
+    issue,
+    labelNames,
+    projectInfo,
+    comment,
+    traceId,
+    scope,
+    teamId,
+  } = params;
 
   // 1. Check project→target mapping FIRST
   if (projectInfo?.id) {
     const projectMapping = await getProjectRepoMapping(env);
     const mapped = projectMapping[projectInfo.id];
     if (mapped) {
-      const target = await resolveMappedTarget(env, mapped, traceId);
+      const target = await resolveMappedTarget(env, mapped, traceId, scope);
+      if (!target && teamId !== null)
+        throw new Error("Mapped environment unavailable for bound team");
       if (target) {
         return {
           target,
@@ -233,12 +257,14 @@ export async function resolveSessionTarget(
   }
 
   // 2. Check static team→target mapping (override)
-  const teamId = issue.team?.id ?? "";
-  if (teamId) {
+  const linearTeamId = issue.team?.id ?? "";
+  if (linearTeamId) {
     const teamMapping = await getTeamRepoMapping(env);
-    const staticConfig = resolveStaticTarget(teamMapping, teamId, labelNames);
+    const staticConfig = resolveStaticTarget(teamMapping, linearTeamId, labelNames);
     if (staticConfig) {
-      const target = await resolveMappedTarget(env, staticConfig, traceId);
+      const target = await resolveMappedTarget(env, staticConfig, traceId, scope);
+      if (!target && teamId !== null)
+        throw new Error("Mapped environment unavailable for bound team");
       if (target) return { target, reasoning: "Team static mapping" };
     }
   }
@@ -246,7 +272,7 @@ export async function resolveSessionTarget(
   // 3. An explicit `owner/repo` in the trigger comment — or in the reply to a
   //    clarification this resolver previously elicited — beats every heuristic
   //    below: it is the answer the elicitation asked for.
-  const repos = await getAvailableRepos(env, traceId);
+  const repos = await getAvailableRepos(env, scope, traceId);
   if (comment?.body) {
     const named = matchExplicitRepo(comment.body, repos);
     if (named) {
@@ -265,7 +291,11 @@ export async function resolveSessionTarget(
     }));
 
     const suggestions = await getRepoSuggestions(client, issue.id, agentSessionId, candidates);
-    const topSuggestion = suggestions.find((s) => s.confidence >= 0.7);
+    const topSuggestion = suggestions.find(
+      (s) =>
+        s.confidence >= 0.7 &&
+        repos.some((repo) => repo.fullName === s.repositoryFullName.toLowerCase())
+    );
     if (topSuggestion) {
       // Split on the last slash — GitLab nested-group paths
       // ("group/subgroup/project") carry slashes in the owner.
@@ -290,6 +320,7 @@ export async function resolveSessionTarget(
 
   const classification = await classifyRepo(
     env,
+    repos,
     issue.title,
     issue.description,
     labelNames,

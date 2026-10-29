@@ -1,4 +1,9 @@
+import { z } from "zod";
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
+import {
+  sessionCollaboratorCandidatesResponseSchema,
+  type SessionCollaboratorCandidate,
+} from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
@@ -14,6 +19,8 @@ export interface ProviderIdentity {
   displayName?: string;
   avatarUrl?: string;
 }
+
+export type EnrollmentAdmission = (identity: Readonly<ProviderIdentity>) => void | Promise<void>;
 
 /**
  * Ingress providers whose attributed emails are platform-verified mailboxes
@@ -31,11 +38,38 @@ const EMAIL_ATTESTING_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new
   "linear",
 ]);
 
+export function isEmailAttestingProvider(provider: ProviderIdentity["provider"]): boolean {
+  return EMAIL_ATTESTING_PROVIDERS.has(provider);
+}
+
+/**
+ * Ingress providers whose unknown actors are enrolled only with an attested
+ * email. An actor links to an existing user by email only at enrollment and
+ * is never relinked, and every new user gets the default role, so an
+ * email-less enrollment would give someone a second account free of the
+ * suspension or role restrictions on their existing one.
+ *
+ * Known limitation: a Slack user whose profile email the bot cannot read,
+ * typically an external Slack Connect user, cannot be enrolled and so cannot
+ * use the bot. Linear's catalog reads are actorless; its session-creation
+ * request carries the enrolling actor's email.
+ */
+const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
+  "slack",
+  "linear",
+]);
+
+export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]): boolean {
+  return ENROLLMENT_EMAIL_REQUIRED_PROVIDERS.has(provider);
+}
+
+export type ResolveUserOutcome = "existing" | "linked" | "created";
+
 export interface ResolvedUser {
   id: string;
   displayName: string | null;
   email: string | null;
-  isNew: boolean;
+  outcome: ResolveUserOutcome;
 }
 
 export interface User {
@@ -73,14 +107,6 @@ export interface NewUserIdentity {
   providerUserId: string;
   providerLogin?: string;
   providerEmail?: string;
-}
-
-export interface UserUpdate {
-  displayName?: string;
-  avatarUrl?: string;
-  email?: string;
-  /** Only meaningful alongside `email`: its mailbox-ownership proof. */
-  emailVerified?: boolean;
 }
 
 // ── Row types (D1 snake_case) ───────────────────────────────────────
@@ -133,10 +159,65 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
   };
 }
 
+export type CollaboratorEligibility = "eligible" | "not_found" | "inactive" | "not_team_member";
+
+const collaboratorEligibilityRowSchema = z.object({
+  suspended_at: z.number().nullable(),
+  role_id: z.string().nullable(),
+  team_member: z.number(),
+});
+
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
   constructor(private readonly db: SqlDatabase) {}
+
+  /** Lists active users; a team ID restricts candidates to that team's members. */
+  async listCollaboratorCandidates({
+    includeEmail,
+    teamId = null,
+  }: {
+    includeEmail: boolean;
+    teamId?: string | null;
+  }): Promise<SessionCollaboratorCandidate[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT users.id AS userId, users.display_name AS displayName,
+                ${includeEmail ? "users.email" : "NULL AS email"}, users.avatar_url AS avatarUrl
+         FROM users
+         JOIN user_role_assignments assignment ON assignment.user_id = users.id
+         ${teamId === null ? "" : "JOIN team_memberships m ON m.user_id = users.id AND m.team_id = ?"}
+         WHERE users.suspended_at IS NULL AND assignment.role_id IS NOT NULL
+         ORDER BY LOWER(COALESCE(users.display_name, ${includeEmail ? "users.email" : "NULL"}, users.id)), users.id`
+      )
+      .bind(...(teamId === null ? [] : [teamId]))
+      .all();
+    return sessionCollaboratorCandidatesResponseSchema.parse(results);
+  }
+
+  /** Applies the candidate-list rules to one user; a team ID also requires membership in that team. */
+  async getCollaboratorEligibility(
+    userId: string,
+    teamId: string | null
+  ): Promise<CollaboratorEligibility> {
+    const row = collaboratorEligibilityRowSchema.nullable().parse(
+      await this.db
+        .prepare(
+          `SELECT users.suspended_at, assignment.role_id,
+                  EXISTS (SELECT 1 FROM team_memberships m
+                          WHERE m.team_id = ? AND m.user_id = users.id) AS team_member
+           FROM users
+           LEFT JOIN user_role_assignments assignment ON assignment.user_id = users.id
+           WHERE users.id = ?`
+        )
+        .bind(teamId, userId)
+        .first()
+    );
+    if (!row) return "not_found";
+    if (row.suspended_at !== null || row.role_id === null) return "inactive";
+    if (teamId !== null && !row.team_member) return "not_team_member";
+    return "eligible";
+  }
 
   async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
     const uniqueIds = [...new Set(userIds)];
@@ -158,15 +239,20 @@ export class UserStore {
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
    * given provider identity, with automatic email-based cross-provider linking.
+   * Admission receives the normalized identity before a new user is inserted;
+   * existing identities and email links retain their existing account access.
    *
    * On UNIQUE constraint violation (concurrent race), retries the lookup once.
    */
-  async resolveOrCreateUser(identity: ProviderIdentity): Promise<ResolvedUser> {
+  async resolveOrCreateUser(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     try {
-      return await this.doResolveOrCreate(identity);
+      return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
-        return await this.doResolveOrCreate(identity);
+        return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
       }
       throw err;
     }
@@ -274,106 +360,58 @@ export class UserStore {
     };
   }
 
-  async updateUser(userId: string, updates: UserUpdate): Promise<void> {
-    const sets: string[] = [];
-    const values: (string | number | null)[] = [];
-
-    if (updates.displayName !== undefined) {
-      sets.push("display_name = ?");
-      values.push(updates.displayName);
-    }
-    if (updates.avatarUrl !== undefined) {
-      sets.push("avatar_url = ?");
-      values.push(updates.avatarUrl);
-    }
-    if (updates.email !== undefined) {
-      // A blank email normalizes to null — treated as absent, never stored.
-      // Verification travels with the email: it reflects the new address's
-      // proof (attesting provider or not), never the old address's state.
-      const email = normalizeEmail(updates.email);
-      sets.push("email = ?");
-      values.push(email);
-      sets.push("email_verified = ?");
-      values.push(email !== null && updates.emailVerified === true ? 1 : 0);
-    }
-
-    if (sets.length === 0) return;
-
-    sets.push("updated_at = ?");
-    values.push(Date.now());
-    values.push(userId);
-
-    await this.db
-      .prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`)
-      .bind(...values)
-      .run();
+  /**
+   * Set a display name or avatar the user lacks (NULL or blank) and never
+   * overwrite one it has. Each field is a single guarded UPDATE, so a value
+   * another writer stores first always wins. Blank inputs are ignored.
+   */
+  async fillMissingProfile(
+    userId: string,
+    profile: { displayName?: string; avatarUrl?: string }
+  ): Promise<void> {
+    const now = Date.now();
+    const fill = (column: "display_name" | "avatar_url", value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed
+        ? this.db
+            .prepare(
+              `UPDATE users SET ${column} = ?, updated_at = ?
+               WHERE id = ? AND (${column} IS NULL OR TRIM(${column}) = '')`
+            )
+            .bind(trimmed, now, userId)
+        : null;
+    };
+    const statements = [
+      fill("display_name", profile.displayName),
+      fill("avatar_url", profile.avatarUrl),
+    ].filter((statement) => statement !== null);
+    if (statements.length > 0) await this.db.batch(statements);
   }
 
   // ── Private ─────────────────────────────────────────────────────
 
-  private async doResolveOrCreate(identity: ProviderIdentity): Promise<ResolvedUser> {
+  private async doResolveOrCreate(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     const normalizedEmail = normalizeEmail(identity.providerEmail);
 
     // Step 1: Look up by provider identity
     const existing = await this.getIdentity(identity.provider, identity.providerUserId);
 
     if (existing) {
-      // Step 2: Existing identity → load linked user, update if needed
+      // Step 2: Existing identity → return linked user; profile claims for
+      // known actors are applied by KnownActorProfileClaim.
       const user = await this.getUserById(existing.userId);
       if (!user) {
         throw new Error(`Orphaned identity ${existing.id}: user ${existing.userId} not found`);
       }
 
-      // Step 2a: Refresh identity-level metadata (provider_login, provider_email)
-      // so getIdentity() and getIdentitiesForUser() return current values.
-      await this.refreshIdentityMetadata(existing, identity.providerLogin, normalizedEmail);
-
-      // Step 2b: User-level updates (display_name, avatar_url)
-      const updates: UserUpdate = {};
-      if (identity.displayName && identity.displayName !== user.displayName) {
-        updates.displayName = identity.displayName;
-      }
-      if (identity.avatarUrl && identity.avatarUrl !== user.avatarUrl) {
-        updates.avatarUrl = identity.avatarUrl;
-      }
-
-      // Step 2c: Backfill email if user has none and provider now has one.
-      // The check-then-update is racy (a concurrent writer could claim the email
-      // between the SELECT and UPDATE), but the outer retry in resolveOrCreateUser
-      // handles this: on retry, emailOwner is non-null and we re-link instead.
-      if (!user.email && normalizedEmail) {
-        const emailOwner = await this.getUserByEmail(normalizedEmail);
-        if (!emailOwner) {
-          updates.email = normalizedEmail;
-          updates.emailVerified = EMAIL_ATTESTING_PROVIDERS.has(identity.provider);
-        } else if (emailOwner.id !== user.id) {
-          // Another user owns this email — re-link this identity to that user.
-          // This prevents permanent identity splits when e.g. a Slack identity
-          // (created without email) later discovers the same email that a GitHub
-          // identity already registered. Same principle as step 3 (email-based
-          // cross-provider linking) but for existing identities.
-          await this.db
-            .prepare("UPDATE user_identities SET user_id = ? WHERE id = ?")
-            .bind(emailOwner.id, existing.id)
-            .run();
-          return {
-            id: emailOwner.id,
-            displayName: emailOwner.displayName,
-            email: emailOwner.email,
-            isNew: false,
-          };
-        }
-      }
-
-      if (Object.keys(updates).length > 0) {
-        await this.updateUser(user.id, updates);
-      }
-
       return {
         id: user.id,
-        displayName: updates.displayName ?? user.displayName,
-        email: updates.email ?? user.email,
-        isNew: false,
+        displayName: user.displayName,
+        email: user.email,
+        outcome: "existing",
       };
     }
 
@@ -392,7 +430,7 @@ export class UserStore {
           id: emailUser.id,
           displayName: emailUser.displayName,
           email: emailUser.email,
-          isNew: false,
+          outcome: "linked",
         };
       }
     }
@@ -400,6 +438,7 @@ export class UserStore {
     // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
+    await requireEnrollmentAdmission({ ...identity, providerEmail: normalizedEmail ?? undefined });
     const userId = generateId();
     const identityId = generateId();
     const now = Date.now();
@@ -436,38 +475,7 @@ export class UserStore {
       id: userId,
       displayName,
       email: normalizedEmail,
-      isNew: true,
+      outcome: "created",
     };
-  }
-
-  /**
-   * Update identity-level metadata (provider_login, provider_email) if
-   * the provider now reports newer values than what's stored. This keeps
-   * getIdentity() and getIdentitiesForUser() accurate across repeat sign-ins.
-   */
-  private async refreshIdentityMetadata(
-    existing: UserIdentity,
-    providerLogin: string | undefined,
-    normalizedEmail: string | null
-  ): Promise<void> {
-    const sets: string[] = [];
-    const values: (string | null)[] = [];
-
-    if (providerLogin && providerLogin !== existing.providerLogin) {
-      sets.push("provider_login = ?");
-      values.push(providerLogin);
-    }
-    if (normalizedEmail && normalizedEmail !== existing.providerEmail) {
-      sets.push("provider_email = ?");
-      values.push(normalizedEmail);
-    }
-
-    if (sets.length === 0) return;
-
-    values.push(existing.id);
-    await this.db
-      .prepare(`UPDATE user_identities SET ${sets.join(", ")} WHERE id = ?`)
-      .bind(...values)
-      .run();
   }
 }

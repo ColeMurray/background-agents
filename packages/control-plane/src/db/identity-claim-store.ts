@@ -46,17 +46,17 @@ export class IdentityClaimStore {
   }
 
   /**
-   * Give a NULL-email user the just-proven email, verified. Guarded on the
-   * target still being email-less; OR IGNORE nets a concurrent claim of the
-   * same email so a race never fails the sign-in. Returns whether the row
-   * changed.
+   * Give an email-less user (NULL, or a legacy blank that migration 0057
+   * trimmed to '') the just-proven email, verified. Guarded on the target
+   * still being email-less; OR IGNORE nets a concurrent claim of the same
+   * email so a race never fails the sign-in. Returns whether the row changed.
    */
   async claimEmail(userId: string, email: string): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE OR IGNORE users
          SET email = ?, email_verified = 1, updated_at = ?
-         WHERE id = ? AND email IS NULL`
+         WHERE id = ? AND (email IS NULL OR TRIM(email) = '')`
       )
       .bind(email, Date.now(), userId)
       .run();

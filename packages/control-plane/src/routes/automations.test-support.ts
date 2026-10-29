@@ -29,6 +29,7 @@ export const mockStore = {
   list: vi.fn(),
   getById: vi.fn(),
   resolveCanonicalOwner: vi.fn(async (automation: unknown) => automation),
+  projectCanonicalOwners: vi.fn(async (rows: unknown) => rows),
   update: vi.fn(),
   softDelete: vi.fn(),
   pause: vi.fn(),
@@ -64,11 +65,12 @@ export const mockProviderAccountStore = {
 };
 
 export const mockUserStore = {
-  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
+  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", outcome: "existing" }),
 };
 
 export const mockEnvironmentStore = {
   getById: vi.fn(),
+  getRepositoriesForEnvironment: vi.fn(),
 };
 
 /** Shared D1 batch spy — createEnv wires it as env.DB.batch. */
@@ -161,6 +163,7 @@ export const sampleRow = {
   instructions: "Run tests",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
+  schedule_once_at: null,
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,
@@ -169,6 +172,7 @@ export const sampleRow = {
   consecutive_failures: 0,
   created_by: "user-1",
   user_id: "user-1",
+  owner_team_id: null,
   created_at: now,
   updated_at: now,
   deleted_at: null,
@@ -208,7 +212,12 @@ export function applyMockDefaults(): void {
     invocationId: "inv-1",
     runs: [{ id: "run-1" }],
   });
-  mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+  mockEnvironmentStore.getById.mockResolvedValue({
+    id: "env_1",
+    name: "Fullstack",
+    owner_team_id: null,
+  });
+  mockEnvironmentStore.getRepositoriesForEnvironment.mockResolvedValue([]);
   mockProviderAccountStore.getById.mockResolvedValue({
     id: "0123456789abcdef0123456789abcdef",
     provider: "openai",

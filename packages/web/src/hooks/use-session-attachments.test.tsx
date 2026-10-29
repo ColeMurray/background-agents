@@ -2,6 +2,9 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
 import {
   SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS,
@@ -13,6 +16,27 @@ describe("useSessionAttachments", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it("toasts the server reason_code when an attachment upload is denied", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ error: "Forbidden", reason_code: "session_read_only" }, { status: 403 })
+      )
+    );
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]));
+    await act(async () => {
+      await expect(result.current.uploadAll("session-1")).rejects.toThrow(
+        "Failed to upload shot.png (session_read_only)"
+      );
+    });
+    expect(toast.error).toHaveBeenCalledWith("Failed to upload shot.png (session_read_only)");
+    expect(result.current.attachments).toHaveLength(1);
   });
 
   it("rejects video files before creating a preview", () => {

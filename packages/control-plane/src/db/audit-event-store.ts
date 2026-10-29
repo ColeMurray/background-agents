@@ -36,27 +36,29 @@ export function toAuditEvent(row: AuditEventRow): AuditEvent {
   });
 }
 
-/** Read-only D1 access for the workspace audit log. */
+/** Read-only access for the permission-gated workspace audit log. */
 export class AuditEventStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list(options: { limit: number; cursor: AuditEventCursor | null }) {
-    const result = options.cursor
-      ? await this.db
-          .prepare(
-            `SELECT * FROM authorization_audit_events
-             WHERE (occurred_at, id) < (?, ?)
-             ORDER BY occurred_at DESC, id DESC LIMIT ?`
-          )
-          .bind(options.cursor.occurredAt, options.cursor.id, options.limit + 1)
-          .all<AuditEventRow>()
-      : await this.db
-          .prepare(
-            `SELECT * FROM authorization_audit_events
-             ORDER BY occurred_at DESC, id DESC LIMIT ?`
-          )
-          .bind(options.limit + 1)
-          .all<AuditEventRow>();
+  async list(options: { limit: number; cursor: AuditEventCursor | null; teamId?: string }) {
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (options.teamId !== undefined) {
+      conditions.push("audit.team_id = ?");
+      params.push(options.teamId);
+    }
+    if (options.cursor) {
+      conditions.push("(audit.occurred_at, audit.id) < (?, ?)");
+      params.push(options.cursor.occurredAt, options.cursor.id);
+    }
+    const result = await this.db
+      .prepare(
+        `SELECT audit.* FROM authorization_audit_events audit
+         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY audit.occurred_at DESC, audit.id DESC LIMIT ?`
+      )
+      .bind(...params, options.limit + 1)
+      .all<AuditEventRow>();
 
     const rows = result.results ?? [];
     const hasMore = rows.length > options.limit;

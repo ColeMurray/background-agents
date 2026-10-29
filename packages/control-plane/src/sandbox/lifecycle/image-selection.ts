@@ -12,8 +12,8 @@
  * miss on any condition falls back to the base image; sessions are never
  * blocked on builds.
  *
- * Pure decision logic in the decisions.ts style: the lifecycle manager owns
- * the lookup call, logging, and fallback plumbing.
+ * Pure decision logic in the decisions.ts style: launch-context owns lookup/logging;
+ * the lifecycle manager owns provider fallback and retry decisions.
  */
 
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
@@ -71,10 +71,7 @@ export interface SelectedImageBuild {
 }
 
 type ImageBuildMissReason =
-  | "no_ready_image"
-  | "missing_artifact"
-  | "runtime_below_floor"
-  | "fingerprint_mismatch";
+  "no_ready_image" | "missing_artifact" | "runtime_below_floor" | "fingerprint_mismatch";
 
 export type ImageBuildSelectionResult =
   | { outcome: "selected"; image: SelectedImageBuild }

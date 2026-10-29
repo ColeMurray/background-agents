@@ -4,7 +4,9 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
+import { seedTeam } from "./ownership-test-helpers";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
+import { TeamStore } from "../../src/db/teams";
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();
@@ -15,6 +17,7 @@ function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow 
     instructions: "Investigate and fix",
     trigger_type: "slack_event",
     schedule_cron: null,
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     model: "anthropic/claude-sonnet-4-6",
@@ -55,6 +58,89 @@ async function postAutomation(body: Record<string, unknown>): Promise<Response> 
 describe("POST /automations — slack_event validation (integration)", () => {
   beforeEach(cleanD1Tables);
 
+  it("rejects a workspace automation watching a team-bound channel before repository resolution", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "bound",
+      name: "Bound",
+      joinPolicy: "invite_only",
+    });
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    const response = await postAutomation(
+      createBody({
+        triggerConfig: {
+          conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+        },
+      })
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "channel_team_mismatch" });
+    expect((await env.DB.prepare("SELECT id FROM automations").all()).results).toEqual([]);
+  });
+
+  describe("team-owned", () => {
+    const EXECUTOR = "22222222222222222222222222222222";
+    const TEAM = "team_slack_owner";
+    const OTHER_TEAM = "team_slack_other";
+    const as = { userId: EXECUTOR, role: "member" } as const;
+
+    async function bindChannel(teamId: string) {
+      await env.DB.prepare(
+        "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+      )
+        .bind(teamId, Date.now())
+        .run();
+    }
+
+    function postTeamAutomation(): Promise<Response> {
+      return serviceFetch("https://test.local/automations", {
+        method: "POST",
+        as,
+        body: JSON.stringify({
+          name: "Team Slack triage",
+          instructions: "Investigate the report",
+          triggerType: "slack_event",
+          teamId: TEAM,
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          },
+        }),
+      });
+    }
+
+    beforeEach(async () => {
+      expect((await serviceFetch("https://test.local/me/authorization", { as })).status).toBe(200);
+      await seedTeam(TEAM, [[EXECUTOR, "member"]]);
+      await seedTeam(OTHER_TEAM);
+    });
+
+    it("creates a firing candidate when the channel is bound to the automation's team", async () => {
+      await bindChannel(TEAM);
+      const response = await postTeamAutomation();
+      expect(response.status).toBe(201);
+      const { automation } = await response.json<{
+        automation: { id: string; ownerTeamId: string | null };
+      }>();
+      expect(automation.ownerTeamId).toBe(TEAM);
+      const candidates = await new SlackChannelStore(env.DB).getSlackAutomationsForChannel("C1");
+      expect(candidates.map((row) => row.id)).toEqual([automation.id]);
+    });
+
+    it.each([
+      ["unbound", null],
+      ["bound to another team", OTHER_TEAM],
+    ])("rejects a channel that is %s", async (_label, boundTeam) => {
+      if (boundTeam) await bindChannel(boundTeam);
+      const response = await postTeamAutomation();
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "channel_team_mismatch" });
+      expect((await env.DB.prepare("SELECT id FROM automations").all()).results).toEqual([]);
+    });
+  });
+
   it("rejects a slack_event without a slack_channel condition (400)", async () => {
     const res = await postAutomation(createBody({ triggerConfig: { conditions: [] } }));
     expect(res.status).toBe(400);
@@ -72,6 +158,17 @@ describe("POST /automations — slack_event validation (integration)", () => {
     // text_match is optional; the channel-only config passes validation and only
     // later fails at repo resolution in the test env.
     expect(res.status).not.toBe(400);
+  });
+
+  it("rejects slack trigger options on a non-slack trigger (400)", async () => {
+    const res = await postAutomation(
+      createBody({
+        triggerType: "webhook",
+        triggerConfig: { conditions: [], slack: { includeBotMessages: true } },
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("triggerConfig.slack");
   });
 
   it("rejects a slack_channel value that is not an array of strings (400)", async () => {
@@ -148,23 +245,6 @@ describe("POST /automations — slack_event validation (integration)", () => {
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("Unsupported regex flag");
   });
-
-  it("accepts slack_event past the trigger-type allowlist (no unknown-trigger 400)", async () => {
-    // Valid scoping passes validation; the request then fails later at repository
-    // resolution (no GitHub App in the test env). The point is that slack_event is
-    // NOT rejected as an unknown trigger type before reaching that stage.
-    const res = await postAutomation(
-      createBody({
-        triggerConfig: {
-          conditions: [
-            { type: "slack_channel", operator: "any_of", value: ["C1"] },
-            { type: "text_match", operator: "contains", value: { pattern: "deploy" } },
-          ],
-        },
-      })
-    );
-    expect(await res.text()).not.toContain("triggerType must be one of");
-  });
 });
 
 describe("PUT /automations/:id — slack_event validation (integration)", () => {
@@ -176,6 +256,30 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       body: JSON.stringify(body),
     });
   }
+
+  it("rejects writes after a watched channel moves to another team", async () => {
+    const team = await new TeamStore(env.DB).create({
+      slug: "bound",
+      name: "Bound",
+      joinPolicy: "invite_only",
+    });
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+      }),
+    });
+    await store.create(auto);
+    await env.DB.prepare(
+      "INSERT INTO team_channel_bindings (provider, external_id, team_id, kind, created_at) VALUES ('slack', 'C1', ?, 'source', ?)"
+    )
+      .bind(team.id, Date.now())
+      .run();
+    const response = await putAutomation(auto.id, { name: "Changed" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "channel_team_mismatch" });
+    expect((await store.getById(auto.id))?.name).toBe(auto.name);
+  });
 
   it("rejects a non-array conditions on update with 400, not 500", async () => {
     const store = new AutomationStore(env.DB);
@@ -233,6 +337,56 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
 
     const config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
     expect(config.conditions.find((c) => c.type === "slack_channel")?.value).toEqual(["C9"]);
+  });
+
+  it("stores the bot-message option and clears it when a later update omits it", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+      }),
+    });
+    await store.create(auto);
+    const conditions = [
+      { type: "slack_channel", operator: "any_of", value: ["C1"] },
+      { type: "slack_actor", operator: "include", value: ["BALERTS"] },
+    ];
+
+    const optIn = await putAutomation(auto.id, {
+      triggerConfig: { conditions, slack: { includeBotMessages: true } },
+    });
+    expect(optIn.status).toBe(200);
+    let config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
+    expect(config.slack).toEqual({ includeBotMessages: true });
+
+    const reset = await putAutomation(auto.id, { triggerConfig: { conditions } });
+    expect(reset.status).toBe(200);
+    config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
+    expect(config.slack).toBeUndefined();
+  });
+
+  it("rejects bot messages without a Slack User include list (400)", async () => {
+    const store = new AutomationStore(env.DB);
+    const auto = makeSlackAutomation({
+      trigger_config: JSON.stringify({
+        conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+      }),
+    });
+    await store.create(auto);
+    const channel = { type: "slack_channel", operator: "any_of", value: ["C1"] };
+
+    for (const conditions of [
+      [channel],
+      [channel, { type: "slack_actor", operator: "exclude", value: ["BALERTS"] }],
+    ]) {
+      const res = await putAutomation(auto.id, {
+        triggerConfig: { conditions, slack: { includeBotMessages: true } },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("slack_actor include condition");
+    }
+    const config = JSON.parse((await store.getById(auto.id))!.trigger_config!) as TriggerConfig;
+    expect(config.slack).toBeUndefined();
   });
 
   it("rejects clearing trigger_config to null on a slack_event automation (400)", async () => {

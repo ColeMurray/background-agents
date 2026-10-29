@@ -3,10 +3,11 @@ import {
   githubLoginSchema,
 } from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
-import type {
-  GitHubCredentialAuthority,
-  ProviderAccountSelection,
-  ProviderAccountClient,
+import {
+  resolveGitHubAccountProfile,
+  type GitHubCredentialAuthority,
+  type ProviderAccountSelection,
+  type ProviderAccountClient,
 } from "../source-control/github-credential-authority";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
@@ -63,8 +64,10 @@ const betterAuthAccessTokenSchema = z.object({
 });
 
 const betterAuthGitHubAccountInfoSchema = z.object({
-  user: z.object({
+  account: z.object({
     id: z.string().min(1),
+    providerId: z.string().min(1),
+    accountId: z.string().min(1),
   }),
   data: z.object({
     provider: z.literal("github"),
@@ -76,6 +79,13 @@ const betterAuthGitHubAccountInfoSchema = z.object({
     primaryEmail: z.string().nullable(),
   }),
 });
+
+export class AmbiguousGitHubIdentityError extends Error {
+  constructor() {
+    super("User resolves to multiple GitHub provider accounts");
+    this.name = "AmbiguousGitHubIdentityError";
+  }
+}
 
 export class BetterAuthGitHubTokenUnavailableError extends Error {
   constructor(readonly retrievalError: unknown) {
@@ -91,9 +101,18 @@ function expiresWithinGitHubSafetyWindow(token: { accessTokenExpiresAt?: Date })
   );
 }
 
-function parseBetterAuthGitHubProfile(response: unknown, expectedScmUserId: string) {
+function parseBetterAuthGitHubProfile(
+  response: unknown,
+  expectedScmUserId: string,
+  selection: ProviderAccountSelection
+) {
   const profile = betterAuthGitHubAccountInfoSchema.parse(response);
-  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
+  if (
+    profile.account.id !== selection.accountId ||
+    profile.account.providerId !== "github" ||
+    profile.account.accountId !== expectedScmUserId ||
+    profile.data.subject !== expectedScmUserId
+  ) {
     throw new Error("Better Auth returned a mismatched GitHub account");
   }
   return profile.data;
@@ -104,19 +123,16 @@ export async function resolveCurrentGitHubAccessToken(
   userStore: UserStore,
   getAccountClient: () => ProviderAccountClient,
   canonicalUserId: string,
-  expectedScmUserId: string
+  expectedScmUserId: string | null
 ): Promise<string | null> {
-  const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
-  if (!enrichment) return null;
-  if (enrichment.scmUserId !== expectedScmUserId) {
+  const account = await resolveCanonicalGitHubAccount(userStore, canonicalUserId);
+  if (!account) return null;
+  const { enrichment, selection } = account;
+  // Browser joins may lack a cached SCM subject; the canonical identity is authoritative.
+  if (expectedScmUserId !== null && enrichment.scmUserId !== expectedScmUserId) {
     throw new Error("Session GitHub account no longer matches the canonical user");
   }
 
-  const selection: ProviderAccountSelection = {
-    providerId: "github",
-    accountId: expectedScmUserId,
-    userId: canonicalUserId,
-  };
   const accountClient = getAccountClient();
   let tokenResponse: unknown;
   try {
@@ -143,7 +159,8 @@ export async function resolveCurrentGitHubAccessToken(
 
   parseBetterAuthGitHubProfile(
     await accountClient.accountInfo({ query: selection }),
-    expectedScmUserId
+    enrichment.scmUserId,
+    selection
   );
   return token.accessToken;
 }
@@ -168,10 +185,17 @@ export async function resolveGitHubEnrichment(
   userStore: UserStore,
   userId: string
 ): Promise<GitHubEnrichment | null> {
+  return (await resolveCanonicalGitHubAccount(userStore, userId))?.enrichment ?? null;
+}
+
+async function resolveCanonicalGitHubAccount(
+  userStore: UserStore,
+  userId: string
+): Promise<{ enrichment: GitHubEnrichment; selection: ProviderAccountSelection } | null> {
   const identities = await userStore.getIdentitiesForUser(userId);
   const githubIdentities = identities.filter((identity) => identity.provider === "github");
   if (githubIdentities.length > 1) {
-    throw new Error("User resolves to multiple GitHub provider accounts");
+    throw new AmbiguousGitHubIdentityError();
   }
   const githubIdentity = githubIdentities[0];
   if (!githubIdentity) return null;
@@ -187,10 +211,13 @@ export async function resolveGitHubEnrichment(
   });
 
   return {
-    scmUserId: githubIdentity.providerUserId,
-    scmLogin: githubIdentity.providerLogin ?? undefined,
-    displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
-    email: authorIdentity?.email ?? undefined,
+    selection: { accountId: githubIdentity.id, userId },
+    enrichment: {
+      scmUserId: githubIdentity.providerUserId,
+      scmLogin: githubIdentity.providerLogin ?? undefined,
+      displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
+      email: authorIdentity?.email ?? undefined,
+    },
   };
 }
 
@@ -220,7 +247,34 @@ export async function resolveGitHubEnrichmentForRequest(
 
   const profileResponse = await authority.githubAccount.resolveProfile();
   if (profileResponse === null) return enrichment;
-  const profile = parseBetterAuthGitHubProfile(profileResponse, authority.githubAccount.subject);
+  return enrichFromVerifiedGitHubProfile(enrichment, profileResponse, {
+    accountId: authority.githubAccount.id,
+    userId,
+  });
+}
+
+/** Attribute unattended turns to the one linked account of the admitted canonical user. */
+export async function resolveGitHubEnrichmentForCanonicalUser(
+  userStore: UserStore,
+  userId: string,
+  getAccountClient: () => ProviderAccountClient
+): Promise<GitHubEnrichment | null> {
+  const account = await resolveCanonicalGitHubAccount(userStore, userId);
+  if (!account) return null;
+  const { enrichment, selection } = account;
+  if (enrichment.scmLogin) return enrichment;
+  const response = await resolveGitHubAccountProfile(getAccountClient(), selection);
+  return response === null
+    ? enrichment
+    : enrichFromVerifiedGitHubProfile(enrichment, response, selection);
+}
+
+function enrichFromVerifiedGitHubProfile(
+  enrichment: GitHubEnrichment,
+  profileResponse: unknown,
+  selection: ProviderAccountSelection
+): GitHubEnrichment {
+  const profile = parseBetterAuthGitHubProfile(profileResponse, enrichment.scmUserId, selection);
   const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",

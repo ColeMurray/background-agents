@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { GitLabSourceControlProvider, deriveGitLabMergeRequestStatus } from "./gitlab-provider";
 import { SourceControlProviderError } from "../errors";
+import type { CredentialScope } from "../types";
+import { createTestBackgroundTasks } from "../../background-tasks.test-support";
+import { createRequestMetrics } from "../../db/instrumented-sql-database";
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -17,6 +20,7 @@ function makeResponse(body: unknown, status = 200, headers: HeadersInit = {}): R
 }
 
 const fakeConfig = { accessToken: "glpat-test-token" };
+const repositoryScope: CredentialScope = { kind: "repositories", repositoryIds: [9001] };
 
 describe("GitLabSourceControlProvider", () => {
   beforeEach(() => {
@@ -29,11 +33,10 @@ describe("GitLabSourceControlProvider", () => {
       const provider = new GitLabSourceControlProvider(fakeConfig);
 
       await expect(
-        provider.getBranchHead({
-          owner: "acme/platform",
-          name: "web",
-          branch: "feature/test",
-        })
+        provider.getBranchHead(
+          { owner: "acme/platform", name: "web", branch: "feature/test" },
+          repositoryScope
+        )
       ).resolves.toBe("def456");
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -48,7 +51,7 @@ describe("GitLabSourceControlProvider", () => {
       const provider = new GitLabSourceControlProvider(fakeConfig);
 
       await expect(
-        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" }, repositoryScope)
       ).resolves.toBeNull();
     });
 
@@ -57,7 +60,7 @@ describe("GitLabSourceControlProvider", () => {
       const provider = new GitLabSourceControlProvider(fakeConfig);
 
       const err = await provider
-        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" }, repositoryScope)
         .catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
@@ -838,15 +841,23 @@ describe("GitLabSourceControlProvider", () => {
   });
 
   describe("listBranches", () => {
+    const context = () => ({
+      backgroundTasks: createTestBackgroundTasks(),
+      metrics: createRequestMetrics(),
+    });
     it("returns branch names from API response", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }])
       );
 
       const provider = new GitLabSourceControlProvider(fakeConfig);
-      const branches = await provider.listBranches({ owner: "acme", name: "web" });
+      const result = await provider.listBranches({ owner: "acme", name: "web" }, context());
 
-      expect(branches).toEqual([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }]);
+      expect(result).toEqual({
+        branches: [{ name: "main" }, { name: "develop" }, { name: "feature/foo" }],
+        cached: false,
+        cachedAt: expect.any(String),
+      });
     });
 
     it("throws permanent error when a listed branch shape is invalid", async () => {
@@ -854,7 +865,7 @@ describe("GitLabSourceControlProvider", () => {
 
       const provider = new GitLabSourceControlProvider(fakeConfig);
       const err = await provider
-        .listBranches({ owner: "acme", name: "web" })
+        .listBranches({ owner: "acme", name: "web" }, context())
         .catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
@@ -864,9 +875,9 @@ describe("GitLabSourceControlProvider", () => {
   });
 
   describe("generatePushAuth", () => {
-    it("returns PAT-type auth context with configured token", async () => {
+    it("returns the deployment-wide PAT even for a narrowed credential scope", async () => {
       const provider = new GitLabSourceControlProvider({ accessToken: "glpat-abc123" });
-      const auth = await provider.generatePushAuth();
+      const auth = await provider.generatePushAuth(repositoryScope);
 
       expect(auth).toEqual({ authType: "pat", token: "glpat-abc123" });
     });
@@ -879,7 +890,7 @@ describe("GitLabSourceControlProvider", () => {
       try {
         const provider = new GitLabSourceControlProvider({ accessToken: "glpat-abc123" });
 
-        const auth = await provider.generateCredentialHelperAuth();
+        const auth = await provider.generateCredentialHelperAuth(repositoryScope);
 
         expect(auth).toEqual({
           username: "oauth2",
@@ -1079,7 +1090,10 @@ describe("getPullRequest", () => {
     mockFetch.mockResolvedValueOnce(makeResponse(baseMrResponse));
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
-    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+    const snapshot = await provider.getPullRequest(
+      { owner: "acme", name: "web", number: 7 },
+      repositoryScope
+    );
 
     expect(snapshot).toEqual({
       number: 7,
@@ -1113,7 +1127,10 @@ describe("getPullRequest", () => {
     );
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
-    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+    const snapshot = await provider.getPullRequest(
+      { owner: "acme", name: "web", number: 7 },
+      repositoryScope
+    );
 
     expect(snapshot.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00.000Z"));
     expect(snapshot.mergedAt).toBe(Date.parse("2026-07-10T12:00:00.000Z"));
@@ -1124,7 +1141,10 @@ describe("getPullRequest", () => {
     mockFetch.mockResolvedValueOnce(makeResponse({ ...baseMrResponse, state: "merged" }));
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
-    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+    const snapshot = await provider.getPullRequest(
+      { owner: "acme", name: "web", number: 7 },
+      repositoryScope
+    );
 
     expect(snapshot.lifecycleState).toBe("merged");
     expect(snapshot.isDraft).toBe(false);
@@ -1144,12 +1164,10 @@ describe("getPullRequest", () => {
       );
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
-    const snapshot = await provider.getPullRequest({
-      owner: "acme",
-      name: "web",
-      number: 7,
-      repositoryExternalId: "9001",
-    });
+    const snapshot = await provider.getPullRequest(
+      { owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" },
+      repositoryScope
+    );
 
     expect(snapshot.repoName).toBe("web-renamed");
     expect(mockFetch.mock.calls[1][0]).toBe("https://gitlab.com/api/v4/projects/9001");
@@ -1163,7 +1181,7 @@ describe("getPullRequest", () => {
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
     const err = await provider
-      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .getPullRequest({ owner: "acme", name: "web", number: 7 }, repositoryScope)
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(SourceControlProviderError);
@@ -1234,7 +1252,10 @@ describe("response validation (zod boundary)", () => {
     );
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
-    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+    const snapshot = await provider.getPullRequest(
+      { owner: "acme", name: "web", number: 7 },
+      repositoryScope
+    );
 
     expect(snapshot.lifecycleState).toBe("open");
     expect(snapshot.isDraft).toBe(false);
@@ -1255,7 +1276,7 @@ describe("response validation (zod boundary)", () => {
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
     const err = await provider
-      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .getPullRequest({ owner: "acme", name: "web", number: 7 }, repositoryScope)
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(SourceControlProviderError);
@@ -1300,7 +1321,10 @@ describe("response validation (zod boundary)", () => {
 
     const provider = new GitLabSourceControlProvider(fakeConfig);
     const err = await provider
-      .getPullRequest({ owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" })
+      .getPullRequest(
+        { owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" },
+        repositoryScope
+      )
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(SourceControlProviderError);
@@ -1312,6 +1336,18 @@ describe("response validation (zod boundary)", () => {
 describe("managed-skill repository reads", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it("resolves commits with the deployment PAT", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ id: "abc123" }));
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+
+    await expect(
+      provider.resolveCommit({ owner: "acme", name: "skills", ref: "main" }, repositoryScope)
+    ).resolves.toEqual({ sha: "abc123" });
+    expect(mockFetch.mock.calls[0][1].headers).toMatchObject({
+      Authorization: `Bearer ${fakeConfig.accessToken}`,
+    });
   });
 
   it("classifies symlinks and submodules as unsupported tree entries", async () => {
@@ -1328,7 +1364,10 @@ describe("managed-skill repository reads", () => {
     );
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
-    const tree = await provider.listTree({ owner: "acme", name: "skills", commitSha: "abc" });
+    const tree = await provider.listTree(
+      { owner: "acme", name: "skills", commitSha: "abc" },
+      repositoryScope
+    );
 
     expect(tree.entries.map(({ type, executable }) => ({ type, executable }))).toEqual([
       { type: "file", executable: false },
@@ -1351,12 +1390,10 @@ describe("managed-skill repository reads", () => {
     );
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
-    const tree = await provider.listTree({
-      owner: "acme",
-      name: "skills",
-      commitSha: "abc",
-      path: "skills/deploy",
-    });
+    const tree = await provider.listTree(
+      { owner: "acme", name: "skills", commitSha: "abc", path: "skills/deploy" },
+      repositoryScope
+    );
 
     expect(tree.entries[0]?.path).toBe("skills/deploy/SKILL.md");
     const requestUrl = String(mockFetch.mock.calls[0]?.[0]);
@@ -1382,12 +1419,10 @@ describe("managed-skill repository reads", () => {
       .mockResolvedValueOnce(makeResponse([]));
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
-    const tree = await provider.listTree({
-      owner: "acme",
-      name: "skills",
-      commitSha: "abc",
-      path: "skills/deploy",
-    });
+    const tree = await provider.listTree(
+      { owner: "acme", name: "skills", commitSha: "abc", path: "skills/deploy" },
+      repositoryScope
+    );
 
     expect(tree).toMatchObject({ truncated: false });
     expect(tree.entries).toHaveLength(100);
@@ -1400,12 +1435,10 @@ describe("managed-skill repository reads", () => {
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
     await expect(
-      provider.listTree({
-        owner: "acme",
-        name: "skills",
-        commitSha: "abc",
-        path: "missing",
-      })
+      provider.listTree(
+        { owner: "acme", name: "skills", commitSha: "abc", path: "missing" },
+        repositoryScope
+      )
     ).resolves.toEqual({ entries: [], truncated: false });
   });
 
@@ -1424,7 +1457,7 @@ describe("managed-skill repository reads", () => {
     const provider = new GitLabSourceControlProvider(fakeConfig);
 
     const error = await provider
-      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 })
+      .readBlob({ owner: "acme", name: "skills", blobId: "big", maxBytes: 4 }, repositoryScope)
       .catch((thrown: unknown) => thrown);
 
     expect(error).toBeInstanceOf(SourceControlProviderError);

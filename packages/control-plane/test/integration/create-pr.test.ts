@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import type { SourceControlProvider } from "../../src/source-control";
+import { symmetricEncrypt } from "better-auth/crypto";
+import type {
+  BuildGitPushSpecConfig,
+  GitPushSpec,
+  SourceControlAuthContext,
+  SourceControlProvider,
+} from "../../src/source-control";
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 import {
@@ -106,7 +113,7 @@ describe("POST /internal/create-pr", () => {
     const body = await res.json<{ error: string }>();
     expect(body.error).toBe("User not found. Please re-authenticate.");
   });
-  it("falls back to app auth when expired OAuth token cannot be refreshed", async () => {
+  it("ignores copied credentials when the author has no canonical Better Auth identity", async () => {
     const { stub } = await initSession({ userId: "user-1" });
     await modelLegacyManualPushSession(stub);
 
@@ -167,11 +174,13 @@ describe("POST /internal/create-pr", () => {
           targetBranch: string;
         }) =>
           `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;
@@ -247,11 +256,13 @@ describe("POST /internal/create-pr", () => {
           targetBranch: string;
         }) =>
           `https://github.com/${config.owner}/${config.name}/pull/new/${config.targetBranch}...${config.sourceBranch}`,
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;
@@ -309,7 +320,7 @@ describe("POST /internal/create-pr", () => {
 
   async function installSingleRepoMockProvider(
     stub: DurableObjectStub,
-    onCreatePullRequest: () => void = () => undefined
+    onCreatePullRequest: (auth: SourceControlAuthContext) => void = () => undefined
   ) {
     await runInSessionDO(stub, (instance: SessionDO) => {
       const mockProvider = {
@@ -323,8 +334,8 @@ describe("POST /internal/create-pr", () => {
           isPrivate: true,
           providerRepoId: 12345,
         }),
-        createPullRequest: async () => {
-          onCreatePullRequest();
+        createPullRequest: async (auth: SourceControlAuthContext) => {
+          onCreatePullRequest(auth);
           return {
             id: 42,
             webUrl: "https://github.com/acme/web-app/pull/42",
@@ -345,11 +356,13 @@ describe("POST /internal/create-pr", () => {
           repoOwner: config.owner,
           repoName: config.name,
         }),
-        buildGitPushSpec: (config: { targetBranch: string }) => ({
+        buildGitPushSpec: (config: BuildGitPushSpecConfig): GitPushSpec => ({
           remoteUrl: "https://example.invalid/repo.git",
           redactedRemoteUrl: "https://example.invalid/<redacted>.git",
           refspec: `HEAD:refs/heads/${config.targetBranch}`,
           targetBranch: config.targetBranch,
+          repoOwner: config.owner,
+          repoName: config.name,
           force: true,
         }),
       } as unknown as SourceControlProvider;
@@ -357,6 +370,129 @@ describe("POST /internal/create-pr", () => {
       componentsOf(instance).sourceControlProvider = mockProvider;
     });
   }
+
+  const BROWSER_USER_ID = "11111111111111111111111111111111";
+
+  /** Start a session whose ws-token participant has current OAuth and a processing prompt. */
+  async function initSessionWithProcessingPrompt(
+    sessionName: string,
+    { userId, token, source }: { userId: string; token: string; source: MessageSource }
+  ) {
+    const { stub } = await initNamedSession(sessionName, {
+      userId,
+      canonicalUserId: BROWSER_USER_ID,
+    });
+    await modelLegacyManualPushSession(stub);
+    const wsTokenUrl = `https://test.local/sessions/${sessionName}/ws-token`;
+    const tokenResponse = await serviceFetch(wsTokenUrl, { method: "POST", body: "{}" });
+    expect(tokenResponse.status).toBe(200);
+    const { participantId } = await tokenResponse.json<{ participantId: string }>();
+    const accessToken = await symmetricEncrypt({ key: env.BROWSER_AUTH_SECRET!, data: token });
+    await env.DB.prepare(
+      "UPDATE user_identities SET access_token = ?, access_token_expires_at = ? WHERE user_id = ? AND provider = 'github'"
+    )
+      .bind(accessToken, Date.now() + 3_600_000, BROWSER_USER_ID)
+      .run();
+    await seedMessage(stub, {
+      id: `create-pr-${source}`,
+      authorId: participantId,
+      content: "Open the PR",
+      source,
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+    let prAuth: SourceControlAuthContext | undefined;
+    await installSingleRepoMockProvider(stub, (auth) => (prAuth = auth));
+    return { stub, participantId, prAuth: () => prAuth };
+  }
+
+  async function createPrStatus(stub: DurableObjectStub): Promise<number> {
+    const body = JSON.stringify({ title: "PR", body: "Change" });
+    const headers = { "Content-Type": "application/json" };
+    return (
+      await stub.fetch("http://internal/internal/create-pr", { method: "POST", headers, body })
+    ).status;
+  }
+
+  describe("current browser PR credentials", () => {
+    let fetchSpy: { mockRestore(): void };
+    beforeAll(() => {
+      const originalFetch = globalThis.fetch.bind(globalThis);
+      fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url === "https://api.github.com/user") {
+          return Response.json({ id: 583231, login: "octocat", name: "The Octocat" });
+        }
+        if (url.startsWith("https://api.github.com/user/emails")) {
+          return Response.json([
+            { email: "browser@test.local", primary: true, verified: true, visibility: null },
+          ]);
+        }
+        return originalFetch(input, init);
+      });
+    });
+    afterAll(() => fetchSpy.mockRestore());
+    it.each([
+      { label: "without cached credentials", access: null, refresh: null, expiresAt: null },
+      {
+        label: "with expired copied credentials",
+        access: "invalid-access",
+        refresh: "invalid-refresh",
+        expiresAt: 1,
+      },
+      {
+        label: "with copied refresh only",
+        access: null,
+        refresh: "invalid-refresh",
+        expiresAt: null,
+      },
+      {
+        label: "with unexpired copied credentials",
+        access: "invalid-access",
+        refresh: null,
+        expiresAt: null,
+      },
+    ])("uses current browser OAuth when continuing a Linear session $label", async (legacy) => {
+      // Model the browser prompt now being processed, not the Linear creator's prompt.
+      const { stub, participantId, prAuth } = await initSessionWithProcessingPrompt(
+        `linear-browser-pr-${crypto.randomUUID()}`,
+        { userId: "linear:creator", token: "browser-access-token", source: "web" }
+      );
+      // Persisted metadata must not choose credentials or block canonical lookup.
+      await runInSessionDO(stub, (_instance: SessionDO, state) => {
+        state.storage.sql.exec(
+          "UPDATE participants SET scm_user_id = NULL, scm_access_token_encrypted = ?, scm_refresh_token_encrypted = ?, scm_token_expires_at = ? WHERE id = ?",
+          legacy.access,
+          legacy.refresh,
+          legacy.expiresAt,
+          participantId
+        );
+      });
+
+      expect(await createPrStatus(stub)).toBe(200);
+      expect(prAuth()).toEqual({ authType: "oauth", token: "browser-access-token" });
+    });
+
+    // Decided per processing message: a person prompting an automation-started session
+    // opens their own PR, and an automation's child sessions ("agent") keep owner OAuth.
+    it.each([
+      { source: "web", expected: { authType: "oauth", token: "owner-access-token" } },
+      { source: "agent", expected: { authType: "oauth", token: "owner-access-token" } },
+      { source: "automation", expected: { authType: "app", token: "push-token" } },
+    ] as const)(
+      "opens a $source prompt's PR in an automation-started session with the expected identity",
+      async ({ source, expected }) => {
+        const { stub, prAuth } = await initSessionWithProcessingPrompt(
+          `automation-pr-${crypto.randomUUID()}`,
+          { userId: "automation:owner", token: "owner-access-token", source }
+        );
+
+        expect(await createPrStatus(stub)).toBe(200);
+        expect(prAuth()).toEqual(expected);
+      }
+    );
+  });
 
   it("reuses an existing open PR recorded for the session branch", async () => {
     const { stub } = await initSession({ userId: "user-1" });

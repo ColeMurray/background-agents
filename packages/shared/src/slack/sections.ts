@@ -1,13 +1,14 @@
 /**
- * Split long agent text into Slack section blocks.
+ * Fit long agent text into Slack's block limits.
  *
- * Slack caps a section block's mrkdwn (see SECTION_TEXT_MAX_CHARS) and rejects
- * the whole message if any block exceeds it. Two surfaces need the same treatment — the
- * completion the Slack bot posts when a session finishes, and the messages an
- * agent posts itself through the notify route in the control plane — so the
- * policy lives here rather than in either one. Splitting keeps code fences
- * balanced across the seam, since a section that opens a fence without closing
- * it renders the rest of the message as monospace.
+ * Slack rejects a whole message whose blocks exceed its text limits. Two surfaces
+ * post agent text: the messages an agent posts itself through the
+ * notify route in the control plane (split across mrkdwn section blocks, see
+ * SECTION_TEXT_MAX_CHARS), and the completion reply the Slack bot posts when a
+ * session finishes (one Markdown block, see MARKDOWN_BLOCK_MAX_CHARS). The policy
+ * lives here rather than in either one. Splitting keeps code fences balanced across
+ * the seam, since text that opens a fence without closing it renders the rest of
+ * the message as monospace.
  */
 
 /**
@@ -18,10 +19,17 @@
 export const SECTION_TEXT_MAX_CHARS = 3000;
 
 /**
- * How many section blocks a response may occupy. Slack allows 50 blocks per
- * message; the rest of this builder contributes at most 4 (artifacts, tools,
- * footer, actions), so this leaves comfortable headroom. Beyond this the tail is
- * truncated and the View Session button is the way to read the whole thing.
+ * Slack's cumulative cap on the text of all `markdown` blocks in one message.
+ * Unlike a section's mrkdwn, a `markdown` block renders standard Markdown
+ * (headings, bold, lists, links, tables), which is what agents write.
+ */
+export const MARKDOWN_BLOCK_MAX_CHARS = 12_000;
+
+/**
+ * How many section blocks split agent text may occupy. Slack allows 50 blocks per
+ * message, so this leaves comfortable headroom for the few other blocks a post
+ * carries. Beyond this the tail is truncated and the session is the way to read
+ * the whole thing.
  */
 export const MAX_RESPONSE_SECTIONS = 20;
 

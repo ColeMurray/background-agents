@@ -49,7 +49,8 @@ export interface PresenceServiceDeps {
   send: (ws: SessionWebSocket, message: ServerMessage) => boolean;
   getSandboxSocket: () => SessionWebSocket | null;
   isSpawning: () => boolean;
-  spawnSandbox: () => Promise<void>;
+  /** Start a sandbox as a typing warm-up; lifecycle announces it only if it launches. */
+  warmSandbox: () => Promise<void>;
   log: Logger;
 }
 
@@ -105,8 +106,7 @@ export class PresenceService {
   async handleTyping(): Promise<void> {
     if (!this.deps.getSandboxSocket()) {
       if (!this.deps.isSpawning()) {
-        this.deps.messenger.broadcast({ type: "sandbox_warming" });
-        await this.deps.spawnSandbox();
+        await this.deps.warmSandbox();
       }
     }
   }

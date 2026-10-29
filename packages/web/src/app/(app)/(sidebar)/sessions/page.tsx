@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/ui/icons";
 import { useAuthSession } from "@/lib/auth-session";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
+import { useActiveTeam } from "@/hooks/use-active-team";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
 import { useSessionDiscovery } from "@/hooks/use-session-discovery";
@@ -23,9 +24,50 @@ import {
   parseSessionDiscoveryQuery,
   type SessionDiscoveryQuery,
 } from "@/lib/session-discovery";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
-const SEARCH_DEBOUNCE_MS = 300;
 const MANAGE_ARCHIVED_SESSIONS_HREF = "/settings?tab=data-controls";
+/** Varied title widths so the placeholder rows read as a list rather than a block. */
+const SESSION_SKELETON_TITLE_WIDTHS = [
+  "w-2/3",
+  "w-1/2",
+  "w-3/4",
+  "w-2/5",
+  "w-3/5",
+  "w-1/2",
+  "w-2/3",
+  "w-2/5",
+];
+
+/**
+ * Mirrors `SessionDiscoveryResults` rows so loading doesn't shift the list. Hidden from
+ * assistive tech because the page's always-mounted status line announces loading.
+ */
+function SessionResultsSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="sessions-skeleton"
+      className="animate-pulse motion-reduce:animate-none divide-y divide-border-muted rounded-md border border-border-muted"
+    >
+      {SESSION_SKELETON_TITLE_WIDTHS.map((titleWidth, index) => (
+        <div key={index} className="px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-5 min-w-0 flex-1 items-center">
+              <div className={`h-3.5 rounded bg-muted ${titleWidth}`} />
+            </div>
+            <div className="h-5 w-14 shrink-0 rounded-sm bg-muted" />
+          </div>
+          <div className="mt-1 flex h-4 items-center gap-2">
+            <div className="h-3 w-32 rounded bg-muted" />
+            <div className="h-3 w-16 rounded bg-muted" />
+            <div className="h-3 w-12 rounded bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function SessionsPage() {
   return (
@@ -39,13 +81,38 @@ function SessionsContent() {
   const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const {
+    activeTeamId,
+    scope: activeTeamScope,
+    setActiveTeam,
+    teams,
+    canListAllTeams,
+    loading: teamLoading,
+    error: teamError,
+  } = useActiveTeam();
+  const activeTeamSelection =
+    activeTeamId ??
+    (activeTeamScope === "workspace"
+      ? null
+      : activeTeamScope === "all"
+        ? "all-teams"
+        : "all-my-teams");
+  const teamContext = useMemo(
+    () => ({ teamIds: activeTeamId ? [activeTeamId] : undefined, scope: activeTeamScope }),
+    [activeTeamId, activeTeamScope]
+  );
   const parsed = useMemo(
     () => parseSessionDiscoveryQuery(new URLSearchParams(searchParams.toString())),
     [searchParams]
   );
-  const query = parsed.success ? parsed.data : DEFAULT_SESSION_DISCOVERY_QUERY;
+  const query = useMemo(() => {
+    if (!parsed.success) return DEFAULT_SESSION_DISCOVERY_QUERY;
+    return parsed.data.teamIds || parsed.data.scope
+      ? parsed.data
+      : { ...parsed.data, ...teamContext };
+  }, [parsed, teamContext]);
   const invalidParams = parsed.success ? [] : parsed.invalidParams;
-  const hasFilters = hasSessionDiscoveryFilters(query);
+  const hasFilters = hasSessionDiscoveryFilters(query, teamContext);
   const { hasPermission, loading: authorizationLoading } = useCurrentUserAuthorization();
   const canReadSessions = hasPermission("sessions.read");
   const canCreateSession = hasPermission("sessions.create");
@@ -60,10 +127,13 @@ function SessionsContent() {
   // catches up. Controlled selects ignore picking the value they already
   // show, so rendering the URL here would swallow a quick reversal.
   const [controlsQuery, setControlsQuery] = useState(query);
+  const previousParsedQuery = useRef(parsed);
   useEffect(() => {
+    if (previousParsedQuery.current === parsed) return;
+    previousParsedQuery.current = parsed;
     latestQuery.current = query;
     setControlsQuery(query);
-  }, [query]);
+  }, [parsed, query]);
 
   // Search text the user has typed but the URL does not show yet. Null means
   // the box mirrors the URL and may be overwritten by back/forward navigation.
@@ -99,13 +169,55 @@ function SessionsContent() {
     },
     [router]
   );
+  // An explicit shared link wins on entry; a later switcher action changes
+  // only its team predicate, including search text still waiting to debounce.
+  const previousActiveTeam = useRef(teamLoading ? undefined : activeTeamSelection);
+  useEffect(() => {
+    if (teamLoading || teamError) return;
+    if (previousActiveTeam.current === undefined) {
+      previousActiveTeam.current = activeTeamSelection;
+      latestQuery.current = query;
+      setControlsQuery(query);
+      return;
+    }
+    if (previousActiveTeam.current === activeTeamSelection) return;
+    previousActiveTeam.current = activeTeamSelection;
+    if (parsed.success) updateQuery(teamContext);
+  }, [
+    activeTeamSelection,
+    teamContext,
+    teamLoading,
+    teamError,
+    parsed.success,
+    query,
+    updateQuery,
+  ]);
+
+  const changeFilters = useCallback(
+    (patch: Partial<SessionDiscoveryQuery>) => {
+      updateQuery(patch);
+      if ("teamIds" in patch || "scope" in patch) {
+        setActiveTeam(
+          patch.teamIds?.[0] ??
+            (patch.scope === "workspace"
+              ? null
+              : patch.scope === "all"
+                ? "all-teams"
+                : "all-my-teams")
+        );
+      }
+    },
+    [setActiveTeam, updateQuery]
+  );
+
   const clearFilters = useCallback(() => {
     pendingSearch.current = null;
     setSearchText("");
-    latestQuery.current = DEFAULT_SESSION_DISCOVERY_QUERY;
-    setControlsQuery(DEFAULT_SESSION_DISCOVERY_QUERY);
-    router.replace(buildSessionsHref(), { scroll: false });
-  }, [router]);
+    const next = { ...DEFAULT_SESSION_DISCOVERY_QUERY, ...teamContext };
+    latestQuery.current = next;
+    setControlsQuery(next);
+    router.replace(buildSessionsHref(next), { scroll: false });
+  }, [router, teamContext]);
   const resetSearch = useCallback(() => {
     setSearchText("");
     updateQuery({ q: "" });
@@ -130,7 +242,7 @@ function SessionsContent() {
     return () => window.clearTimeout(timeoutId);
   }, [router, searchText]);
 
-  const canQuery = canReadSessions && parsed.success;
+  const canQuery = canReadSessions && parsed.success && !teamLoading && !teamError;
   const { sessions, loading, loadingMore, error, hasMore, loadMore, retry } = useSessionDiscovery(
     query,
     { enabled: canQuery }
@@ -148,9 +260,9 @@ function SessionsContent() {
 
   const showEmptyState = !loading && !error && sessions.length === 0;
   const statusText =
-    invalidParams.length > 0
+    invalidParams.length > 0 || teamError
       ? "No sessions shown"
-      : loading
+      : loading || teamLoading
         ? "Loading sessions"
         : showEmptyState
           ? hasFilters
@@ -230,8 +342,10 @@ function SessionsContent() {
                   query={controlsQuery}
                   repositories={repositoryOptions}
                   environments={environments}
-                  hasFilters={hasSessionDiscoveryFilters(controlsQuery)}
-                  onChange={updateQuery}
+                  teams={teams}
+                  canViewAllTeams={canListAllTeams}
+                  hasFilters={hasSessionDiscoveryFilters(controlsQuery, teamContext)}
+                  onChange={changeFilters}
                   onClear={clearFilters}
                 />
               </div>
@@ -287,10 +401,14 @@ function SessionsContent() {
                 </ErrorBanner>
               )}
 
-              {invalidParams.length > 0 ? null : loading ? (
-                <div aria-hidden="true" className="flex justify-center py-12">
-                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-                </div>
+              {teamError ? (
+                <ErrorBanner className="mb-4" role="alert">
+                  Couldn&apos;t load teams.
+                </ErrorBanner>
+              ) : null}
+
+              {invalidParams.length > 0 || teamError ? null : loading || teamLoading ? (
+                <SessionResultsSkeleton />
               ) : showEmptyState ? (
                 hasFilters ? (
                   <div className="rounded-md border border-dashed border-border-muted px-4 py-10 text-center">
