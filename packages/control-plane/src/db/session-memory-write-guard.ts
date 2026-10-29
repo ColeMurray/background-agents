@@ -6,12 +6,18 @@ import { sql, type SqlFragment } from "./sql-fragment";
 
 type AgentActor = Extract<MemoryActor, { kind: "agent" }>;
 
-function sessionReaches(partition: MemoryPartition): SqlFragment {
+/**
+ * The session still reaches the partition. Personal writes also need the owner (bound to
+ * `s.user_id`) to still hold `memories.manage_own`.
+ */
+function sessionMayWrite(partition: MemoryPartition): SqlFragment {
   switch (partition.type) {
     case "personal":
       return sql`EXISTS (SELECT 1 FROM session_memory_manifests manifest
         WHERE manifest.session_id = s.id AND manifest.personal_owner_user_id = s.user_id
-          AND manifest.personal_owner_user_id = ${partition.userId})`;
+          AND manifest.personal_owner_user_id = ${partition.userId})
+        AND EXISTS (SELECT 1 FROM user_role_assignments ura JOIN roles r ON r.id = ura.role_id
+          WHERE ura.user_id = s.user_id AND ${rolePermissionFragment("memories.manage_own")})`;
     case "repository":
       return sql`EXISTS (SELECT 1 FROM session_repositories sr
         WHERE sr.session_id = s.id AND sr.repo_id = ${partition.repoId})`;
@@ -20,17 +26,6 @@ function sessionReaches(partition: MemoryPartition): SqlFragment {
     default:
       return unhandled("memory partition", partition);
   }
-}
-
-/**
- * For personal partitions (which `sessionReaches` binds to the session owner `u`), the owner may
- * still review personal memory. Other partitions need nothing here.
- */
-function ownerMayReview(partition: MemoryPartition): SqlFragment {
-  if (partition.type !== "personal") return sql`1`;
-  return sql`EXISTS (SELECT 1 FROM user_role_assignments ura
-    JOIN roles r ON r.id = ura.role_id
-    WHERE ura.user_id = u.id AND ${rolePermissionFragment("memories.manage_own")})`;
 }
 
 /**
@@ -48,8 +43,7 @@ export function agentWriteGuard(actor: AgentActor, partition: MemoryPartition): 
   return sql`EXISTS (SELECT 1 FROM sessions s
     JOIN users u ON u.id = s.user_id AND u.suspended_at IS NULL
     WHERE s.id = ${actor.sessionId} AND s.user_id = ${actor.userId}
-      AND s.status IN ('created', 'active') AND ${sessionReaches(partition)}
-      AND ${ownerMayReview(partition)})`;
+      AND s.status IN ('created', 'active') AND ${sessionMayWrite(partition)})`;
 }
 
 /**

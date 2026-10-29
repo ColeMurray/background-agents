@@ -41,15 +41,8 @@ export class SessionMemorySelector {
   constructor(private readonly deps: SessionMemorySelectorDeps) {}
 
   async select(request: SessionMemorySelectionRequest): Promise<SessionMemorySelection> {
-    const owner = request.principal.userId;
-    const include =
-      request.includePersonalMemories ??
-      (owner ? (await this.deps.preferences.get(owner)).includePersonalMemories : false);
     const sources: MemorySources = {
-      personalOwnerUserId:
-        include && owner && (await this.canRead(request, { type: "personal", userId: owner }))
-          ? owner
-          : null,
+      personalOwnerUserId: await this.readablePersonalOwner(request),
       repositories: await this.readableRepositories(request),
       environmentId: await this.readableEnvironment(request),
     };
@@ -57,6 +50,18 @@ export class SessionMemorySelector {
       sourcePartitions(sources)
     );
     return selectWithinBudget(candidates, sources, omittedCount);
+  }
+
+  /** The principal, when personal memory is included and its owner may still use it. */
+  private async readablePersonalOwner(request: SessionMemorySelectionRequest) {
+    const owner = request.principal.userId;
+    if (!owner) return null;
+    const include =
+      request.includePersonalMemories ??
+      (await this.deps.preferences.get(owner)).includePersonalMemories;
+    return include && (await this.canRead(request, { type: "personal", userId: owner }))
+      ? owner
+      : null;
   }
 
   /** Repositories with a stable ID whose memories the principal may read. */

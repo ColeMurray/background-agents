@@ -16,7 +16,7 @@ import { MemoryAccessError, MemoryNotFoundError, MemoryValidationError, unhandle
 import { factSearchResponse, type FactSearchIndex, type FactSearchPartition } from "./fact-search";
 import { samePartition, type MemoryPartition } from "./partition";
 import { renderMemorySection } from "./render";
-import { canWritePersonal, personalReadAccess } from "./session-rules";
+import { canWritePersonal, personalReadAccess, type PersonalReadAccess } from "./session-rules";
 import { repositoryPartition, sourcePartitions } from "./sources";
 import type { MemorySession } from "./types";
 
@@ -54,22 +54,35 @@ export interface SessionMemoryServiceDeps {
 export class SessionMemoryService {
   constructor(private readonly deps: SessionMemoryServiceDeps) {}
 
-  /** The pinned boot context, rendered for the session's harness. */
+  /**
+   * The pinned boot context, rendered for the session's harness. Pinned personal records are left
+   * out while their owner may not use personal memory, as if the session had opted out.
+   */
   async renderedContext(sessionId: string): Promise<RenderedSessionMemory> {
     const session = await this.loadSession(sessionId);
     const loaded = await this.deps.selections.loadSelection(sessionId);
     if (!loaded) throw new MemoryNotFoundError(SESSION_NOT_FOUND);
+    const includePersonal = (await this.personalAccess(session)) !== "none";
+    const entries = includePersonal
+      ? loaded.entries
+      : loaded.entries.filter((entry) => entry.partition.type !== "personal");
     if (
       !(await this.mayAccessPartitions(
         session,
-        loaded.entries.map((entry) => entry.partition)
+        entries.map((entry) => entry.partition)
       ))
     )
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
+    const selection = includePersonal
+      ? loaded.selection
+      : {
+          ...loaded.selection,
+          items: loaded.selection.items.filter((item) => item.scope.type !== "personal"),
+        };
     return {
       schemaVersion: SANDBOX_MEMORY_SCHEMA_VERSION,
       manifestSha256: loaded.selection.manifestSha256,
-      rendered: renderMemorySection(loaded.selection, loaded.entries, session.harness),
+      rendered: renderMemorySection(selection, entries, session.harness),
     };
   }
 
@@ -164,10 +177,13 @@ export class SessionMemoryService {
     return { id: memory.id, status: memory.status, revisionId: memory.currentRevisionId };
   }
 
-  /** Search current facts in the session's partitions, checking access before and after SQL. */
+  /**
+   * Search current facts in the session's partitions, checking access before and after SQL. A
+   * personal store the owner may not use is skipped, or refused when explicitly requested.
+   */
   async search(sessionId: string, input: MemorySearchInput): Promise<MemorySearchResponse> {
     const session = await this.loadSession(sessionId);
-    const partitions = this.searchPartitions(session, input);
+    const partitions = this.searchPartitions(session, input, await this.personalAccess(session));
     const all = partitions.map((entry) => entry.partition);
     if (!(await this.mayAccessPartitions(session, all)))
       throw new MemoryAccessError(SCOPE_UNAVAILABLE);
@@ -185,6 +201,16 @@ export class SessionMemoryService {
     const session = await this.deps.selections.loadSession(sessionId);
     if (!session) throw new MemoryNotFoundError(SESSION_NOT_FOUND);
     return session;
+  }
+
+  /** {@link personalReadAccess}, or "none" while the owner may not use personal memory. */
+  private async personalAccess(session: MemorySession): Promise<PersonalReadAccess> {
+    const access = personalReadAccess(session);
+    const owner = session.sources.personalOwnerUserId;
+    if (access === "none" || !owner) return "none";
+    return (await this.mayAccessPartitions(session, [{ type: "personal", userId: owner }]))
+      ? access
+      : "none";
   }
 
   /** Whether the session principal may currently access these partitions. */
@@ -256,13 +282,13 @@ export class SessionMemoryService {
   /** Session-relative searchable partitions; an explicitly requested unavailable scope fails. */
   private searchPartitions(
     session: MemorySession,
-    input: MemorySearchInput
+    input: MemorySearchInput,
+    access: PersonalReadAccess
   ): FactSearchPartition[] {
     const partitions: FactSearchPartition[] = [];
     const wants = (scopeType: NonNullable<MemorySearchInput["scopeType"]>) =>
       !input.scopeType || input.scopeType === scopeType;
     if (wants("personal")) {
-      const access = personalReadAccess(session);
       if (access !== "none" && session.sources.personalOwnerUserId)
         partitions.push({
           partition: { type: "personal", userId: session.sources.personalOwnerUserId },

@@ -379,7 +379,8 @@ function mayUsePersonalMemory(authorization: EffectiveAuthorization | null): boo
  * environment ownership, and the personal owner's `memories.manage_own` are evaluated on every
  * check. Which personal store a session reaches is governed by its pinned owner and opt-out; this
  * only decides whether that owner may still use it, so agents never write memories the owner
- * cannot review in Settings.
+ * cannot review in Settings. Like any partition, a denied personal store fails the whole check;
+ * callers that can do without it (selection, boot context, unscoped search) leave it out first.
  *
  * Each check loads a user's authorization at most once, but never reuses it across checks: callers
  * recheck around reads (search does so before and after its query), and every recheck must

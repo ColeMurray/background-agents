@@ -1,11 +1,14 @@
 import type { MemorySession } from "./types";
 
+/** How much of the pinned personal store a session may read. */
+export type PersonalReadAccess = "none" | "pinned" | "all";
+
 /**
  * How much of the pinned personal store a session may read live. Opted-out sessions see none;
  * children see only personal records pinned in the selection they inherited, so a later
  * preference or new personal record never widens a delegated session's context.
  */
-export function personalReadAccess(session: MemorySession): "none" | "pinned" | "all" {
+export function personalReadAccess(session: MemorySession): PersonalReadAccess {
   if (!session.sources.personalOwnerUserId) return "none";
   return session.isChildSession ? "pinned" : "all";
 }

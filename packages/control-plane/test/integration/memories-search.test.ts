@@ -249,21 +249,25 @@ describe("session memory discovery", () => {
     expect((await excluded({ query: "needle", scopeType: "environment" })).status).toBe(403);
   });
 
-  it("denies the pinned personal store once its owner loses memories.manage_own", async () => {
+  it("leaves the pinned personal store out once its owner loses memories.manage_own", async () => {
     await seedSearchFacts(env.DB, OWNER, [
-      { id: "mine", title: "needle" },
+      { id: "mine", title: "needle", description: "PRIVATE_PERSONAL_SENTINEL" },
       { id: "shared", title: "needle", partition: repoPartition },
     ]);
     const call = await sandbox("revoked-personal", { repositories: [repo] });
+    expect(await (await call(null, "")).text()).toContain("PRIVATE_PERSONAL_SENTINEL");
     await env.DB.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission_id = ?")
       .bind(`role_custom_${OWNER}`, "memories.manage_own")
       .run();
-    expect((await call({ query: "needle" })).status).toBe(403);
+    const context = await call(null, "");
+    expect(context.status).toBe(200);
+    expect(await context.text()).not.toContain("PRIVATE_PERSONAL_SENTINEL");
+    expect(await (await call({ query: "needle" })).json()).toEqual({
+      results: [expect.objectContaining({ id: "shared" })],
+      hasMore: false,
+    });
     expect((await call({ query: "needle", scopeType: "personal" })).status).toBe(403);
     expect((await call(null, "/mine")).status).toBe(404);
-    expect(await (await call({ query: "needle", scopeType: "repository" })).json()).toMatchObject({
-      results: [{ id: "shared" }],
-    });
   });
 
   it.each(["before", "during"])(

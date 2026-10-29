@@ -91,7 +91,7 @@ function setup(
       search: vi.fn<SessionMemoryServiceDeps["factIndex"]["search"]>(async () => []),
     },
     access: {
-      check: vi.fn(async () =>
+      check: vi.fn<SessionMemoryServiceDeps["access"]["check"]>(async () =>
         (readable.shift() ?? true)
           ? ({ kind: "granted" } as const)
           : ({ kind: "denied", reason: "repository_ungranted" } as const)
@@ -259,11 +259,30 @@ describe("SessionMemoryService.search", () => {
   });
 
   it("discards results when access is revoked while the query runs", async () => {
-    const { service, deps } = setup({ readable: [true, false] });
+    // Personal store check, then access before and after the query.
+    const { service, deps } = setup({ readable: [true, true, false] });
     await expect(service.search("session", { query: "needle", limit: 10 })).rejects.toThrow(
       MemoryAccessError
     );
     expect(deps.factIndex.search).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a personal store its owner may not use, and refuses it when requested", async () => {
+    const { service, deps } = setup();
+    deps.access.check.mockImplementation(async (_principal, partitions) =>
+      partitions.some((partition) => partition.type === "personal")
+        ? { kind: "denied", reason: "personal_unavailable" }
+        : { kind: "granted" }
+    );
+    await service.search("session", { query: "needle", limit: 10 });
+    expect(deps.factIndex.search).toHaveBeenCalledWith({
+      terms: ["needle"],
+      limit: 10,
+      partitions: [{ partition: apiPartition }],
+    });
+    await expect(
+      service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
+    ).rejects.toThrow(MemoryAccessError);
   });
 });
 
@@ -320,7 +339,47 @@ describe("SessionMemoryService.renderedContext", () => {
   });
 
   it("refuses to install when the principal lost access to a pinned partition", async () => {
-    const { service } = setup({ loaded, readable: [false] });
+    // The personal store is still usable; the full check fails.
+    const { service } = setup({ loaded, readable: [true, false] });
     await expect(service.renderedContext("session")).rejects.toThrow(MemoryAccessError);
+  });
+
+  it("leaves personal records out while their owner may not use personal memory", async () => {
+    const deploy: PinnedMemoryEntry = {
+      memoryId: "deploy",
+      revisionId: "rev_deploy",
+      scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+      partition: apiPartition,
+      title: "Deploy runbook",
+      inclusion: "summary",
+      description: "How to deploy",
+    };
+    const { service, deps } = setup({
+      loaded: {
+        selection: {
+          ...manifest,
+          items: [
+            ...manifest.items,
+            {
+              ...manifest.items[0],
+              memoryId: "deploy",
+              revisionId: "rev_deploy",
+              scope: deploy.scope,
+              title: deploy.title,
+            },
+          ],
+        },
+        drift: [],
+        entries: [entry, deploy],
+      },
+    });
+    deps.access.check.mockImplementation(async (_principal, partitions) =>
+      partitions.some((partition) => partition.type === "personal")
+        ? { kind: "denied", reason: "personal_unavailable" }
+        : { kind: "granted" }
+    );
+    const { rendered } = await service.renderedContext("session");
+    expect(rendered).toContain("Deploy runbook");
+    expect(rendered).not.toContain("Test setup");
   });
 });
