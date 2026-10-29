@@ -22,7 +22,7 @@ retiring the Sandbox—not just the duration of the snapshot API call.
 “Final snapshot” is the product label. **Graceful shutdown** can produce two kinds of recovery
 point:
 
-- An independent filesystem snapshot/checkpoint for Modal, Vercel, and OpenComputer.
+- An independent filesystem snapshot for Modal and Vercel.
 - A verified retained, stopped/paused Sandbox for E2B and Daytona, where this is the existing
   persistence contract. These are not represented as fabricated image IDs.
 
@@ -64,7 +64,7 @@ Current source independently confirms the scheduling gap:
 2. Halt the active prompt before the normal final capture, and prevent another prompt or managed
    workspace mutation from starting on the retiring generation.
 3. Preserve saved workspace files, including uncommitted/untracked files and sandbox-local agent
-   state covered by that provider's persistence mechanism, across all five supported providers.
+   state covered by that provider's persistence mechanism, across all four supported providers.
 4. Survive Control Plane restart, duplicate alarms, reconnects, and ambiguous provider responses.
 5. Never report checkpoint-and-shutdown success or silently restore an older recovery point after
    that operation failed.
@@ -95,40 +95,24 @@ Current source independently confirms the scheduling gap:
 The common policy must use provider receipts, not a provider-name switch scattered through Session
 code or the existing booleans alone.
 
-| Provider         | Current implementation                                                                                                                                         | Checkpoint and shutdown                                                                                                                                                                          | Deadline source                                                                                                                                                             |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Modal**        | Two-hour default passed to create; explicit filesystem snapshot; image restore. No session explicit-stop capability.                                           | Stop prompt → explicit filesystem snapshot → commit ready image → authenticated provider termination. Add a narrow stop endpoint; runtime shutdown remains a courtesy, not proof of termination. | Provider timing if available; otherwise a conservative timestamp immediately **before** provider create plus its accepted duration. Return it from both create and restore. |
-| **Vercel**       | Adapter caps lifetime at 45 minutes. Snapshot/restore supported.                                                                                               | Stop prompt → snapshot, which itself stops the source → commit ready image and stopped result. Do not wait for an acknowledgement from a runtime already stopped by snapshotting.                | Normalize provider `session.createdAt` and accepted `session.timeout`; account for the adapter cap.                                                                         |
-| **E2B**          | Session snapshots intentionally unsupported. Stop pauses; resume reconnects the retained object and can change its timeout.                                    | Stop prompt → explicit pause → verify paused/retained → commit retained-object receipt. Never use the destructive kill branch as successful state capture.                                       | Parse provider detail `endAt` after create, connect, and timeout mutation. A reconnect is not itself evidence of a renewed lease.                                           |
-| **Daytona**      | No hard-TTL capability; inactivity auto-stop/archive; stop/start retains filesystem.                                                                           | At an existing stop boundary: stop prompt if necessary → stop → verify stopped/retained → commit retained-object receipt. Do not use the respawn/delete branch.                                  | Explicit `none` today. `timeoutSeconds` used for preview access is not a Sandbox deadline.                                                                                  |
-| **OpenComputer** | Baseline uses checkpoint/fork plus hibernate/wake and accepts `processing` snapshots. Current v2 has a hard host lifetime and in-place checkpoint restoration. | Stop prompt → disk checkpoint → poll until restorable → commit independent artifact → retire source. Restore into a fresh target before starting its runtime.                                    | Provider `endAt`, including time already consumed by the warm-pool host. Never infer it from client creation time or rolling idle timeout. Missing metadata is `unknown`.   |
+| Provider    | Current implementation                                                                                                      | Checkpoint and shutdown                                                                                                                                                                          | Deadline source                                                                                                                                                             |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Modal**   | Two-hour default passed to create; explicit filesystem snapshot; image restore. No session explicit-stop capability.        | Stop prompt → explicit filesystem snapshot → commit ready image → authenticated provider termination. Add a narrow stop endpoint; runtime shutdown remains a courtesy, not proof of termination. | Provider timing if available; otherwise a conservative timestamp immediately **before** provider create plus its accepted duration. Return it from both create and restore. |
+| **Vercel**  | Adapter caps lifetime at 45 minutes. Snapshot/restore supported.                                                            | Stop prompt → snapshot, which itself stops the source → commit ready image and stopped result. Do not wait for an acknowledgement from a runtime already stopped by snapshotting.                | Normalize provider `session.createdAt` and accepted `session.timeout`; account for the adapter cap.                                                                         |
+| **E2B**     | Session snapshots intentionally unsupported. Stop pauses; resume reconnects the retained object and can change its timeout. | Stop prompt → explicit pause → verify paused/retained → commit retained-object receipt. Never use the destructive kill branch as successful state capture.                                       | Parse provider detail `endAt` after create, connect, and timeout mutation. A reconnect is not itself evidence of a renewed lease.                                           |
+| **Daytona** | No hard-TTL capability; inactivity auto-stop/archive; stop/start retains filesystem.                                        | At an existing stop boundary: stop prompt if necessary → stop → verify stopped/retained → commit retained-object receipt. Do not use the respawn/delete branch.                                  | Explicit `none` today. `timeoutSeconds` used for preview access is not a Sandbox deadline.                                                                                  |
 
 Current adapter evidence:
 [Modal](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/modal-provider.ts#L89),
 [Vercel](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/vercel/provider.ts#L57),
 [E2B](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/e2b-provider.ts#L176),
-[Daytona](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/daytona-provider.ts#L85),
-[OpenComputer](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/opencomputer-provider.ts#L233).
+[Daytona](https://github.com/ColeMurray/background-agents/blob/222f1c002f1ba9ff7624090e1424b7e556b772f6/packages/control-plane/src/sandbox/providers/daytona-provider.ts#L85).
 
 Provider documentation confirms that
 [Vercel snapshots stop the source](https://vercel.com/docs/sandbox/concepts/snapshots),
 [E2B pause preserves a resumable Sandbox](https://docs.e2b.dev/sandbox/persistence), and
 [Daytona stop/start preserves persistent filesystem state](https://www.daytona.io/docs/en/persistence/).
 These mechanisms have different semantics but satisfy the common recovery contract when verified.
-
-**OpenComputer compatibility work is required, not deferred out of scope.** Re-verification on
-2026-09-19 found that current v2 guides supersede older overview/API pages: every sandbox has an
-eight-hour maximum host lifetime, including time spent hibernated or in the warm pool. Its returned
-`endAt` is authoritative; adding eight hours to client-side creation time would be unsafe. Missing
-`endAt` holds admission as unknown, rather than assuming the retired v1 contract. V2 does not
-support checkpoint fork/create-from-checkpoint, so session restoration and prebuilt-image launch
-create a fresh target, wait for readiness, restore the checkpoint in place, refresh provider
-metadata, and only then start the runtime. Checkpoints outlive their source; the shutdown
-coordinator polls until the exact artifact is ready before publication.
-[Lifetime](https://docs.opencomputer.dev/sandboxes/lifetime),
-[v1 migration](https://docs.opencomputer.dev/migrating-from-v1),
-[checkpoints](https://docs.opencomputer.dev/sandboxes/checkpoints), and
-[restore API](https://docs.opencomputer.dev/api-reference/checkpoints/restore).
 
 Snapshot expiry is also independent of source Sandbox expiry; this feature does not add retention
 management. The baseline pins Modal 1.4.3; newer documentation changes the filesystem-snapshot
@@ -288,9 +272,7 @@ unlabelled crash-consistent snapshot. No degraded-capture subsystem is required.
 
 Select the persistence mechanism from provider capabilities:
 
-- Providers supporting filesystem snapshots (Modal, Vercel, OpenComputer) create an independent
-  recovery artifact. OpenComputer must poll its checkpoint collection until the artifact is ready; a
-  `processing` ID is not success.
+- Providers supporting filesystem snapshots (Modal, Vercel) create an independent recovery artifact.
 - Persistent-resume providers without session snapshots (E2B, Daytona) use explicit
   `intent: "preserve"` stop/pause and verify retained state. A missing object cannot produce a
   retained receipt. E2B pause conflicts must be reconciled as actually paused.
@@ -326,8 +308,7 @@ Only after receipt commit **and** confirmed source retirement:
 - Never silently fresh-spawn if this restore/resume fails.
 
 A new generation must again publish lifetime metadata and complete the runtime handshake. This
-prevents E2B's retained preparation fence from rejecting the next prompt and prevents an expired
-OpenComputer source from outranking its independent checkpoint.
+prevents E2B's retained preparation fence from rejecting the next prompt.
 
 ## 8. Restarts, failures, and recovery
 
@@ -448,16 +429,13 @@ Automated coverage must establish:
 8. Cloudflare/Workerd integration plus shared Node-compatible persistence/alarm abstractions.
 
 Local automated tests and typechecks are necessary, not proof of deployed provider behavior. Before
-production rollout, run a provider-backed canary for **each** of Modal, Vercel, E2B, Daytona, and
-OpenComputer:
+production rollout, run a provider-backed canary for **each** of Modal, Vercel, E2B, and Daytona:
 
 - Write tracked, untracked, ignored, and secondary-repository sentinels plus a manual saved edit.
 - Start an active tool; trigger the finite drain or existing inactivity stop.
 - Verify the interrupted prompt does not continue/replay and queued work does not overlap capture.
 - Restore/resume and verify sentinels and sandbox-local harness state.
 - Exercise both harness stop implementations and at least one lost-response failure.
-- For OpenComputer, verify authoritative `endAt`, fresh-target in-place checkpoint restoration, and
-  artifact survival after source retirement against the deployed v2 contract.
 - Measure stop/capture/retirement latency against the 10-minute default and 5-minute minimum. Native
   retention policies remain provider-specific; this is not an indefinite-backup SLA.
 
@@ -484,9 +462,9 @@ the narrow alternatives:
 - Honest persistent unknown outcomes, not mandatory provider-side result journals.
 - Existing generation identity, not a second lease epoch or clock protocol.
 
-The provider/runtime review additionally required retained-state readback, independent OpenComputer
-checkpoints, a fresh authenticated generation on memory resume, ready-before-publication, and no
-false success when an SDK disconnect or provider lookup fails.
+The provider/runtime review additionally required retained-state readback, a fresh authenticated
+generation on memory resume, ready-before-publication, and no false success when an SDK disconnect
+or provider lookup fails.
 
 Deferred deliberately: degraded captures without stop evidence, universal remote operation
 reconciliation, automatic lease renewal, cross-provider recovery, snapshot history/retention

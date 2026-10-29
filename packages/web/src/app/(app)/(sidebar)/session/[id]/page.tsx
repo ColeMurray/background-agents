@@ -14,6 +14,7 @@ import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { ActionBar } from "@/components/action-bar";
 import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
+import { SessionScopeProvider } from "@/components/session-scope-provider";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
@@ -27,14 +28,9 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type ReasoningEffort,
-  type ValidModel,
-} from "@open-inspect/shared/models";
+import { DEFAULT_MODEL, type ReasoningEffort, type ValidModel } from "@open-inspect/shared/models";
 import type { ModelPreference } from "@/lib/model-selection";
-import type { HarnessId } from "@open-inspect/shared/harnesses";
+import { getHarnessReasoningConfig, type HarnessId } from "@open-inspect/shared/harnesses";
 import { resolveHarnessModelSelection } from "@/lib/session-harness";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
@@ -71,7 +67,11 @@ export default function SessionPage() {
   const initialSnapshot = useSessionSnapshot();
   const socket = useSessionSocket(initialSnapshot.session.id, initialSnapshot);
   if (socket.sessionGone) notFound();
-  return <SessionContent initialSnapshot={initialSnapshot} socket={socket} />;
+  return (
+    <SessionScopeProvider>
+      <SessionContent initialSnapshot={initialSnapshot} socket={socket} />
+    </SessionScopeProvider>
+  );
 }
 
 function SessionContent({
@@ -303,10 +303,6 @@ function SessionContent({
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),
     [artifacts]
-  );
-  const selectedMediaArtifact = useMemo(
-    () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
-    [mediaArtifacts, selectedMediaArtifactId]
   );
   const primaryRepo =
     sessionState?.repositories?.[0] ??
@@ -613,13 +609,9 @@ function SessionContent({
 
       <MediaLightbox
         sessionId={sessionId}
-        artifact={selectedMediaArtifact}
-        open={selectedMediaArtifactId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedMediaArtifactId(null);
-          }
-        }}
+        artifacts={mediaArtifacts}
+        selectedArtifactId={selectedMediaArtifactId}
+        onSelectArtifact={setSelectedMediaArtifactId}
       />
     </div>
   );
@@ -681,7 +673,7 @@ function useModelSelection(sessionState: SessionState, harness: HarnessId) {
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
   const sessionModel = sessionState?.model ?? DEFAULT_MODEL;
   const sessionReasoningEffort =
-    sessionState?.reasoningEffort ?? getDefaultReasoningEffort(sessionModel);
+    sessionState?.reasoningEffort ?? getHarnessReasoningConfig(harness, sessionModel)?.default;
   const {
     model: selectedModel,
     reasoningEffort,
@@ -709,9 +701,15 @@ function useModelSelection(sessionState: SessionState, harness: HarnessId) {
       sessionReasoningEffort,
     ]
   );
-  const handleModelChange = useCallback((model: ValidModel) => {
-    setModelPreferenceDraft({ model, reasoningEffort: getDefaultReasoningEffort(model) });
-  }, []);
+  const handleModelChange = useCallback(
+    (model: ValidModel) => {
+      setModelPreferenceDraft({
+        model,
+        reasoningEffort: getHarnessReasoningConfig(harness, model)?.default,
+      });
+    },
+    [harness]
+  );
 
   const setReasoningEffort = useCallback(
     (nextReasoningEffort: ReasoningEffort | undefined) => {

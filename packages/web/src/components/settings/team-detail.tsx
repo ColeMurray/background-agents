@@ -8,6 +8,13 @@ import { useTeamCapabilities } from "@/hooks/use-team-capabilities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { TeamMembersTable } from "./team-members-table";
 
@@ -164,51 +171,55 @@ export function TeamDetail({ team }: { team: TeamResponse }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="join-policy">Join policy</Label>
-            <select
-              id="join-policy"
+            <Select
               value={editor.draft.joinPolicy}
               disabled={!capabilities.canEditMetadata || saving}
-              onChange={(event) =>
+              onValueChange={(value) =>
                 setEditor((current) => ({
                   ...current,
                   draft: {
                     ...current.draft,
-                    joinPolicy: event.target.value === "open" ? "open" : "invite_only",
+                    joinPolicy: value === "open" ? "open" : "invite_only",
                   },
                 }))
               }
-              className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
-              <option value="invite_only">Invite only</option>
-              <option value="open">Open</option>
-            </select>
+              <SelectTrigger id="join-policy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="invite_only">Invite only</SelectItem>
+                <SelectItem value="open">Open</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="default-visibility">Default visibility</Label>
-            <select
-              id="default-visibility"
+            <Select
               value={editor.draft.defaultVisibility}
               disabled={!capabilities.canEditMetadata || saving}
-              onChange={(event) =>
+              onValueChange={(value) =>
                 setEditor((current) => ({
                   ...current,
                   draft: {
                     ...current.draft,
-                    defaultVisibility:
-                      event.target.value === "team"
-                        ? "team"
-                        : event.target.value === "private"
-                          ? "private"
-                          : "workspace",
+                    defaultVisibility: value === "team" ? "team" : "workspace",
                   },
                 }))
               }
-              className="w-full rounded border border-border bg-background px-2 py-2 text-sm disabled:opacity-50"
             >
-              <option value="workspace">Workspace</option>
-              <option value="team">Team</option>
-              <option value="private">Private</option>
-            </select>
+              <SelectTrigger id="default-visibility">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="workspace">Workspace</SelectItem>
+                <SelectItem value="team">Team</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Applies to new sessions only. Private is available per session, including within a
+              team.
+            </p>
           </div>
         </div>
         <Button type="submit" disabled={!capabilities.canEditMetadata || saving}>

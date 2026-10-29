@@ -24,8 +24,7 @@ import type { ResolvedGitHubConfig } from "./utils/integration-config";
  * schema makes the two mutually exclusive.
  */
 export type SessionTargetFields =
-  | { repoOwner: string; repoName: string }
-  | { environmentId: string };
+  { repoOwner: string; repoName: string } | { environmentId: string };
 
 const metadataResponseSchema = z.object({
   metadata: z.object({ defaultEnvironmentId: z.string().optional() }).nullable(),
@@ -34,6 +33,7 @@ const metadataResponseSchema = z.object({
 const environmentResponseSchema = z.object({
   environment: z.object({
     id: z.string(),
+    ownerTeamId: z.string().min(1).nullable(),
     repositories: z.array(z.object({ repoOwner: z.string(), repoName: z.string() })),
   }),
 });
@@ -75,12 +75,13 @@ async function fetchEnvironment(
   env: Env,
   environmentId: string,
   log: Logger,
-  traceId: string
+  traceId: string,
+  actor: string | undefined
 ): Promise<z.infer<typeof environmentResponseSchema>["environment"] | null> {
   let response: Response;
   try {
     const url = `https://internal/environments/${environmentId}`;
-    response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
+    response = await signedControlPlaneFetch(env, { method: "GET", url, traceId, actor });
   } catch (err) {
     log.warn("target.environment_fetch_failed", {
       trace_id: traceId,
@@ -118,6 +119,8 @@ async function fetchEnvironment(
 export interface ResolveSessionTargetParams {
   owner: string;
   repoName: string;
+  teamId: string | null;
+  senderId: number;
   /** Webhook sender login, permission-checked against environment repositories. */
   senderLogin: string;
   /** Resolved integration config — its allowedTriggerUsers picks the gating mode. */
@@ -181,8 +184,8 @@ async function senderAuthorizedForEnvironment(
 /**
  * Resolve the session target for a session triggered from a repository: the
  * repo's default environment when one is configured, still exists, contains
- * the trigger repo, and the sender is authorized for all of its repositories;
- * otherwise the repo itself.
+ * the trigger repo, has compatible ownership, and the sender is authorized for
+ * all of its repositories; otherwise the repo itself.
  */
 export async function resolveSessionTarget(
   env: Env,
@@ -195,8 +198,18 @@ export async function resolveSessionTarget(
   const environmentId = await fetchDefaultEnvironmentId(env, owner, repoName, log, traceId);
   if (!environmentId) return repoFields;
 
-  const environment = await fetchEnvironment(env, environmentId, log, traceId);
+  const actor = params.teamId === null ? undefined : `github:${params.senderId}`;
+  const environment = await fetchEnvironment(env, environmentId, log, traceId, actor);
   if (!environment) return repoFields;
+
+  if (environment.ownerTeamId !== null && environment.ownerTeamId !== params.teamId) {
+    log.warn("target.environment_team_mismatch", {
+      trace_id: traceId,
+      environment_id: environmentId,
+      team_id: params.teamId,
+    });
+    return repoFields;
+  }
 
   const isMember = environment.repositories.some(
     (r) =>

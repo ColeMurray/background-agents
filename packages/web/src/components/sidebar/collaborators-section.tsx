@@ -3,7 +3,8 @@
 import { useId, useState } from "react";
 import { useSWRConfig } from "swr";
 import { useSessionCollaboratorCandidates } from "@/hooks/use-session-collaborator-candidates";
-import { updateSessionScope } from "@/lib/session-scope";
+import { SessionScopeRefreshError, updateSessionScope } from "@/lib/session-scope";
+import { useSessionScopeState } from "../session-scope-provider";
 import { Button } from "../ui/button";
 import { ErrorBanner } from "../ui/error-banner";
 import { UserIdentity, UserIdentityPicker, userDisplayName } from "../user-identity";
@@ -32,21 +33,25 @@ export function CollaboratorsSection({
   );
   const id = useId();
   const [userId, setUserId] = useState("");
-  const [pending, setPending] = useState(false);
+  const {
+    state: { pending, refreshFailure },
+    setState,
+  } = useSessionScopeState();
   const [message, setMessage] = useState<string | null>(null);
   const available = candidates.filter(
     (candidate) => candidate.userId !== ownerUserId && !collaborators.includes(candidate.userId)
   );
 
   async function updateCollaborator(targetUserId: string, remove: boolean) {
-    if (!canManageCollaborators || pending || targetUserId === ownerUserId) return;
+    if (!canManageCollaborators || pending || refreshFailure || targetUserId === ownerUserId)
+      return;
     if (
       remove
         ? !collaborators.includes(targetUserId)
         : loading || !!error || !available.some((candidate) => candidate.userId === targetUserId)
     )
       return;
-    setPending(true);
+    setState((current) => ({ ...current, pending: true }));
     setMessage(null);
     try {
       await updateSessionScope(
@@ -59,9 +64,14 @@ export function CollaboratorsSection({
       );
       if (!remove) setUserId("");
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "Failed to update collaborator");
+      if (cause instanceof SessionScopeRefreshError) {
+        setState((current) => ({ ...current, refreshFailure: cause }));
+        if (!remove) setUserId("");
+      } else {
+        setMessage(cause instanceof Error ? cause.message : "Failed to update collaborator");
+      }
     } finally {
-      setPending(false);
+      setState((current) => ({ ...current, pending: false }));
     }
   }
 
@@ -82,7 +92,7 @@ export function CollaboratorsSection({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={pending || collaboratorId === ownerUserId}
+                disabled={pending || !!refreshFailure || collaboratorId === ownerUserId}
                 aria-label={`Remove ${name}`}
                 onClick={() => void updateCollaborator(collaboratorId, true)}
               >
@@ -98,7 +108,7 @@ export function CollaboratorsSection({
           <UserIdentityPicker
             id={`${id}-add`}
             value={userId}
-            disabled={pending || loading || !!error}
+            disabled={pending || !!refreshFailure || loading || !!error}
             onValueChange={setUserId}
             candidates={available}
           />
@@ -106,6 +116,7 @@ export function CollaboratorsSection({
             size="sm"
             disabled={
               pending ||
+              !!refreshFailure ||
               loading ||
               !!error ||
               !available.some((candidate) => candidate.userId === userId)

@@ -78,6 +78,61 @@ async def test_ignores_replacement_refs_when_resolving_the_fixed_baseline(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_markdown_patch_keeps_unchanged_context_without_moving_head(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    original = "# Title\n\n" + "".join(f"line {index}\n" for index in range(20))
+    notes = repository.path / "NOTES.md"
+    notes.write_text(original)
+    _git(repository.path, "add", "NOTES.md")
+    _git(repository.path, "commit", "-m", "notes")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    (repository.path / "STAGED.md").write_text("# Staged\n\nbody\n")
+    _git(repository.path, "add", "STAGED.md")
+    notes.write_text(original.replace("line 10\n", "line 10 edited\n", 1))
+    (repository.path / "UNTRACKED.md").write_text("# Untracked\n\nfull body\n")
+
+    capture = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert capture.head_sha == base_sha
+    changes = {changed.path: changed for changed in capture.files}
+    notes_patch = changes["NOTES.md"].patch or ""
+    assert changes["NOTES.md"].render_state == "renderable"
+    assert "line 0" in notes_patch
+    assert "line 19" in notes_patch
+    assert "+line 10 edited" in notes_patch
+    assert "-line 10" in notes_patch
+    staged_patch = changes["STAGED.md"].patch or ""
+    assert "+# Staged" in staged_patch
+    assert "+body" in staged_patch
+    untracked_patch = changes["UNTRACKED.md"].patch or ""
+    assert "+# Untracked" in untracked_patch
+    assert "+full body" in untracked_patch
+
+
+@pytest.mark.asyncio
+async def test_tracked_empty_markdown_add_and_delete_are_metadata_only(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    (repository.path / "REMOVED.md").write_text("")
+    _git(repository.path, "add", "REMOVED.md")
+    _git(repository.path, "commit", "-m", "empty notes")
+    base_sha = _git(repository.path, "rev-parse", "HEAD")
+    # Capture each separately: Git pairs an added and a deleted empty file as a rename.
+    (repository.path / "ADDED.md").write_text("")
+    _git(repository.path, "add", "ADDED.md")
+    added = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+    _git(repository.path, "rm", "-q", "--force", "ADDED.md")
+    _git(repository.path, "rm", "-q", "REMOVED.md")
+    deleted = await collect_repository_diff(repository, base_sha, CaptureLimits.defaults())
+
+    assert [(f.path, f.status, f.render_state) for f in added.files] == [
+        ("ADDED.md", "added", "metadata_only")
+    ]
+    assert [(f.path, f.status, f.render_state) for f in deleted.files] == [
+        ("REMOVED.md", "deleted", "metadata_only")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_collects_committed_staged_and_unstaged_changes(tmp_path: Path) -> None:
     repository, base_sha = _repository(tmp_path)
     (repository.path / "committed.txt").write_text("committed\n")

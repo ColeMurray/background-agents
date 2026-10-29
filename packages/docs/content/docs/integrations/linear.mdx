@@ -4,10 +4,18 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-09-23"
+lastReviewed: "2026-10-27"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
+  - packages/control-plane/src/routes/channel-bindings.ts
+  - packages/control-plane/src/routes/team-ownership.ts
+  - packages/control-plane/src/authorization/session-admission.ts
+  - packages/control-plane/src/authorization/teams-enforcement.ts
+  - packages/linear-bot/src/launch-admission.ts
+  - packages/linear-bot/src/control-plane.ts
+  - packages/linear-bot/src/callbacks.ts
+  - terraform/d1/migrations/0083_teams.sql
   - packages/web/src/components/settings/integrations/linear-integration-settings.tsx
   - docs/HOW_IT_WORKS.md
 ---
@@ -107,6 +115,24 @@ Administrators can map Linear projects or teams to repositories, and those mappi
 
 If the resolved repository is outside the Linear **Repository Scope**, Linear shows an error and no session starts.
 
+### Team ownership versus target mappings
+
+A team lead or workspace administrator can bind an external Linear team ID in an OpenInspect team's **Channels** tab. **Primary** marks its main binding for that provider; **Source** also routes new sessions to that team. An external Linear team belongs to only one OpenInspect team, and a team has at most one primary binding per provider. Enter the Linear team ID, not a team name or issue-key prefix. Slack channel discovery is not needed.
+
+Legacy `config:team-repos` and `config:project-repos` mappings select a repository or environment. They do **not** assign OpenInspect team ownership, grant membership, or grant repository access. The teams database migration does not convert those KV mappings into bindings. To adopt team ownership, explicitly add the binding, OpenInspect members, and repository grants; retain any target mappings you still need for target selection. Adding a binding does not reassign existing sessions.
+
+Linear's `unboundChannels` policy defaults to `workspace`: unbound Linear teams start workspace-owned sessions. `reject` asks for a binding instead and creates no session. A failed binding lookup also stops launch instead of silently choosing workspace ownership.
+
+Repository, environment, and resolved integration-setting lookups carry the external Linear team scope. Actor-bearing catalogs require membership or workspace-admin access, and creating a team session checks actual membership and target grants. Failed scoped lookups do not fall back to workspace-wide catalogs. A legacy target mapping cannot make an unavailable target accessible.
+
+Discovery and callback reads can run without a human actor under narrow Linear-bot service permissions, still scoped to the Linear team. That does not impersonate a member or grant arbitrary session creation. Automation-created delegations use the installed app user as the acting identity for creation.
+
+<Callout type="warn" title="Team enforcement rollout">
+  `TEAMS_ENFORCEMENT` remains `shadow` by default, not `on`. Team-read denials can be audited rather
+  than blocked in that mode, so scoped reads alone do not guarantee cross-team output isolation.
+  Private-session access remains enforced.
+</Callout>
+
 ## What Linear shows
 
 | Activity            | What it means                                                   |
@@ -118,6 +144,8 @@ If the resolved repository is outside the Linear **Repository Scope**, Linear sh
 | Completion or error | The session finished, failed, or could not continue             |
 
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request, Linear receives a **Pull Request** link when the session finishes. Live output, logs, artifacts, and file changes are in the web session.
+
+Completion content is checked before posting. The bot verifies the issue's current Linear team and withholds results if it changed from the recorded launch team or cannot be verified. It then reads events and artifacts without a human actor, scoped to the verified team. Denied or failed reads produce a generic results-withheld error, not session content or a PR link. Older callbacks recover the launch team from a matching issue-session mapping when possible; otherwise they use the verified current team for the scoped read. Team-visibility enforcement on those reads depends on the rollout mode above.
 
 OpenInspect changes an issue's status at most once, when a person starts a session:
 
@@ -134,13 +162,14 @@ OpenInspect does not change labels, assignee, priority, or project; pull request
 
 | Setting                                    | What it controls                                                                                                                                         |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default model and Default reasoning effort | Model and reasoning depth for Linear-started sessions                                                                                                    |
+| Agent harness                              | **OpenCode** (default), **Claude Agent**, or **Codex** for new Linear-started sessions                                                                   |
+| Default model and Default reasoning effort | Model and reasoning depth for Linear-started sessions; the list shows only models the selected harness can run                                           |
 | Repository Scope                           | **All repositories** (Linear events can run against every accessible repository) or **Selected repositories** (only the allowlist)                       |
 | Issue Session Instructions                 | Custom instructions appended to agent prompts for all Linear issue sessions (coding standards, preferred tools, PR conventions); up to 10,000 characters |
 | Allow user model preferences               | Whether admin-managed user preferences can override the model                                                                                            |
 | Allow model labels (model:\*)              | Whether a `model:*` issue label can choose the model                                                                                                     |
 | Emit tool progress activities              | Whether Linear shows intermediate file and command activity                                                                                              |
-| Repository Overrides                       | Per-repository model, effort, tool updates, user preference override, and label model override                                                           |
+| Repository Overrides                       | Per-repository harness, model, effort, tool updates, user preference override, and label model override                                                  |
 
 With no settings configured, all accessible repositories are in scope, user preferences and model labels are allowed, and tool progress is on.
 
@@ -151,6 +180,12 @@ Model selection uses this priority, highest first:
 3. The repository override, then the global Linear default.
 4. The deployment default model.
 
+The selected **Agent harness** is preserved. If it cannot run the resolved model, the bot posts an error activity in Linear and creates no coding session instead of switching to OpenCode. Claude Agent runs Anthropic models only, so a `model:gpt-*` label is refused on that harness. Choose a compatible `model:*` label, user preference, or default model, or change the Linear integration harness, then delegate again. Labels and user preferences apply only when allowed. For successful launches, the "Creating coding session" activity names the harness.
+
+Omitted repository harness and model fields inherit individually from the global settings. If neither level sets a harness, it is OpenCode. Explicitly choosing a restricted harness such as **Claude Agent** requires a compatible default model at that same settings level (global or repository), not an inherited model. The settings form and control plane reject a missing model or an incompatible pair at that level. Save validation does not check the merged global/repository pair; cross-level mismatches are refused at launch.
+
+Claude Agent sessions started from Linear are automated sessions: they use the default Claude account when its **Automated authentication** allows it, otherwise `ANTHROPIC_API_KEY`. See [Provider accounts](/models/provider-accounts). A harness change applies to new sessions; follow-ups keep the session's harness.
+
 ## Admin and safety notes
 
 - Linear webhooks are verified before OpenInspect acts on them.
@@ -158,6 +193,7 @@ Model selection uses this priority, highest first:
 - Linear does not provide Git credentials. Repository access comes from the deployment's source-control integration, such as the GitHub App installation.
 - **Repository Scope** controls which resolved repositories can receive Linear-started sessions.
 - Issue titles, descriptions, comments, and agent prompts are sent to the agent. Do not put secrets in them.
+- Linear-started sessions never use anyone's personal memories, because their replies post where others read them. Repository and environment memories still apply.
 
 ## Troubleshooting
 
@@ -197,7 +233,10 @@ Model selection uses this priority, highest first:
 </Accordion>
   <Accordion title="The wrong model was used">
     Repository overrides, user preferences, and `model:*` labels all affect selection, in the
-    priority order above. Changes apply to new Linear-started sessions.
+    priority order above. A model the configured harness cannot run is refused with an error
+    activity and no coding session. Choose a compatible label, user preference, or default model,
+    or change the integration harness, then delegate again. Changes apply to new Linear-started
+    sessions.
 
 </Accordion>
   <Accordion title="The wrong repository was used">

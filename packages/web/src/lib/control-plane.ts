@@ -55,6 +55,12 @@ export async function controlPlaneUserFetch(
       return unauthorizedResponse(correlation);
     }
 
+    // URL normalization must not move a user request onto a service-only route.
+    const parsedPath = new URL(normalizedPath, "https://control-plane.invalid");
+    if (parsedPath.pathname !== normalizedPath.split("?", 1)[0] || parsedPath.hash) {
+      return Response.json({ error: "Invalid control-plane path" }, { status: 400 });
+    }
+
     const requestHeaders = new Headers(options.headers);
     requestHeaders.set("Cookie", cookieHeader);
     if (!requestHeaders.has("Content-Type")) {

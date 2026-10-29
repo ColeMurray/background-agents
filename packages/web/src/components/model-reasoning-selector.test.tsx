@@ -273,3 +273,27 @@ describe("ModelReasoningSelector", () => {
     );
   });
 });
+
+it("offers Codex in the mobile agent picker", async () => {
+  mocks.isMobile = true;
+
+  const change = vi.fn();
+  render(
+    <ModelReasoningSelector
+      selectedModel="openai/gpt-5.6-sol"
+      reasoningEffort="max"
+      items={items}
+      onModelChange={vi.fn()}
+      onReasoningEffortChange={vi.fn()}
+      harness="codex"
+      onHarnessChange={change}
+    />
+  );
+  fireEvent.pointerDown(screen.getByRole("button", { name: /agent, model and effort/i }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^agent/i }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
+  expect(change).toHaveBeenCalledWith("codex");
+});

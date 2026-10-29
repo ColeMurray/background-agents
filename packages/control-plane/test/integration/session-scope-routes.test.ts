@@ -253,73 +253,81 @@ describe("session scope routes", () => {
     const missing = await request("/sessions", "POST", { title: "No team" });
     expect(missing.status).toBe(400);
     expect(await missing.json()).toMatchObject({ code: "team_required" });
-    const nonmember = await request("/sessions", "POST", { title: "Wrong team", teamId: team.id });
+    const nonmember = await request("/sessions", "POST", {
+      title: "Wrong team",
+      teamId: team.id,
+      visibility: "private",
+    });
     expect(nonmember.status).toBe(403);
     expect(await nonmember.json()).toMatchObject({ code: "not_member" });
   });
 
-  it("creates team-default and explicitly private sessions with persisted scope and private audit", async () => {
-    const team = await new TeamStore(env.DB).create({
-      slug: "creator-team",
-      name: "Creator team",
-      joinPolicy: "invite_only",
-    });
-    await new TeamMembershipStore(env.DB).add(team.id, OWNER);
-    expect((await request("/settings/teams", "PATCH", { requireTeamOnCreate: true })).status).toBe(
-      200
-    );
+  it.each(["team", "workspace"] as const)(
+    "creates %s-default and explicitly private team sessions with persisted scope and private audit",
+    async (defaultVisibility) => {
+      const team = await new TeamStore(env.DB).create({
+        slug: "creator-team",
+        name: "Creator team",
+        joinPolicy: "invite_only",
+        defaultVisibility,
+      });
+      await new TeamMembershipStore(env.DB).add(team.id, OWNER);
+      expect(
+        (await request("/settings/teams", "PATCH", { requireTeamOnCreate: true })).status
+      ).toBe(200);
 
-    const defaultResponse = await request("/sessions", "POST", {
-      title: "Team default",
-      teamId: team.id,
-    });
-    expect(defaultResponse.status).toBe(201);
-    const { sessionId: defaultId } = await defaultResponse.json<{ sessionId: string }>();
-    expect(await new SessionIndexStore(env.DB).get(defaultId)).toMatchObject({
-      ownerTeamId: team.id,
-      visibility: "team",
-      userId: OWNER,
-    });
-    const state = await env.SESSION.get(env.SESSION.idFromName(defaultId)).fetch(
-      "http://internal/internal/state"
-    );
-    expect(state.status).toBe(200);
-    expect(await state.json()).toMatchObject({ status: expect.any(String) });
+      const defaultResponse = await request("/sessions", "POST", {
+        title: "Team default",
+        teamId: team.id,
+      });
+      expect(defaultResponse.status).toBe(201);
+      const { sessionId: defaultId } = await defaultResponse.json<{ sessionId: string }>();
+      expect(await new SessionIndexStore(env.DB).get(defaultId)).toMatchObject({
+        ownerTeamId: team.id,
+        visibility: defaultVisibility,
+        userId: OWNER,
+      });
+      const state = await env.SESSION.get(env.SESSION.idFromName(defaultId)).fetch(
+        "http://internal/internal/state"
+      );
+      expect(state.status).toBe(200);
+      expect(await state.json()).toMatchObject({ status: expect.any(String) });
 
-    const privateResponse = await request("/sessions", "POST", {
-      title: "Explicitly private",
-      teamId: team.id,
-      visibility: "private",
-    });
-    expect(privateResponse.status).toBe(201);
-    const { sessionId: privateId } = await privateResponse.json<{ sessionId: string }>();
-    expect(await new SessionIndexStore(env.DB).get(privateId)).toMatchObject({
-      ownerTeamId: team.id,
-      visibility: "private",
-      userId: OWNER,
-    });
-    const audit = await env.DB.prepare(
-      `SELECT request_id, actor_user_id_snapshot, resource_id, team_id, metadata_json
+      const privateResponse = await request("/sessions", "POST", {
+        title: "Explicitly private",
+        teamId: team.id,
+        visibility: "private",
+      });
+      expect(privateResponse.status).toBe(201);
+      const { sessionId: privateId } = await privateResponse.json<{ sessionId: string }>();
+      expect(await new SessionIndexStore(env.DB).get(privateId)).toMatchObject({
+        ownerTeamId: team.id,
+        visibility: "private",
+        userId: OWNER,
+      });
+      const audit = await env.DB.prepare(
+        `SELECT request_id, actor_user_id_snapshot, resource_id, team_id, metadata_json
        FROM authorization_audit_events WHERE action = 'session.created_private'`
-    ).first<{
-      request_id: string;
-      actor_user_id_snapshot: string;
-      resource_id: string;
-      team_id: string;
-      metadata_json: string;
-    }>();
-    expect(audit).toMatchObject({
-      request_id: privateResponse.headers.get("x-request-id"),
-      actor_user_id_snapshot: OWNER,
-      resource_id: privateId,
-      team_id: team.id,
-    });
-    expect(JSON.parse(audit!.metadata_json)).toEqual({
-      before: {},
-      requested: {},
-      after: { ownerUserId: OWNER, teamId: team.id, visibility: "private" },
-    });
-  });
+      ).first<{
+        request_id: string;
+        actor_user_id_snapshot: string;
+        resource_id: string;
+        team_id: string;
+        metadata_json: string;
+      }>();
+      expect(audit).toMatchObject({
+        request_id: privateResponse.headers.get("x-request-id"),
+        actor_user_id_snapshot: OWNER,
+        resource_id: privateId,
+        team_id: team.id,
+      });
+      expect(JSON.parse(audit!.metadata_json)).toEqual({
+        before: {},
+        requested: {},
+        after: { ownerUserId: OWNER, teamId: team.id, visibility: "private" },
+      });
+    }
+  );
 
   it("keeps a child visible as its own root when its parent becomes private", async () => {
     await session("root");

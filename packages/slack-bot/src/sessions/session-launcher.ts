@@ -1,65 +1,48 @@
-import { postMessage } from "@open-inspect/shared/slack";
+import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import { normalizeValidModels, type ValidModel } from "@open-inspect/shared/models";
-import { getAuthoritativeModels, getAvailableModels } from "../app-home/models";
+import type { ValidModel } from "@open-inspect/shared/models";
+import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
+import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
   notifyDroppedAttachments,
   preparePromptImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
+import {
+  formatDisabledModelLaunchRefusal,
+  formatHarnessLaunchRefusal,
+  type LaunchModelSource,
+} from "../messages/blocks";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
+import { createLogger } from "../logger";
 import type { Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
-import { getResolvedUserPreferences, type ResolvedUserPreferences } from "../user-preferences";
+import {
+  getAuthoritativeUserPreferences,
+  resolveUserPreferences,
+  type ResolvedUserPreferences,
+} from "../user-preferences";
+import { isDirectMessageChannel } from "../dm-utils";
 import { createSession } from "./control-plane-client";
-import { getSlackSettings, type SlackSettings } from "../slack-settings";
+import { getAuthoritativeSlackSettings, type SlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import {
-  EMPTY_INLINE_PROMPT_OPTIONS,
   normalizeModelSelection,
-  resolveInlinePromptOptions,
   sameModelSelection,
   type ModelSelection,
   type SessionLaunchPlan,
 } from "../inline-flags";
 
+const log = createLogger("session-launcher");
+
 export interface SlackLaunchSettings {
   enabledModels: ValidModel[];
   slackConfig: SlackSettings;
   userPreferences: ResolvedUserPreferences;
-}
-
-async function resolveSlackLaunchSettings(
-  env: Env,
-  userId: string,
-  enabledModels: ValidModel[],
-  slackConfig: SlackSettings
-): Promise<SlackLaunchSettings> {
-  const userPreferences = await getResolvedUserPreferences(env, userId, {
-    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
-    enabledModels,
-  });
-  return { enabledModels, slackConfig, userPreferences };
-}
-
-export async function loadSlackLaunchSettings(
-  env: Env,
-  userId: string,
-  traceId?: string
-): Promise<SlackLaunchSettings> {
-  const [availableModels, slackConfig] = await Promise.all([
-    getAvailableModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  return resolveSlackLaunchSettings(
-    env,
-    userId,
-    normalizeValidModels(availableModels.map((modelOption) => modelOption.value)),
-    slackConfig
-  );
+  modelSource: Exclude<LaunchModelSource, "request">;
 }
 
 export async function loadAuthoritativeSlackLaunchSettings(
@@ -67,15 +50,38 @@ export async function loadAuthoritativeSlackLaunchSettings(
   userId: string,
   traceId?: string
 ): Promise<SlackLaunchSettings | null> {
-  const [enabledModels, slackConfig] = await Promise.all([
-    getAuthoritativeModels(env, traceId),
-    getSlackSettings(env, traceId),
-  ]);
-  return enabledModels ? resolveSlackLaunchSettings(env, userId, enabledModels, slackConfig) : null;
+  try {
+    const [enabledModels, slackConfig, prefs] = await Promise.all([
+      getAuthoritativeModels(env, traceId),
+      getAuthoritativeSlackSettings(env, traceId),
+      getAuthoritativeUserPreferences(env, userId),
+    ]);
+    if (!enabledModels || !slackConfig) return null;
+    const userPreferences = resolveUserPreferences(
+      prefs,
+      slackConfig.defaultModel ?? env.DEFAULT_MODEL,
+      slackConfig.harness
+    );
+    const modelSource =
+      userPreferences.modelOrigin === "app-home"
+        ? "app-home"
+        : slackConfig.defaultModel
+          ? "slack-default"
+          : "system-default";
+    return { enabledModels, slackConfig, userPreferences, modelSource };
+  } catch (error) {
+    log.warn("slack.launch_settings.unavailable", {
+      trace_id: traceId,
+      user_id: userId,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
 }
 
 export interface StartSessionOptions {
   target: SlackSessionTarget;
+  teamId?: string | null;
   channel: string;
   threadTs: string;
   messageText: string;
@@ -113,6 +119,7 @@ export async function startSessionAndSendPrompt(
 ): Promise<StartSessionResult | null> {
   const {
     target,
+    teamId,
     channel,
     threadTs,
     messageText,
@@ -146,42 +153,48 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const {
-    enabledModels,
-    slackConfig,
-    userPreferences: userPrefs,
-  } = providedLaunchSettings ?? (await loadSlackLaunchSettings(env, actor.userId, traceId));
-  // Whatever the caller asked for is only intent: a plan can be minutes or
-  // hours old by the time a deferred target selection reaches this point, so
-  // the enabled-model set is applied here, against the list just loaded.
-  const requestedDefaults = resolveInlinePromptOptions(
-    EMPTY_INLINE_PROMPT_OPTIONS,
-    launchPlan?.sessionDefaults ?? userPrefs,
-    enabledModels
-  );
-  if (!requestedDefaults.ok) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, requestedDefaults.error, {
+  const launchSettings =
+    providedLaunchSettings ??
+    (await loadAuthoritativeSlackLaunchSettings(env, actor.userId, traceId));
+  if (!launchSettings) {
+    await postMessage(env.SLACK_BOT_TOKEN, channel, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE, {
       thread_ts: threadTs,
     });
     return null;
   }
-  const sessionDefaults = requestedDefaults.turnPlan.effective;
+  const { enabledModels, slackConfig, userPreferences: userPrefs, modelSource } = launchSettings;
+  // Deferred plans may outlive a model's enablement. Refuse the selected model
+  // rather than substituting one the user never chose.
+  const sessionDefaults = normalizeModelSelection(launchPlan?.sessionDefaults ?? userPrefs);
   const { model, reasoningEffort } = sessionDefaults;
+  if (!enabledModels.includes(model)) {
+    const source = launchPlan ? "request" : modelSource;
+    log.info("slack.session.disabled_model_refused", { trace_id: traceId, model, source });
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      formatDisabledModelLaunchRefusal(model, source),
+      { thread_ts: threadTs }
+    );
+    return null;
+  }
   const differsFromUserDefaults = !sameModelSelection(
     sessionDefaults,
     normalizeModelSelection(userPrefs)
   );
-  // Overrides were resolved against the models enabled when the follow-up
-  // arrived, and against session defaults that may since have fallen back to
-  // a different model, so they are checked again against what will actually
-  // run. Done before the session exists so a rejection leaves nothing behind.
-  const firstPrompt = resolveInlinePromptOptions(
-    launchPlan?.promptOverrides ?? EMPTY_INLINE_PROMPT_OPTIONS,
-    sessionDefaults,
-    enabledModels
-  );
-  if (!firstPrompt.ok) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, firstPrompt.error, { thread_ts: threadTs });
+  // The harness is the user's App Home choice, else the workspace setting. A
+  // model it cannot run is refused, never moved to another harness, so a
+  // session always runs where the user expects.
+  const { harness } = userPrefs;
+  const incompatibility = checkHarnessCompatibility(harness, model);
+  if (incompatibility) {
+    log.info("slack.session.harness_model_refused", { trace_id: traceId, harness, model });
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      channel,
+      formatHarnessLaunchRefusal(incompatibility.message, harness),
+      { thread_ts: threadTs }
+    );
     return null;
   }
   const preferenceRepo = branchPreferenceRepo(target);
@@ -193,6 +206,8 @@ export async function startSessionAndSendPrompt(
 
   const session = await createSession(env, {
     target,
+    teamId,
+    harness,
     model,
     reasoningEffort,
     branch,
@@ -200,14 +215,25 @@ export async function startSessionAndSendPrompt(
     slackUserId: actor.userId,
     actorDisplayName: actor.displayName,
     actorEmail: actor.email,
+    directMessage: isDirectMessageChannel(channel),
   });
-  if (!session) {
-    await postMessage(
-      env.SLACK_BOT_TOKEN,
-      channel,
-      "Sorry, I couldn't create a session. Please try again.",
-      { thread_ts: threadTs }
-    );
+  if (!session || "error" in session) {
+    const failure = session?.error;
+    let message = "Sorry, I couldn't create a session. Please try again.";
+    if (
+      failure?.status === 403 &&
+      (failure.code === "not_member" ||
+        (failure.code === "session_action_denied" && failure.reasonCode === "not_member"))
+    ) {
+      message = "you are not a member of this channel's team";
+    } else if (
+      failure?.status === 409 &&
+      failure.code === "target_team_missing_grant" &&
+      failure.repository
+    ) {
+      message = `This channel's team does not have access to repository ${escapeMrkdwnText(failure.repository)}.`;
+    }
+    await postMessage(env.SLACK_BOT_TOKEN, channel, message, { thread_ts: threadTs });
     return null;
   }
 
@@ -216,8 +242,8 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     repoFullName: targetLabel(target),
-    model: firstPrompt.turnPlan.effective.model,
-    reasoningEffort: firstPrompt.turnPlan.effective.reasoningEffort,
+    model,
+    reasoningEffort,
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
@@ -232,10 +258,6 @@ export async function startSessionAndSendPrompt(
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,
-    // Normally empty — the session was just created with these settings. It is
-    // set only when recovering a stale thread, where the replacement keeps the
-    // thread's defaults and the follow-up's own flags stay a one-turn override.
-    ...firstPrompt.turnPlan.promptOverrides,
     channel,
     threadTs,
     traceId,
@@ -257,7 +279,7 @@ export async function startSessionAndSendPrompt(
     env,
     channel,
     threadTs,
-    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs)
+    buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
   );
   return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
 }

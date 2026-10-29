@@ -1,33 +1,16 @@
+import { updateAutomationRequestSchema } from "@open-inspect/shared/types/automations";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-const UPDATE_FIELDS = [
-  "name",
-  "instructions",
-  "scheduleCron",
-  "scheduleTz",
-  "model",
-  "reasoningEffort",
-  "harness",
-  "eventType",
-  "triggerConfig",
-  "repositories",
-  "environmentIds",
-  "providerSelections",
-] as const;
+const UPDATE_FIELDS = updateAutomationRequestSchema.keyof().options;
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}`);
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -37,10 +20,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
 
   const { id } = await params;
 
@@ -52,7 +33,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         body[field],
       ])
     );
-    const response = await controlPlaneUserFetch(`/automations/${id}`, {
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(automationBody),
     });
@@ -64,19 +45,32 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   }
 }
 
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const rejection = rejectMissingBrowserSessionCookie(request);
+  if (rejection) return rejection;
+
+  const { id } = await params;
+  try {
+    const body = await request.json();
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ userId: body.userId }),
+    });
+    return NextResponse.json(await response.json(), { status: response.status });
+  } catch (error) {
+    console.error("Failed to update automation executor:", error);
+    return NextResponse.json({ error: "Failed to update automation executor" }, { status: 500 });
+  }
+}
+
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { id } = await params;
 
   try {
-    const response = await controlPlaneUserFetch(`/automations/${id}`, {
+    const response = await controlPlaneUserFetch(`/automations/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
     const data = await response.json();

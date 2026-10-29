@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitIntoSlackSections } from "./sections";
+import { MARKDOWN_BLOCK_MAX_CHARS, splitIntoSlackSections } from "./sections";
 
 describe("splitIntoSlackSections", () => {
   it("preserves whitespace exactly across section boundaries", () => {
@@ -130,6 +130,17 @@ describe("splitIntoSlackSections", () => {
     for (const section of sections.slice(1)) {
       expect(section.startsWith("```python\n")).toBe(true);
     }
+  });
+});
+
+describe("one markdown block (maxSections = 1)", () => {
+  // The Slack completion reply is a single markdown block cut by this splitter; its
+  // truncation and fence balance are tested through the builder in completion/blocks.test.ts.
+  it("returns text within the cap unchanged and nothing for whitespace", () => {
+    expect(splitIntoSlackSections("## Short\n\n- a", MARKDOWN_BLOCK_MAX_CHARS, 1)).toEqual([
+      "## Short\n\n- a",
+    ]);
+    expect(splitIntoSlackSections("  \n ", MARKDOWN_BLOCK_MAX_CHARS, 1)).toEqual([]);
   });
 });
 

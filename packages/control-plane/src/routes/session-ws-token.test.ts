@@ -195,12 +195,17 @@ describe("GitHub browser attribution availability", () => {
     vi.spyOn(UserStore.prototype, "getUserById").mockResolvedValue(null);
     api = {
       listUserAccounts: vi.fn(async () => [
-        { providerId: "github", accountId: subject, userId: "user-1" },
+        { id: "github-account-1", providerId: "github", accountId: subject, userId: "user-1" },
       ]),
       getAccessToken: vi.fn(async () => ({ accessToken: "grant" })),
       refreshToken: vi.fn(),
       accountInfo: vi.fn(async () => ({
-        user: { id: subject },
+        account: {
+          id: "github-account-1",
+          providerId: "github",
+          accountId: subject,
+        },
+        user: { name: "Octo Cat" },
         data: {
           provider: "github",
           issuer: "https://github.com",
@@ -292,7 +297,12 @@ describe("GitHub browser attribution availability", () => {
   });
   it("rejects a mismatched verified profile", async () => {
     vi.mocked(api.accountInfo).mockResolvedValue({
-      user: { id: "other" },
+      account: {
+        id: "github-account-1",
+        providerId: "github",
+        accountId: "other",
+      },
+      user: { name: "Other" },
       data: {
         provider: "github",
         issuer: "https://github.com",

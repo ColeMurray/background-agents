@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 BOOT_PHASE_NAMES: Final[frozenset[str]] = frozenset(
-    {"starting", "sync", "setup", "start", "skills", "harness"}
+    {"starting", "sync", "setup", "start", "skills", "memory", "harness"}
 )
 BOOT_PHASE_STATUSES: Final[frozenset[str]] = frozenset({"started", "completed", "failed"})
 _PHASE_FIELDS: Final = ("warning", "repoOwner", "repoName", "elapsedMs", "detail")

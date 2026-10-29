@@ -76,6 +76,95 @@ describe("formatToolCall summaries", () => {
   });
 });
 
+describe("formatToolCall structured patch changes", () => {
+  it.each([undefined, null, "invalid", []])(
+    "keeps a fallback for unavailable changes (%j)",
+    (changes) => {
+      expect(formatToolCall(toolCall("apply_patch", { changes })).summary).toBe("patch");
+    }
+  );
+
+  it("summarizes the added file without putting its content in the label", () => {
+    const args = {
+      changes: [
+        {
+          path: "/workspace/background-agents/public/docs/internal/2026-10-07-slack-file-delivery-research.md",
+          kind: { type: "add" },
+          diff: "# Research: Delivering agent-generated files to Slack\n",
+        },
+      ],
+    };
+    const formatted = formatToolCall(toolCall("apply_patch", args));
+    expect(formatted.summary).toBe("Add 2026-10-07-slack-file-delivery-research.md");
+    expect(formatted.getDetails().args).toEqual(args);
+  });
+
+  it.each(["add", "update", "delete"])("summarizes a single %s operation", (operation) => {
+    const formatted = formatToolCall(
+      toolCall("apply_patch", {
+        changes: [{ path: "/repo/src/index.ts", kind: { type: operation }, diff: "content" }],
+      })
+    );
+    expect(formatted.summary).toBe(`${operation[0].toUpperCase()}${operation.slice(1)} index.ts`);
+  });
+
+  it("counts mixed operations and preserves rename details", () => {
+    const args = {
+      changes: [
+        { path: "/repo/new.ts", kind: { type: "add" }, diff: "added" },
+        {
+          path: "/repo/old.ts",
+          kind: { type: "update", movePath: "/repo/renamed.ts" },
+          diff: "updated",
+        },
+        { path: "/repo/removed.ts", kind: { type: "delete" }, diff: "removed" },
+      ],
+    };
+    const formatted = formatToolCall(toolCall("apply_patch", args));
+    expect(formatted.summary).toBe("3 files (1 updated, 1 added, 1 deleted)");
+    expect(formatted.getDetails().args).toEqual(args);
+  });
+
+  it("ignores incomplete and unknown changes", () => {
+    const changes: unknown[] = [
+      null,
+      "invalid",
+      {},
+      { path: "/repo/file" },
+      { path: "/repo/file", kind: "add" },
+      { path: "/repo/file", kind: { type: "unknown" } },
+      { path: " ", kind: { type: "add" } },
+    ];
+    expect(formatToolCall(toolCall("apply_patch", { changes })).summary).toBe("patch");
+    changes.push({ path: "/repo/file", kind: { type: "add" } });
+    expect(formatToolCall(toolCall("apply_patch", { changes })).summary).toBe("Add file");
+  });
+
+  it("preserves existing patchText summaries and gives explicit patch text precedence", () => {
+    const patchText =
+      "*** Begin Patch\n*** Update File: /repo/existing.ts\n@@\n-old\n+new\n*** End Patch";
+    expect(formatToolCall(toolCall("apply_patch", { patchText })).summary).toBe(
+      "Update existing.ts"
+    );
+    expect(
+      formatToolCall(
+        toolCall("apply_patch", {
+          patchText,
+          changes: [{ path: "/repo/ignored.ts", kind: { type: "add" } }],
+        })
+      ).summary
+    ).toBe("Update existing.ts");
+  });
+
+  it("keeps mixed legacy patch summaries", () => {
+    const patchText =
+      "*** Begin Patch\n*** Add File: new.ts\n+content\n*** Update File: old.ts\n@@\n-old\n+new\n*** Delete File: removed.ts\n*** End Patch";
+    expect(formatToolCall(toolCall("apply_patch", { patchText })).summary).toBe(
+      "3 files (1 updated, 1 added, 1 deleted)"
+    );
+  });
+});
+
 describe("formatToolCall Claude Agent tool names", () => {
   it("matches capitalized tool names and snake_case argument keys", () => {
     expect(formatToolCall(toolCall("Read", { file_path: "/repo/src/index.ts" }))).toMatchObject({

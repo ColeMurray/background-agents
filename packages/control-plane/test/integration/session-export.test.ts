@@ -1,8 +1,18 @@
-import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createExecutionContext, env } from "cloudflare:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import { SessionExportStore } from "../../src/db/session-export-store";
 import { MAX_INCLUDED_BYTES_PER_SESSION } from "../../src/session/contracts";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO, seedEvents, seedMessage, serviceFetch } from "./helpers";
+import {
+  initSession,
+  queryDO,
+  seedEvents,
+  seedMessage,
+  serviceFetch,
+  serviceRequestHeaders,
+} from "./helpers";
 
 type ExportLine = Record<string, unknown>;
 
@@ -41,7 +51,10 @@ function largeTokenEvents(prefix: string, count: number, bytes: number, createdA
 
 describe("GET /sessions/export with include", () => {
   beforeEach(cleanD1Tables);
-  afterEach(cleanD1Tables);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await cleanD1Tables();
+  });
 
   it("denies a signed-in member without sessions.export", async () => {
     const response = await serviceFetch("https://cp.test/sessions/export", {
@@ -53,6 +66,32 @@ describe("GET /sessions/export with include", () => {
       code: "permission_required",
       permission: "sessions.export",
     });
+  });
+
+  it("denies a session reader without sessions.export before reading its trace", async () => {
+    const { sessionName } = await initSession();
+    const sessionUrl = `https://cp.test/sessions/${sessionName}`;
+    expect((await serviceFetch(sessionUrl, { initialUserRole: "viewer" })).status).toBe(200);
+
+    const url = `${sessionUrl}/export`;
+    const platform = createCloudflareEnv(env);
+    const getExport = vi.spyOn(SessionExportStore.prototype, "get");
+    const dispatch = vi.spyOn(platform, "SESSION");
+    const response = await handleControlPlaneHttp(
+      new Request(url, {
+        headers: await serviceRequestHeaders(url, { initialUserRole: "viewer" }),
+      }),
+      platform,
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_required",
+      permission: "sessions.export",
+    });
+    expect(getExport).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("filters hidden bulk rows before reading included events", async () => {

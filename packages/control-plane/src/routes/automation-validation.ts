@@ -2,7 +2,11 @@
  * Request validation and target selection shared by the automation create and update routes.
  */
 
-import { hasValidSlackChannelCondition, triggerSources } from "@open-inspect/shared/triggers";
+import {
+  hasSlackActorIncludeList,
+  hasValidSlackChannelCondition,
+  triggerSources,
+} from "@open-inspect/shared/triggers";
 import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
 import {
   createAutomationRequestSchema,
@@ -11,7 +15,12 @@ import {
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import { type AutomationRepositoryInsert } from "../db/automation-store";
 import { EnvironmentStore } from "../db/environments";
-import { type RequestContext, resolveRepoOrError } from "./shared";
+import { TeamMembershipStore } from "../db/team-memberships";
+import { checkEnvironmentAccess, type SessionViewer } from "@open-inspect/shared";
+import { type RequestContext, error, json, resolveRepoOrError } from "./shared";
+import type { RepositoryAuthorizationTarget } from "./workspace-repository-authorization";
+import { resolveActiveTeam } from "./team-ownership";
+import { automationActionDeniedBody } from "../authorization/owned-resource-admission";
 import { authorizeSessionTarget } from "./session-target-authorization";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -111,18 +120,84 @@ export function resolveReasoningEffort(
 type NormalizedRepositoryInput = NonNullable<CreateAutomationBody["repositories"]>[number];
 
 type RepositorySelectionRequest =
-  | { kind: "unchanged" }
-  | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
+  { kind: "unchanged" } | { kind: "replace"; repositories: NormalizedRepositoryInput[] };
 
 /**
- * Thrown when selection semantics cannot be satisfied. Route handlers catch it
- * and answer 400 while request shape validation remains in the shared schemas.
+ * Selection validation failures carry their HTTP status; request shape
+ * validation remains in the shared schemas.
  */
 export class TargetSelectionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly status: 400 | 403 | 409 = 400,
+    readonly reasonCode?: string
+  ) {
     super(message);
     this.name = "TargetSelectionError";
   }
+
+  response(): Response {
+    return json(
+      {
+        error: this.message,
+        ...(this.reasonCode ? { code: this.reasonCode, reason_code: this.reasonCode } : {}),
+      },
+      this.status
+    );
+  }
+}
+
+/** An automation's team, when it has one, must be active and include its executor. */
+export async function validateAutomationTeam(
+  ctx: RequestContext,
+  teamId: string | null,
+  executorUserId: string | null
+): Promise<Response | null> {
+  if (teamId === null) return null;
+  const team = await resolveActiveTeam(ctx, teamId);
+  if (team instanceof Response) return team;
+  return validateTeamExecutor(ctx.db, teamId, executorUserId);
+}
+
+/** A team-owned automation's executor must be a canonical member of that team. */
+export async function validateTeamExecutor(
+  db: SqlDatabase,
+  teamId: string,
+  executorUserId: string | null
+): Promise<Response | null> {
+  if (!executorUserId) {
+    return json({ error: "Canonical executor required", code: "executor_required" }, 409);
+  }
+  if (!(await new TeamMembershipStore(db).listForUser(executorUserId)).has(teamId)) {
+    return json(automationActionDeniedBody("not_member", "Executor must belong to the team"), 403);
+  }
+  return null;
+}
+
+export async function validateAutomationExecutor(
+  db: SqlDatabase,
+  userId: string
+): Promise<Response | null> {
+  const user = z
+    .object({ suspended_at: z.number().nullable(), role_id: z.string().nullable() })
+    .nullable()
+    .parse(
+      await db
+        .prepare(
+          `SELECT u.suspended_at, a.role_id FROM users u
+       LEFT JOIN user_role_assignments a ON a.user_id = u.id WHERE u.id = ?`
+        )
+        .bind(userId)
+        .first()
+    );
+  if (!user) return error("User not found", 404);
+  if (user.suspended_at !== null || user.role_id === null) {
+    return json(
+      { error: "User inactive", code: "user_inactive", reason_code: "user_inactive" },
+      409
+    );
+  }
+  return null;
 }
 
 /**
@@ -157,8 +232,7 @@ export function validateTargetCounts(
 }
 
 type EnvironmentSelectionRequest =
-  | { kind: "unchanged" }
-  | { kind: "replace"; environmentIds: string[] };
+  { kind: "unchanged" } | { kind: "replace"; environmentIds: string[] };
 
 /**
  * Select the environments from an already-parsed create/update body (design
@@ -173,22 +247,63 @@ export function getEnvironmentSelection(body: {
 }
 
 /**
- * Verify every selected environment exists — a selection must not silently
- * point at deleted environments.
+ * Verify selected environments are visible, belong to the automation's team, and
+ * admit use for replacements. Stored selections still supply the owning team's grant check.
  *
- * @throws TargetSelectionError naming every missing environment.
+ * @throws TargetSelectionError naming every missing or invisible environment.
  */
 export async function resolveEnvironmentSelection(
   db: SqlDatabase,
-  environmentIds: string[]
-): Promise<void> {
-  if (environmentIds.length === 0) return;
+  environmentIds: string[],
+  ownerTeamId: string | null,
+  viewer: SessionViewer,
+  requireUse = true
+): Promise<RepositoryAuthorizationTarget[]> {
+  if (environmentIds.length === 0) return [];
   const store = new EnvironmentStore(db);
-  const found = await Promise.all(environmentIds.map((id) => store.getById(id)));
+  const found = await Promise.all(
+    environmentIds.map(async (id) => {
+      const environment = await store.getById(id);
+      if (!environment) return null;
+      const access = checkEnvironmentAccess(
+        viewer,
+        { ownerTeamId: environment.owner_team_id },
+        "use"
+      );
+      if (!access.allowed && access.reason === "not_member") return null;
+      return { environment, access };
+    })
+  );
   const missing = environmentIds.filter((_, index) => !found[index]);
   if (missing.length > 0) {
     throw new TargetSelectionError(`Environment not found: ${missing.join(", ")}`);
   }
+  const repositories: RepositoryAuthorizationTarget[] = [];
+  for (const target of found) {
+    if (!target) continue;
+    const { environment, access } = target;
+    // Unchanged selections retain their use-permission exemption, not a visibility exemption.
+    if (!access.allowed && (requireUse || access.reason !== "missing_permission")) {
+      throw new TargetSelectionError("Environment use denied", 403, access.reason);
+    }
+    if (environment.owner_team_id !== ownerTeamId) {
+      throw new TargetSelectionError(
+        "Environment must belong to the automation's owner team",
+        409,
+        "environment_team_mismatch"
+      );
+    }
+    if (ownerTeamId !== null) {
+      repositories.push(
+        ...(await store.getRepositoriesForEnvironment(environment.id)).map((repository) => ({
+          owner: repository.repo_owner,
+          name: repository.repo_name,
+          repoId: repository.repo_id,
+        }))
+      );
+    }
+  }
+  return repositories;
 }
 
 /**
@@ -249,11 +364,23 @@ export function extractSlackChannels(triggerConfig: TriggerConfig | null | undef
   return [];
 }
 
+/** Reject source-specific trigger options set on a trigger of another type. */
+export function getTriggerOptionsError(
+  triggerType: AutomationTriggerType,
+  triggerConfig: TriggerConfig | null | undefined
+): string | null {
+  if (triggerConfig?.slack !== undefined && triggerType !== "slack_event") {
+    return "triggerConfig.slack is only valid for slack_event triggers";
+  }
+  return null;
+}
+
 /**
  * Validate a slack_event trigger config before persistence. It must be scoped to
  * an explicit channel set (net-new validation; the engine otherwise skips
  * condition validation entirely when none are present). A text_match is optional
  * — without one the automation fires on every message in the watched channel.
+ * Accepting bot messages also requires a Slack User include list.
  * Returns an error message, or null when valid.
  */
 export function validateSlackTriggerConfig(
@@ -262,6 +389,9 @@ export function validateSlackTriggerConfig(
   const conditions = triggerConfig?.conditions ?? [];
   if (!hasValidSlackChannelCondition(conditions)) {
     return "slack_event triggers require a slack_channel condition";
+  }
+  if (triggerConfig?.slack?.includeBotMessages && !hasSlackActorIncludeList(conditions)) {
+    return "slack_event triggers that include bot messages require a slack_actor include condition";
   }
   return null;
 }

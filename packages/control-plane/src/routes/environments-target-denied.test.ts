@@ -7,6 +7,7 @@ import {
   type EnvironmentRepositoryRow,
   type EnvironmentRow,
 } from "../db/environments";
+import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
@@ -80,6 +81,10 @@ describe("environment target denials", () => {
     vi.clearAllMocks();
     batch.mockResolvedValue([]);
     vi.spyOn(TeamStore.prototype, "isActive").mockResolvedValue(true);
+    // Team-owned environment management admits only owner-team leads.
+    vi.spyOn(TeamMembershipStore.prototype, "listForUser").mockResolvedValue(
+      new Map([["team_alpha", "lead"]])
+    );
     vi.spyOn(EnvironmentStore.prototype, "getByName").mockResolvedValue(null);
     vi.spyOn(EnvironmentStore.prototype, "getById").mockResolvedValue(existing);
     vi.spyOn(EnvironmentStore.prototype, "getRepositoriesForEnvironment").mockResolvedValue(

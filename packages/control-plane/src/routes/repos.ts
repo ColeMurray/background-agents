@@ -7,11 +7,8 @@ import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { repositoryParams } from "./repository-params";
 import { RepoMetadataStore } from "../db/repo-metadata";
-import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
-import { TeamMembershipStore } from "../db/team-memberships";
-import { TeamStore } from "../db/teams";
-import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import type { Env } from "../types";
+import { resolveCatalogScope } from "./team-ownership";
 import type { SqlDatabase } from "../db/sql-database";
 import {
   repoMetadataSchema,
@@ -41,7 +38,7 @@ export { REPOS_CACHE_KEY, reposCacheIdentity } from "../repos/cache";
 const logger = createLogger("router:repos");
 
 const REPOS_CACHE_FRESH_MS = 5 * 60 * 1000;
-const REPOS_CACHE_KV_TTL_SECONDS = 3600;
+const REPOS_CACHE_KV_TTL_MS = 3600 * 1000;
 
 type ReposRefreshResult =
   | { ok: true; repos: EnrichedRepository[]; cachedAt: string }
@@ -112,7 +109,7 @@ async function refreshReposCache(
     await cacheStore.put(
       REPOS_CACHE_KEY,
       JSON.stringify({ repos: enrichedRepos, cachedAt, scmIdentity, freshUntil }),
-      { expirationTtl: REPOS_CACHE_KV_TTL_SECONDS }
+      { ttlMs: REPOS_CACHE_KV_TTL_MS }
     );
     logger.info("Repos cache refreshed", {
       trace_id: traceId,
@@ -146,36 +143,9 @@ async function handleListRepos(
   ctx: RequestContext
 ): Promise<Response> {
   const teamId = new URL(request.url).searchParams.get("teamId");
-  let grants: Awaited<ReturnType<TeamRepositoryGrantStore["listForTeam"]>> | undefined;
-  if (teamId !== null) {
-    const userId = ctx.authorization?.userId;
-    const roleKey = ctx.authorization?.role.key;
-    const allowed =
-      !!userId &&
-      (await new TeamStore(ctx.db).isActive(teamId)) &&
-      (roleKey === "owner" ||
-        roleKey === "administrator" ||
-        (await new TeamMembershipStore(ctx.db).listForUser(userId)).has(teamId));
-    if (!allowed) {
-      const response = error("Team not found", 404);
-      await auditRouteAuthorizationDecision({
-        ctx,
-        method: request.method,
-        path: "/repos",
-        response,
-        teamId,
-        decision: {
-          kind: "denied",
-          reasonCode: "team_not_visible",
-          reason: "Team not found",
-          requirements: [{ kind: "team", teamIdParam: "teamId", need: "member" }],
-          effectivePermissions: [],
-        },
-      });
-      return response;
-    }
-    grants = await new TeamRepositoryGrantStore(ctx.db).listForTeam(teamId);
-  }
+  const scope = await resolveCatalogScope(request, ctx, teamId, "/repos");
+  if (scope instanceof Response) return scope;
+  const grants = scope?.grants;
   const filterRepos = (repos: EnrichedRepository[]) => {
     if (!grants || grants.some((grant) => grant.grant_kind === "installation")) return repos;
     const ids = new Set(grants.map((grant) => grant.repo_external_id));
@@ -345,7 +315,7 @@ async function handleListBranches(
   _request: Request,
   env: Env,
   params: { owner: string; name: string },
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const repository = repositoryParams(params);
   if (repository instanceof Response) return repository;
@@ -353,8 +323,15 @@ async function handleListBranches(
 
   try {
     const provider = createRouteSourceControlProvider(env);
-    const branches = await provider.listBranches({ owner, name });
-    return json({ branches });
+    const result = await provider.listBranches(
+      { owner, name },
+      {
+        backgroundTasks: ctx.executionCtx,
+        metrics: ctx.metrics,
+        traceId: ctx.trace_id,
+      }
+    );
+    return json(result);
   } catch (e) {
     if (e instanceof SourceControlProviderError && e.errorType === "permanent" && !e.httpStatus) {
       return error("SCM provider not configured", 500);

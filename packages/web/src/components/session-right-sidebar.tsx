@@ -27,6 +27,7 @@ import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { ManagedSkillsSection } from "./sidebar/managed-skills-section";
+import { MemoriesSection } from "./sidebar/memories-section";
 import { BudgetSection } from "./sidebar/budget-section";
 import { DetailsSection } from "./sidebar/details-section";
 import type { SessionCapabilities } from "@/lib/session-capabilities";
@@ -40,6 +41,7 @@ import { sessionActionErrorMessage } from "@/lib/session-action-error";
 import { toast } from "sonner";
 import type { SessionScopeControls } from "@/lib/session-scope";
 import { SessionVisibilityControl } from "./session-visibility-control";
+import { SessionScopeRefreshNotice } from "./session-scope-provider";
 import { CollaboratorsSection } from "./sidebar/collaborators-section";
 
 interface SessionRightSidebarProps {
@@ -182,7 +184,11 @@ export function SessionRightSidebarContent({
       // Trace read and stream failures arrive as NDJSON records inside a 200 response.
       const failed = (await blob.text()).split("\n").some((line) => {
         if (!line) return false;
-        const { type } = JSON.parse(line) as { type?: unknown };
+        const record: unknown = JSON.parse(line);
+        if (typeof record !== "object" || record === null || Array.isArray(record)) {
+          throw new Error("Invalid trace record");
+        }
+        const type = "type" in record ? record.type : undefined;
         return type === "session_error" || type === "error";
       });
       if (failed) throw new Error("Trace export failed");
@@ -329,13 +335,14 @@ export function SessionRightSidebarContent({
                 />
               </CollapsibleSection>
             )}
-            {scope && capabilities.changeVisibility && (
+            {scope && (
               <SessionVisibilityControl
                 {...scope}
                 sessionId={sessionId}
                 canChangeVisibility={capabilities.changeVisibility}
               />
             )}
+            {scope && <SessionScopeRefreshNotice />}
             {scope?.visibility === "private" && capabilities.manageCollaborators && (
               <CollaboratorsSection
                 {...scope}
@@ -344,6 +351,7 @@ export function SessionRightSidebarContent({
               />
             )}
             <ManagedSkillsSection sessionId={sessionState.id} />
+            <MemoriesSection sessionId={sessionState.id} />
             {(!presenceSynced || participants.length > 0) && (
               <DetailsSection title="Participants">
                 <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />

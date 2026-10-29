@@ -29,8 +29,7 @@ export const SLACK_PAGINATION_TIMEOUT_MS = 30_000;
  * validated at the boundary cannot drift apart.
  */
 export type SlackEnvelope<T = object> =
-  | ({ ok: true } & T)
-  | { ok: false; error: string; retryAfter?: number };
+  ({ ok: true } & T) | { ok: false; error: string; retryAfter?: number };
 
 const slackFailureSchema = z.object({
   ok: z.literal(false),
@@ -403,6 +402,8 @@ export function authTest(token: string): Promise<SlackEnvelope<SlackAuthTestResu
 const slackChannelInfoSchema = z.object({
   id: z.string(),
   name: z.string(),
+  is_member: z.boolean().optional(),
+  is_ext_shared: z.boolean().optional(),
   topic: z.object({ value: z.string() }).optional(),
   purpose: z.object({ value: z.string() }).optional(),
 });

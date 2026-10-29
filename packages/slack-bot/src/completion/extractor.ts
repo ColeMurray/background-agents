@@ -22,16 +22,19 @@ export async function extractAgentResponse(
   env: Env,
   sessionId: string,
   messageId: string,
+  channel: string,
   traceId?: string
 ): Promise<AgentResponse> {
   return sharedExtract(
     {
       fetcher: env.CONTROL_PLANE,
       auth: resolveOutboundCredential("slack-bot", env),
+      readPurpose: "slack-post",
       log,
     },
     sessionId,
     messageId,
-    traceId
+    traceId,
+    `slack:${channel}`
   );
 }

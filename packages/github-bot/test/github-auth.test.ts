@@ -3,6 +3,7 @@ import {
   generateAppJwt,
   generateInstallationToken,
   postReaction,
+  postIssueComment,
   checkSenderPermission,
   GITHUB_API_REQUEST_TIMEOUT_MS,
 } from "../src/github-auth";
@@ -230,6 +231,52 @@ describe("generateInstallationToken", () => {
     timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
 
     await expect(tokenPromise).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe("postIssueComment", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("posts the body with the installation token and configured User-Agent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+    const url = "https://api.github.com/repos/acme/widgets/issues/42/comments";
+
+    await expect(
+      postIssueComment("installation-token", url, "Not a member", "Acme Bot")
+    ).resolves.toBe(true);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(url, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer installation-token",
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Acme Bot",
+      },
+      body: JSON.stringify({ body: "Not a member" }),
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("returns false when a stalled comment reaches its deadline", async () => {
+    const timeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    stalledFetch();
+
+    const resultPromise = postIssueComment("tok", "https://api.github.com/test", "Not a member");
+    timeout.abort(new DOMException("deadline exceeded", "TimeoutError"));
+
+    await expect(resultPromise).resolves.toBe(false);
     expect(timeoutSpy).toHaveBeenCalledWith(GITHUB_API_REQUEST_TIMEOUT_MS);
   });
 });

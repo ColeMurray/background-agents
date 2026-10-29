@@ -2,9 +2,8 @@
 Unit tests for OpenCodeClient transport seams exposed by the extraction.
 
 SSE frame parsing and end-to-end streaming stay covered by test_bridge_sse.py;
-these tests target the plain request methods (create_session / session_exists /
-post_prompt / request_stop / get_messages) and the events() context manager
-against a fake HTTP transport.
+these tests target stop/idle deadlines, HTTP pool ownership, and the events()
+context manager against a fake HTTP transport.
 """
 
 import asyncio
@@ -33,27 +32,6 @@ def make_client(http_client: AsyncMock) -> OpenCodeClient:
         base_url=BASE_URL,
         log=MagicMock(),
     )
-
-
-class TestPostPrompt:
-    async def test_posts_body_to_prompt_async_endpoint(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(204)
-        body = {"parts": [{"type": "text", "text": "hi"}]}
-
-        await make_client(http_client).post_prompt(SESSION_ID, body)
-
-        assert http_client.post.await_count == 1
-        args, kwargs = http_client.post.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}/prompt_async"
-        assert kwargs["json"] == body
-
-    async def test_raises_on_error_status(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(500, text="boom")
-
-        with pytest.raises(RuntimeError, match="Async prompt failed: 500 - boom"):
-            await make_client(http_client).post_prompt(SESSION_ID, {"parts": []})
 
 
 class TestRequestStop:
@@ -209,25 +187,6 @@ class TestWaitUntilIdle:
         assert stopped is False
 
 
-class TestGetMessages:
-    async def test_returns_parsed_message_list(self):
-        messages = [{"info": {"id": "oc-msg-1", "role": "assistant"}, "parts": []}]
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(200, messages)
-
-        result = await make_client(http_client).get_messages(SESSION_ID)
-
-        assert result == messages
-        args, _ = http_client.get.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}/message"
-
-    async def test_returns_none_on_error_status(self):
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(500)
-
-        assert await make_client(http_client).get_messages(SESSION_ID) is None
-
-
 class TestPoolOwnership:
     async def test_aclose_leaves_injected_pool_open(self):
         pool = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
@@ -247,42 +206,6 @@ class TestPoolOwnership:
         assert client._client() is pool
         await client.aclose()
         assert pool.is_closed
-
-
-class TestCreateSession:
-    async def test_returns_created_session_id(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(200, {"id": "oc-new-session"})
-
-        session_id = await make_client(http_client).create_session()
-
-        assert session_id == "oc-new-session"
-        args, kwargs = http_client.post.await_args
-        assert args[0] == f"{BASE_URL}/session"
-        assert kwargs["json"] == {}
-
-    async def test_raises_on_error_status(self):
-        http_client = AsyncMock()
-        http_client.post.return_value = MockResponse(500, {})
-
-        with pytest.raises(httpx.HTTPStatusError):
-            await make_client(http_client).create_session()
-
-
-class TestSessionExists:
-    async def test_true_on_200(self):
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(200, {"id": SESSION_ID})
-
-        assert await make_client(http_client).session_exists(SESSION_ID) is True
-        args, _ = http_client.get.await_args
-        assert args[0] == f"{BASE_URL}/session/{SESSION_ID}"
-
-    async def test_false_on_non_200(self):
-        http_client = AsyncMock()
-        http_client.get.return_value = MockResponse(404)
-
-        assert await make_client(http_client).session_exists(SESSION_ID) is False
 
 
 class MockSSEStream:

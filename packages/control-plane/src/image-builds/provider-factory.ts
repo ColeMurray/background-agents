@@ -1,15 +1,18 @@
 import {
+  createBoatRestClientFromEnv,
   createDaytonaRestClientFromEnv,
   createSandboxProviderFromEnv,
+  resolveBoatDefaultMachineType,
 } from "../sandbox/provider-factory";
 import { resolveScmProviderFromEnv } from "../source-control";
 import type { Env } from "../types";
+import { BoatImageBuildAdapter } from "./boat-adapter";
+import { BoatImageBuildResources } from "./boat-build-resources";
 import { DaytonaImageBuildAdapter } from "./daytona-adapter";
 import { DaytonaImageBuildResources } from "./daytona-build-resources";
 import { E2BImageBuildAdapter } from "./e2b-adapter";
 import { ModalImageBuildAdapter } from "./modal-adapter";
 import type { ImageBuildProvider } from "./model";
-import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
 import type { ImageBuildAdapter } from "./types";
 import { VercelImageBuildAdapter } from "./vercel-adapter";
 
@@ -41,14 +44,20 @@ class EnvImageBuildAdapterFactory implements ImageBuildAdapterFactory {
         return new ModalImageBuildAdapter(createSandboxProviderFromEnv(this.env, provider));
       case "vercel":
         return new VercelImageBuildAdapter(createSandboxProviderFromEnv(this.env, "vercel"));
-      case "opencomputer":
-        return new OpenComputerImageBuildAdapter(
-          createSandboxProviderFromEnv(this.env, "opencomputer", {
-            requireOpenComputerTemplate: operation === "start",
-          })
-        );
       case "e2b":
         return new E2BImageBuildAdapter(createSandboxProviderFromEnv(this.env, "e2b"));
+      case "boat":
+        if (operation === "start" && !this.env.BOAT_BASE_SNAPSHOT) {
+          throw new Error("BOAT_BASE_SNAPSHOT is required to start a Boat image build");
+        }
+        return new BoatImageBuildAdapter(
+          new BoatImageBuildResources(createBoatRestClientFromEnv(this.env), {
+            scmProvider: resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
+            deploymentName: this.env.DEPLOYMENT_NAME,
+            defaultMachineType: resolveBoatDefaultMachineType(this.env),
+            baseSnapshot: this.env.BOAT_BASE_SNAPSHOT,
+          })
+        );
       case "daytona":
         return new DaytonaImageBuildAdapter(
           new DaytonaImageBuildResources(

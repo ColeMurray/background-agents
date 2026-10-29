@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import type { SessionViewer } from "@open-inspect/shared";
 import type { TeamsEnforcementMode } from "../authorization/teams-enforcement";
 
@@ -26,7 +27,7 @@ export function visibleSessionsPredicate(
          WHERE tm.team_id = ${alias}.owner_team_id AND tm.user_id = ?)) )`
     : `${alias}.visibility != 'private'`;
   const params: unknown[] = teamsEnforced
-    ? [viewer.roleKey === "owner" || viewer.roleKey === "administrator" ? 1 : 0, viewer.userId]
+    ? [isWorkspaceAdmin(viewer.roleKey) ? 1 : 0, viewer.userId]
     : [];
   if (options.excludePrivate) {
     return {

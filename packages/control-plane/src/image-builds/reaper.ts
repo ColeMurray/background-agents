@@ -198,9 +198,23 @@ export class ImageBuildReaper {
         // Finding nothing under the reserved name is not yet evidence that
         // nothing was produced: the record can appear well after the capture
         // was accepted. Only once the source it reads has certainly outlived
-        // its hard lifetime can a later artifact no longer arrive, which is
-        // the same bound an unbound create intent settles on.
-        if (outcome.type === "absent" && now - row.created_at <= DEFAULT_STALE_BUILD_MAX_AGE_MS) {
+        // its hard lifetime can a later artifact no longer arrive.
+        //
+        // The obligation therefore survives while either bound on that
+        // lifetime still holds. `created_at` is the estimate an unbound
+        // create intent settles on, anchored at registration; the row's
+        // deadline is the exact bound, fixed against the source's remaining
+        // lifetime when the capture was reserved. A build dispatched later
+        // than the age rule's registration grace allows holds a live deadline
+        // past it, and clearing the reference there would drop the only
+        // handle to a capture still running. A row that recorded no deadline
+        // is treated as already exhausted, so the estimate alone decides
+        // exactly as before.
+        if (
+          outcome.type === "absent" &&
+          (now - row.created_at <= DEFAULT_STALE_BUILD_MAX_AGE_MS ||
+            now < (row.provider_operation_deadline_at ?? 0))
+        ) {
           this.retainOperation(row, result, ctx, now, "capture_may_still_be_running");
           return;
         }

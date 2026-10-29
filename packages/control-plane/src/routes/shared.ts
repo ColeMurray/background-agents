@@ -9,8 +9,9 @@ import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
+import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
+import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -22,32 +23,25 @@ import {
 export type { AutomationRouteAdmission, RequestContext } from "../http/request-context";
 export { error, HttpError, json } from "../http/responses";
 
-/** Profile data a route can extract from an already verified service request. */
-export interface ServiceActorProfileClaims {
-  displayName?: string;
-  email?: string;
-  avatarUrl?: string;
-}
-
 /**
- * Outcome of preparing a route's actor claims before identity is finalized.
- * A rejected body ends admission with the route's own response, so no user,
- * identity, or assignment is written for a request the handler would refuse.
+ * Outcome of preparing a route's actor claims. For an unknown actor a rejected
+ * body ends admission with the route's own response, so no user, identity, or
+ * assignment is written for a request the handler would refuse; a known
+ * actor's request continues to the handler with nothing written.
  */
 export type ServiceActorClaimsResult =
-  | { kind: "claims"; claims: ServiceActorProfileClaims }
-  | { kind: "rejected"; response: Response };
+  { kind: "claims"; claims: ActorProfileClaims } | { kind: "rejected"; response: Response };
 
 /** One permission or resource-admission requirement for an active user. */
 export type RouteAuthorizationRequirement =
   | { kind: "permission"; permission: PermissionId }
   | {
       kind: "automation";
-      operation: "manage" | "trigger";
+      operation: "read" | "manage" | "trigger";
       automationIdParam: string;
     }
-  | { kind: "team"; teamIdParam: string; need: keyof TeamCapabilities | "read" | "member" }
-  | { kind: "team"; teamIdParam: string; need: "removeMember"; targetUserIdParam: string }
+  | TeamAdmissionRequirement
+  | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
 type BotServiceName = Exclude<ServiceName, "web">;
@@ -138,8 +132,10 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "sessions.lifecycle",
   "sessions.sandbox_access",
   "skill_profiles.manage_own",
+  "memories.manage_own",
   "skills.manage",
   "workspace.members.manage",
+  "workspace.members.merge",
   "workspace.transfer_ownership",
 ]);
 
@@ -148,6 +144,8 @@ function auditsAllowedRequirement(requirement: RouteAuthorizationRequirement): b
   if (requirement.kind === "team") {
     return requirement.need !== "read" && requirement.need !== "member";
   }
+  if (requirement.kind === "automation") return requirement.operation !== "read";
+  if (requirement.kind === "environment") return requirement.need !== "read";
   if (requirement.kind === "permission") {
     return AUDITED_ALLOWED_PERMISSIONS.has(requirement.permission);
   }
@@ -175,21 +173,44 @@ export function requirePermission(
   };
 }
 
-/** Require admission to manage or trigger the automation identified by a path parameter. */
+/** Require admission to the automation identified by a path parameter. */
 export function requireAutomation(
-  operation: "manage" | "trigger",
+  operation: "read" | "manage" | "trigger",
   automationIdParam = "id"
 ): RouteAuthorization {
   return {
     kind: "active-user",
     allOf: [{ kind: "automation", operation, automationIdParam }],
-    service: { kind: "deny" },
-    auditAllowed: true,
+    service:
+      operation === "read"
+        ? { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] }
+        : { kind: "deny" },
+    auditAllowed: operation !== "read",
+  };
+}
+
+export function environmentRequirement(
+  need: "read" | "manage" | "use",
+  idParam = "id"
+): Extract<RouteAuthorizationRequirement, { kind: "environment" }> {
+  return { kind: "environment", idParam, need };
+}
+
+export function requireEnvironment(
+  need: "read" | "manage" | "use",
+  idParam = "id",
+  options?: { actorlessGrants?: readonly ActorlessServiceGrant[] }
+): RouteAuthorization {
+  return {
+    kind: "active-user",
+    allOf: [environmentRequirement(need, idParam)],
+    service: need === "manage" ? { kind: "deny" } : { kind: "actor", ...options },
+    auditAllowed: need !== "read",
   };
 }
 
 export function requireTeam(
-  need: keyof TeamCapabilities | "read" | "member",
+  need: Exclude<TeamAdmissionNeed, "removeMember">,
   options?: { teamIdParam?: string; auditAllowed?: boolean }
 ): Extract<RouteAuthorization, { kind: "active-user" }> {
   const requirement: RouteAuthorizationRequirement = {
@@ -321,8 +342,9 @@ export interface RouteAdmissionPolicy extends RoutePolicy {
   /**
    * Extract profile claims asserted by the trusted service that owns this
    * route. Authentication has already verified the exact request body before
-   * this hook runs. Invalid route input returns the route's own rejection so
-   * admission stops before any identity is written.
+   * this hook runs. Claims enroll an unknown actor and fill the missing profile
+   * of a known one. Invalid route input returns the route's own rejection so
+   * nothing is written.
    */
   serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
 }
@@ -436,4 +458,18 @@ export async function resolveRepoOrError(
     throw new HttpError("Repository is not installed for the GitHub App", 404);
   }
   return resolved;
+}
+
+/** Installed-repository resolution bound to one request, for policies that receive it as a dependency. */
+export class InstalledRepositoryResolver {
+  constructor(
+    private readonly env: Env,
+    private readonly ctx: RequestContext,
+    private readonly logger: Logger
+  ) {}
+
+  /** The repository's stable identity; throws an HttpError when it is not installed. */
+  resolve(owner: string, name: string): Promise<RepositoryAccessResult> {
+    return resolveRepoOrError(this.env, owner, name, this.ctx, this.logger);
+  }
 }

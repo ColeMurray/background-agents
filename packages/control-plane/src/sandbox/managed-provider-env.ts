@@ -3,6 +3,7 @@ import {
   type SessionProviderAuthMode,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 
 const CONTROL_PLANE_OAUTH_KEYS = new Set([
   "OPENAI_OAUTH_REFRESH_TOKEN",
@@ -19,6 +20,7 @@ const CONTROL_PLANE_OAUTH_KEYS = new Set([
 ]);
 
 interface ManagedProviderEnvOptions {
+  harness?: HarnessId;
   exposedSecrets: Record<string, string>;
   brokerSecrets: Record<string, string>;
   providerAuthModes: Record<SubscriptionProviderId, SessionProviderAuthMode>;
@@ -102,12 +104,20 @@ export function getProviderAuthenticationError(
 }
 
 export function prepareManagedProviderEnv({
+  harness,
   exposedSecrets,
   brokerSecrets,
   providerAuthModes,
 }: ManagedProviderEnvOptions): Record<string, string> {
   const env = Object.fromEntries(
-    Object.entries(exposedSecrets).filter(([key]) => !CONTROL_PLANE_OAUTH_KEYS.has(key))
+    Object.entries(exposedSecrets).filter(
+      ([key]) =>
+        !CONTROL_PLANE_OAUTH_KEYS.has(key) &&
+        (harness !== "codex" ||
+          (!key.startsWith("CODEX_") &&
+            !key.startsWith("OTEL_") &&
+            (!key.startsWith("OPENAI_") || key === "OPENAI_API_KEY")))
+    )
   );
 
   for (const provider of SUBSCRIPTION_PROVIDER_IDS) {

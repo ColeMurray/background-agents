@@ -6,13 +6,17 @@
  * list**) so an environments-fetch problem never blocks classification —
  * rules and channel associations targeting an environment are simply skipped,
  * like rules targeting an inaccessible repository.
+ * Channel catalogs instead require a current user and bypass all caches.
  */
 
 import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createCachedResource } from "./cached-resource";
-import { fetchControlPlaneJson } from "./control-plane";
+import { ControlPlaneRequestError, fetchControlPlaneJson } from "./control-plane";
+import { createLogger } from "../logger";
+
+const log = createLogger("environments");
 
 const environments = createCachedResource<Environment[]>({
   name: "environments",
@@ -38,7 +42,33 @@ const environments = createCachedResource<Environment[]>({
 /**
  * Fetch the workspace's environments from the control plane.
  */
-export async function getAvailableEnvironments(env: Env, traceId?: string): Promise<Environment[]> {
+export async function getAvailableEnvironments(
+  env: Env,
+  traceId?: string,
+  channelId?: string | null,
+  userId?: string
+): Promise<Environment[]> {
+  if (channelId) {
+    if (!userId) return [];
+    // Team membership and grants must be checked on every read.
+    try {
+      const body = await fetchControlPlaneJson(
+        env,
+        `/environments?channel=${encodeURIComponent(`slack:${channelId}`)}`,
+        traceId,
+        userId
+      );
+      return listEnvironmentsResponseSchema.parse(body).environments;
+    } catch (e) {
+      log.warn("control_plane.fetch_environments", {
+        trace_id: traceId,
+        outcome: "error",
+        http_status: e instanceof ControlPlaneRequestError ? e.status : undefined,
+        error: e instanceof Error ? e : new Error(String(e)),
+      });
+      return [];
+    }
+  }
   return environments.get(env, traceId);
 }
 
@@ -48,9 +78,11 @@ export async function getAvailableEnvironments(env: Env, traceId?: string): Prom
 export async function getEnvironmentById(
   env: Env,
   environmentId: string,
-  traceId?: string
+  traceId?: string,
+  channelId?: string | null,
+  userId?: string
 ): Promise<Environment | undefined> {
-  const all = await getAvailableEnvironments(env, traceId);
+  const all = await getAvailableEnvironments(env, traceId, channelId, userId);
   return all.find((environment) => environment.id === environmentId);
 }
 

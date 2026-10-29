@@ -1,11 +1,12 @@
 {
-  "runtimeVersion": "v73-node-24",
-  "generation": 73,
+  "runtimeVersion": "v79-persistent-model-prices",
+  "generation": 79,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 73,
+  "minimumRebuildGeneration": 79,
   "harnessMinimumGeneration": {
-    "claude": 73,
-    "opencode": 73
+    "claude": 76,
+    "opencode": 76,
+    "codex": 79
   }
 }

@@ -29,10 +29,7 @@ type SettledStatus = Exclude<ProviderAuthorizationCodeStatusResponse["status"], 
  * (`denied`) from a lost transaction (`failed`).
  */
 export type ProviderAuthorizationCodeStatus =
-  | "starting"
-  | "awaiting_code"
-  | "completing"
-  | SettledStatus;
+  "starting" | "awaiting_code" | "completing" | SettledStatus;
 
 export type ProviderAuthorizationCodeFailure = {
   message: string;

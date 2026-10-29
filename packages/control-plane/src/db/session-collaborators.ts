@@ -65,9 +65,10 @@ export class SessionCollaboratorStore {
          VALUES (?, ?, ?, ?) ON CONFLICT (session_id, user_id) DO NOTHING`
       )
       .bind(sessionId, userId, addedBy, Date.now());
-    const result = audit
-      ? (await this.db.batch([statement, new SessionAuditStore(this.db).bind(audit, true)]))[0]
-      : await statement.run();
+    const [result] = await this.db.batch([
+      statement,
+      ...(audit ? [new SessionAuditStore(this.db).bind(audit, true)] : []),
+    ]);
     return result.meta.changes > 0;
   }
 

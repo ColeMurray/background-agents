@@ -8,7 +8,15 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { ME_TEAMS_API_PATH, meTeamsKey } from "@/lib/me-teams-cache";
 import { useTeamCapabilities } from "./use-team-capabilities";
-import { isRetryableTeamError, useMeTeams, useTeam, useTeamMembers, useTeams } from "./use-teams";
+import {
+  TEAMS_KEY,
+  isRetryableTeamError,
+  teamCacheKey,
+  useMeTeams,
+  useTeam,
+  useTeamMembers,
+  useTeams,
+} from "./use-teams";
 
 vi.mock("@/lib/auth-session", () => ({ useAuthSession: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
@@ -80,7 +88,11 @@ describe("team hooks", () => {
       await waitFor(() => expect(result.current.mine.hasData).toBe(true));
       const cachedTeams = result.current.mine.teams;
       const cachedData = result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data;
-      expect(cachedData).toEqual({ teams: [membership], requireTeamOnCreate: true });
+      expect(cachedData).toEqual({
+        teams: [membership],
+        capabilities: { canListAllTeams: false },
+        requireTeamOnCreate: true,
+      });
       expect(result.current.cache.get(ME_TEAMS_API_PATH)).toBeUndefined();
       expect(browserApiFetch).toHaveBeenCalledWith(ME_TEAMS_API_PATH);
 
@@ -223,6 +235,7 @@ describe("team hooks", () => {
       await waitFor(() =>
         expect(result.current.cache.get(unstable_serialize(meTeamsKey("user_one")))?.data).toEqual({
           teams: [membership],
+          capabilities: { canListAllTeams: false },
           requireTeamOnCreate: true,
         })
       );
@@ -356,6 +369,7 @@ describe("team hooks", () => {
         canManageRepositories: false,
         canManageBindings: false,
         canManageAutomations: false,
+        canManageEnvironments: false,
         canManageSecrets: false,
         canArchive: false,
       },
@@ -380,6 +394,91 @@ describe("team hooks", () => {
     expect(result.current.all.teams[0]?.memberCount).toBe(2);
     expect(result.current.mine.teams[0]?.role).toBe("member");
     expect(result.current.detail.team?.capabilities?.canJoin).toBe(false);
+  });
+
+  it("does not seed a partial directory when updating from a detail-only route", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
+    const updated = { ...membership, slug: "product-design", updatedAt: 2 };
+    const otherTeam = { ...membership, id: "team_other", slug: "engineering" };
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (init?.method === "PATCH") return Response.json(updated);
+      if (path === "/api/teams") return Response.json({ teams: [updated, otherTeam] });
+      return Response.json(membership);
+    });
+    const { result, rerender } = renderHook(
+      ({ directoryEnabled }) => ({
+        detail: useTeam(membership.id),
+        directory: useTeams(directoryEnabled),
+        cache: useSWRConfig().cache,
+      }),
+      { initialProps: { directoryEnabled: false }, wrapper }
+    );
+    await waitFor(() => expect(result.current.detail.team?.id).toBe(membership.id));
+
+    await act(() => result.current.detail.updateTeam({ slug: "product-design" }));
+
+    expect(
+      result.current.cache.get(unstable_serialize(teamCacheKey(TEAMS_KEY, "user_one")))?.data
+    ).toBeUndefined();
+    expect(result.current.detail.team?.slug).toBe("product-design");
+    expect(
+      vi.mocked(browserApiFetch).mock.calls.filter(([path]) => path === "/api/teams")
+    ).toHaveLength(0);
+
+    rerender({ directoryEnabled: true });
+    await waitFor(() => expect(result.current.directory.teams).toHaveLength(2));
+    expect(result.current.directory.teams.map(({ id }) => id)).toEqual([
+      membership.id,
+      otherTeam.id,
+    ]);
+  });
+
+  it("revalidates a mounted directory that has no data when a PATCH commits", async () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user_one", name: "Ada" } },
+      status: "authenticated",
+    });
+    const updated = { ...membership, slug: "product-design", updatedAt: 2 };
+    const otherTeam = { ...membership, id: "team_other", slug: "engineering" };
+    let finishInitialDirectory!: (response: Response) => void;
+    const initialDirectory = new Promise<Response>((resolve) => {
+      finishInitialDirectory = resolve;
+    });
+    let directoryRequests = 0;
+    vi.mocked(browserApiFetch).mockImplementation(async (path, init) => {
+      if (init?.method === "PATCH") return Response.json(updated);
+      if (path === "/api/teams") {
+        directoryRequests += 1;
+        return directoryRequests === 1
+          ? initialDirectory
+          : Response.json({ teams: [updated, otherTeam] });
+      }
+      return Response.json(membership);
+    });
+    const { result } = renderHook(
+      () => ({ detail: useTeam(membership.id), directory: useTeams() }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.detail.team?.id).toBe(membership.id));
+    expect(result.current.directory.teams).toEqual([]);
+
+    await act(() => result.current.detail.updateTeam({ slug: "product-design" }));
+
+    expect(directoryRequests).toBe(2);
+    expect(result.current.directory.teams.map(({ id }) => id)).toEqual([
+      membership.id,
+      otherTeam.id,
+    ]);
+    expect(result.current.directory.teams[0]?.slug).toBe("product-design");
+    await act(async () => {
+      finishInitialDirectory(Response.json({ teams: [membership] }));
+      await initialDirectory;
+    });
+    expect(result.current.directory.teams).toHaveLength(2);
+    expect(result.current.directory.teams[0]?.slug).toBe("product-design");
   });
 
   it.each(["create", "update", "archive", "restore", "set-member", "remove-member"] as const)(
@@ -519,6 +618,7 @@ describe("team hooks", () => {
                   canManageRepositories: true,
                   canManageBindings: true,
                   canManageAutomations: true,
+                  canManageEnvironments: true,
                   canManageSecrets: true,
                   canArchive: true,
                 },
@@ -559,6 +659,7 @@ describe("team hooks", () => {
         canManageRepositories: true,
         canManageBindings: true,
         canManageAutomations: true,
+        canManageEnvironments: true,
         canManageSecrets: true,
         canArchive: true,
       },

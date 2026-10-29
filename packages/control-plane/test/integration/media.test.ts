@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import { SessionInternalPaths } from "../../src/session/contracts";
 import {
   initNamedSession,
   queryDO,
@@ -452,20 +453,23 @@ describe("session media routes", () => {
     );
   });
 
-  it("returns 404 for non-screenshot artifacts", async () => {
+  it("returns 404 for non-media artifacts", async () => {
     const sessionName = `media-wrong-type-${Date.now()}`;
     const { stub } = await initNamedSession(sessionName);
     await seedProcessingMessage(stub, "msg-1");
 
     const createArtifactResponse = await stub.fetch(
-      "http://internal/internal/create-media-artifact",
+      `http://internal${SessionInternalPaths.sandboxEvent}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          type: "artifact",
           artifactId: "artifact-branch",
           artifactType: "branch",
-          objectKey: "sessions/session-1/media/artifact-branch.txt",
+          url: "https://github.com/acme/web-app/tree/example",
+          sandboxId: "sandbox-1",
+          timestamp: Date.now() / 1000,
         }),
       }
     );

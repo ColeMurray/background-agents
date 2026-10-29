@@ -56,10 +56,7 @@ export interface SlackImageAttachment {
 
 /** Why an attached image did not make it to the session. */
 export type SlackAttachmentDropReason =
-  | "download_failed"
-  | "too_large"
-  | "over_cap"
-  | "upload_rejected";
+  "download_failed" | "too_large" | "over_cap" | "upload_rejected";
 
 /** Downloaded image bytes plus a record of every image that was lost. */
 export interface PreparedImageAttachments {
@@ -86,6 +83,8 @@ export interface SlackAttachmentUploadResult {
    * exists, so the failures are stale-session noise rather than real drops.
    */
   sessionMissing: boolean;
+  sessionForbidden?: true;
+  channelScopeDenied?: true;
 }
 
 /**
@@ -375,9 +374,16 @@ async function uploadToSession(
   sessionId: string,
   file: PreparedImageAttachments["files"][number],
   authorId: string,
+  channel: string,
   traceId?: string
 ): Promise<
-  { reference: SessionAttachmentReference } | { sessionMissing: boolean; reportDrop: boolean }
+  | { reference: SessionAttachmentReference }
+  | {
+      sessionMissing: boolean;
+      sessionForbidden?: true;
+      channelScopeDenied?: true;
+      reportDrop: boolean;
+    }
 > {
   const { attachment, bytes } = file;
   try {
@@ -393,11 +399,13 @@ async function uploadToSession(
     if (!contentType) {
       throw new Error("FormData serialization produced no Content-Type");
     }
+    const url = new URL(`https://internal/sessions/${sessionId}/attachments`);
+    url.searchParams.set("channel", `slack:${channel}`);
     const response = await signedControlPlaneFetch(
       env,
       {
         method: "POST",
-        url: `https://internal/sessions/${sessionId}/attachments`,
+        url: url.toString(),
         body: { bytes: multipartBytes, contentType },
         actor: authorId.startsWith("slack:") ? authorId : undefined,
         traceId,
@@ -411,7 +419,18 @@ async function uploadToSession(
         file_id: attachment.id,
         http_status: response.status,
       });
-      return { sessionMissing: response.status === 404, reportDrop: file.reportDrop !== false };
+      const details = await response.json().catch(() => null);
+      return {
+        sessionMissing: response.status === 404,
+        reportDrop: file.reportDrop !== false,
+        ...(response.status === 403 ? { sessionForbidden: true as const } : {}),
+        ...(details !== null &&
+        typeof details === "object" &&
+        "code" in details &&
+        details.code === "slack_channel_scope_denied"
+          ? { channelScopeDenied: true as const }
+          : {}),
+      };
     }
     const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
@@ -446,14 +465,19 @@ export async function uploadPreparedAttachments(
   sessionId: string,
   prepared: PreparedImageAttachments,
   authorId: string,
+  channel: string,
   traceId?: string
 ): Promise<SlackAttachmentUploadResult> {
   const outcomes = await Promise.all(
-    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, traceId))
+    prepared.files.map((file) => uploadToSession(env, sessionId, file, authorId, channel, traceId))
   );
   const references: SessionAttachmentReference[] = [];
   const dropped: SlackAttachmentDropReason[] = [...prepared.dropped];
-  const failures: Array<{ sessionMissing: boolean }> = [];
+  const failures: Array<{
+    sessionMissing: boolean;
+    sessionForbidden?: true;
+    channelScopeDenied?: true;
+  }> = [];
   for (const outcome of outcomes) {
     if ("reference" in outcome) references.push(outcome.reference);
     else {
@@ -466,14 +490,15 @@ export async function uploadPreparedAttachments(
     dropped,
     sessionMissing:
       references.length === 0 && failures.length > 0 && failures.every((f) => f.sessionMissing),
+    ...(failures.some((f) => f.sessionForbidden) ? { sessionForbidden: true as const } : {}),
+    ...(failures.some((f) => f.channelScopeDenied) ? { channelScopeDenied: true as const } : {}),
   };
 }
 
 /**
  * Tell the user how many of their attached images could not be forwarded, with
- * guidance matched to why. Call this only once the prompt outcome is known —
- * uploads against a stale session fail spuriously and are retried against the
- * replacement session. Best effort — never blocks the message.
+ * guidance matched to why. Call this only once the session proves accessible.
+ * Best effort: never blocks the message.
  */
 export async function notifyDroppedAttachments(
   env: Env,

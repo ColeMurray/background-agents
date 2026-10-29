@@ -15,13 +15,14 @@ import {
   SLACK_ACTIVITY_REFRESH_KIND,
 } from "@open-inspect/shared/types/session-api";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
+import { slackPostGate, type SlackPostScope } from "../authorization/slack-post-gate";
 import type { Logger } from "../logger";
 import { deliverWithRetry, retryDelivery } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 import type { MessageRepository } from "./message-repository";
 import type { FetchClient } from "../platform-ports";
-import type { AutomationRunCompletion } from "../scheduler/scheduler";
+import type { AutomationRunCompletion } from "../scheduler/contracts";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
@@ -51,6 +52,7 @@ export type AutomationRunCompletionHandler = (completion: AutomationRunCompletio
 export interface CallbackServiceDeps {
   repository: CallbackRepository;
   messageRepository: MessageRepository;
+  slackPostScope: SlackPostScope;
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
@@ -69,6 +71,19 @@ const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function hasSlackThreadCoordinates(context: unknown): context is {
+  channel: string;
+  threadTs: string;
+} {
+  return (
+    isRecord(context) &&
+    typeof context.channel === "string" &&
+    !!context.channel &&
+    typeof context.threadTs === "string" &&
+    !!context.threadTs
+  );
 }
 
 /**
@@ -90,9 +105,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const SLACK_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 
 /**
- * One bounded attempt per refresh. A retry would buy a second correlated shot
- * at the same binding while widening the window in which a turn can terminate
- * under an in-flight refresh; the next heartbeat is the better retry.
+ * Bound the entire refresh, including authorization and signing. A retry
+ * would buy a second correlated shot at the same binding while widening the
+ * window in which a turn can terminate under an in-flight refresh; the next
+ * heartbeat is the better retry.
  */
 const ACTIVITY_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -106,6 +122,7 @@ interface CallbackDeliveryResult {
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
   private readonly messageRepository: MessageRepository;
+  private readonly slackPostScope: SlackPostScope;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
@@ -119,11 +136,13 @@ export class CallbackNotificationService {
    * refresh, never a missed one.
    */
   private _lastSlackActivityAt = 0;
+  private readonly slackActivityRefreshes = new Map<string, Promise<void>>();
   private readonly notifiedCallIds = new Set<string>();
 
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
     this.messageRepository = deps.messageRepository;
+    this.slackPostScope = deps.slackPostScope;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
@@ -144,6 +163,72 @@ export class CallbackNotificationService {
    */
   private async signPayload(data: object, secret: string): Promise<string> {
     return computeHmacHex(JSON.stringify(data), secret);
+  }
+
+  private async slackPostDenial(sessionId: string, context: unknown): Promise<string | null> {
+    if (!isRecord(context) || typeof context.channel !== "string" || !context.channel) {
+      return "invalid_callback_context";
+    }
+    const [session, binding] = await Promise.all([
+      this.slackPostScope.getSession(sessionId),
+      this.slackPostScope.getChannelBinding(context.channel),
+    ]);
+    return slackPostGate(session, binding);
+  }
+
+  /** Closure carries coordinates only, never session content or tool arguments. */
+  private async notifySlackThreadClosed(
+    sessionId: string,
+    context: unknown,
+    binding: FetchClient,
+    secret: string,
+    cancellationSignal?: AbortSignal
+  ): Promise<CallbackDeliveryResult> {
+    if (!hasSlackThreadCoordinates(context)) {
+      return { delivered: false, attempts: 0 };
+    }
+    return deliverWithRetry(
+      (signal) =>
+        this.sendSlackThreadClosed(
+          sessionId,
+          context,
+          binding,
+          secret,
+          cancellationSignal ? AbortSignal.any([signal, cancellationSignal]) : signal
+        ),
+      this.sleep,
+      ({ attempt, response, error }) => {
+        this.log.warn("callback.thread_closed_delivery_attempt_failed", {
+          session_id: sessionId,
+          attempt,
+          ...(response ? { http_status: response.status } : {}),
+          ...(error !== undefined ? { error: error instanceof Error ? error : String(error) } : {}),
+        });
+      }
+    );
+  }
+
+  private async sendSlackThreadClosed(
+    sessionId: string,
+    context: { channel: string; threadTs: string },
+    binding: FetchClient,
+    secret: string,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const unsigned = {
+      kind: "slack.thread_closed",
+      sessionId,
+      timestamp: Date.now(),
+      context: { channel: context.channel, threadTs: context.threadTs },
+    };
+    const signature = await this.signPayload(unsigned, secret);
+    signal.throwIfAborted();
+    return binding.fetch("https://internal/callbacks/thread_closed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...unsigned, signature }),
+      signal,
+    });
   }
 
   /**
@@ -222,7 +307,8 @@ export class CallbackNotificationService {
     let thrownError: unknown;
 
     try {
-      sessionId = this.getSessionId();
+      const callbackSessionId = this.getSessionId();
+      sessionId = callbackSessionId;
       const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         result.rejectReason = "no_callback_context";
@@ -234,6 +320,13 @@ export class CallbackNotificationService {
         isRecord(rawContext) && rawContext.source === "automation"
           ? "automation"
           : (message.source ?? null);
+
+      const refresh = this.slackActivityRefreshes.get(messageId);
+      if (source === "slack" && refresh) {
+        // The message is terminal before this notification is submitted. Wait
+        // for the pending refresh attempt, bounded by its overall deadline.
+        await Promise.allSettled([refresh]);
+      }
 
       // Route automation callbacks to the scheduler's completion function.
       if (source === "automation") {
@@ -279,30 +372,72 @@ export class CallbackNotificationService {
         return;
       }
       const payloadData = parsedCallback?.data ?? callbackData;
-      const signature = await this.signPayload(payloadData, secret);
-      const payload = { ...payloadData, signature };
-      result = await deliverWithRetry(
-        (signal) =>
-          binding.fetch("https://internal/callbacks/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-            signal,
-          }),
+      let rejectReason: string | undefined;
+      const delivery = await retryDelivery<Response | null, Response>(
+        async (signal) => {
+          const denial =
+            rejectReason ??
+            (source === "linear"
+              ? null
+              : await this.slackPostDenial(callbackSessionId, rawContext));
+          // D1 reads cannot be canceled; an expired attempt must not reach the wire.
+          signal.throwIfAborted();
+          // The bot can tombstone the thread even when closure delivery fails.
+          rejectReason = denial ?? undefined;
+          let response: Response;
+          if (denial) {
+            if (!hasSlackThreadCoordinates(rawContext)) {
+              return { outcome: "delivered", value: null };
+            }
+            response = await this.sendSlackThreadClosed(
+              callbackSessionId,
+              rawContext,
+              binding,
+              secret,
+              signal
+            );
+          } else {
+            const signature = await this.signPayload(payloadData, secret);
+            signal.throwIfAborted();
+            response = await binding.fetch("https://internal/callbacks/complete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...payloadData, signature }),
+              signal,
+            });
+          }
+          return response.ok
+            ? { outcome: "delivered", value: response }
+            : { outcome: "retryable_failure", failure: response };
+        },
         this.sleep,
-        ({ attempt, response, error: deliveryError }) => {
-          this.log.warn("callback.complete_delivery_attempt_failed", {
-            message_id: messageId,
-            session_id: sessionId,
-            source,
-            attempt,
-            ...(response ? { http_status: response.status } : {}),
-            ...(deliveryError !== undefined
-              ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
-              : {}),
-          });
+        ({ attempt, failure: response, error: deliveryError }) => {
+          this.log.warn(
+            rejectReason
+              ? "callback.thread_closed_delivery_attempt_failed"
+              : "callback.complete_delivery_attempt_failed",
+            {
+              ...(!rejectReason ? { message_id: messageId, source } : {}),
+              session_id: sessionId,
+              attempt,
+              ...(response ? { http_status: response.status } : {}),
+              ...(deliveryError !== undefined
+                ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
+                : {}),
+            }
+          );
         }
       );
+      const response = delivery.outcome === "delivered" ? delivery.value : delivery.failure;
+      result = {
+        delivered: delivery.outcome === "delivered" && delivery.value !== null,
+        attempts:
+          delivery.outcome === "delivered" && delivery.value === null && delivery.attempts === 1
+            ? 0
+            : delivery.attempts,
+        ...(response ? { httpStatus: response.status } : {}),
+        ...(rejectReason ? { rejectReason } : {}),
+      };
     } catch (caught) {
       thrownError = caught;
     } finally {
@@ -401,11 +536,40 @@ export class CallbackNotificationService {
    * calls keeps the indicator alive through `notifyToolCall` and never reaches
    * delivery here.
    *
-   * Best-effort: the bot acknowledges the callback before it calls Slack, so a
-   * delivered refresh is not proof the indicator was set. It is only proof the
-   * next one is a minute away.
+   * Best-effort: the bot waits for its Slack attempt before acknowledging, but
+   * still acknowledges a failed status write. Completion drains this request
+   * before publishing the final reply.
    */
-  async refreshSlackActivity(messageId: string, now: number): Promise<void> {
+  refreshSlackActivity(messageId: string, now: number): Promise<void> {
+    const pending = this.slackActivityRefreshes.get(messageId);
+    if (pending) return pending;
+
+    // Register before signing or authorization can yield to a completion.
+    // D1 reads cannot be canceled, so the deadline also releases the fence.
+    const controller = new AbortController();
+    let timeoutId!: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<void>((resolve) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        resolve();
+      }, ACTIVITY_REFRESH_TIMEOUT_MS);
+    });
+    const refresh = Promise.race([
+      this.sendSlackActivityRefresh(messageId, now, controller.signal),
+      deadline,
+    ]).finally(() => {
+      clearTimeout(timeoutId);
+      this.slackActivityRefreshes.delete(messageId);
+    });
+    this.slackActivityRefreshes.set(messageId, refresh);
+    return refresh;
+  }
+
+  private async sendSlackActivityRefresh(
+    messageId: string,
+    now: number,
+    signal: AbortSignal
+  ): Promise<void> {
     if (now - this._lastSlackActivityAt < SLACK_ACTIVITY_REFRESH_INTERVAL_MS) return;
 
     // Web, Linear, automation and agent turns have no Slack indicator to hold
@@ -439,6 +603,28 @@ export class CallbackNotificationService {
     }
 
     const sessionId = this.getSessionId();
+    try {
+      const denial = await this.slackPostDenial(sessionId, context);
+      signal.throwIfAborted();
+      if (denial) {
+        await this.notifySlackThreadClosed(sessionId, context, binding, secret, signal);
+        this.log.info("callback.activity_refresh", {
+          message_id: messageId,
+          session_id: sessionId,
+          outcome: "rejected",
+          reject_reason: denial,
+        });
+        return;
+      }
+    } catch (error) {
+      this.log.warn("callback.activity_refresh", {
+        message_id: messageId,
+        session_id: sessionId,
+        outcome: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
+    }
     const callbackData = {
       kind: SLACK_ACTIVITY_REFRESH_KIND,
       sessionId,
@@ -447,6 +633,7 @@ export class CallbackNotificationService {
       context,
     };
     const signature = await this.signPayload(callbackData, secret);
+    signal.throwIfAborted();
 
     // Last look before the wire. The turn can terminate between the heartbeat
     // that asked for this refresh and here — completion posts the final reply
@@ -463,15 +650,14 @@ export class CallbackNotificationService {
       return;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ACTIVITY_REFRESH_TIMEOUT_MS);
     try {
       const response = await binding.fetch("https://internal/callbacks/activity", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...callbackData, signature }),
-        signal: controller.signal,
+        signal,
       });
+      signal.throwIfAborted();
 
       const fields = {
         message_id: messageId,
@@ -499,8 +685,6 @@ export class CallbackNotificationService {
         error: error instanceof Error ? error : new Error(String(error)),
         duration_ms: Date.now() - now,
       });
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -608,6 +792,30 @@ export class CallbackNotificationService {
     // Invalid callbacks must not consume the delivery throttle window.
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
+
+    if (source !== "linear") {
+      try {
+        const denial = await this.slackPostDenial(sessionId, rawContext);
+        if (denial) {
+          await this.notifySlackThreadClosed(sessionId, rawContext, binding, secret);
+          this.log.info("callback.tool_call", {
+            message_id: messageId,
+            session_id: sessionId,
+            outcome: "rejected",
+            reject_reason: denial,
+          });
+          return;
+        }
+      } catch (error) {
+        this.log.warn("callback.tool_call", {
+          message_id: messageId,
+          session_id: sessionId,
+          outcome: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return;
+      }
+    }
 
     const payloadData = parsedPayload?.data ?? callbackData;
     const signature = await this.signPayload(payloadData, secret);

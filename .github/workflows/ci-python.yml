@@ -9,6 +9,7 @@ on:
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -28,6 +29,7 @@ on:
       - "packages/control-plane/src/image-builds/timeouts.ts"
       - "packages/daytona-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/modal-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -57,12 +59,12 @@ jobs:
         working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -84,12 +86,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -101,10 +103,10 @@ jobs:
           pip install -e "packages/modal-infra[dev]"
 
       - name: Run Ruff linter
-        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/boat-infra/ packages/sandbox-images/
 
       - name: Run Ruff formatter check
-        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/sandbox-images/
+        run: ruff format --check packages/modal-infra/ packages/e2b-infra/ packages/daytona-infra/ packages/boat-infra/ packages/sandbox-images/
 
   typecheck-python:
     name: TypeCheck (Python)
@@ -115,12 +117,12 @@ jobs:
         working-directory: packages/modal-infra
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -145,12 +147,12 @@ jobs:
         working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
@@ -174,18 +176,18 @@ jobs:
         working-directory: packages/sandbox-runtime
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -195,7 +197,8 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run tests
-        run: pytest tests/ -v
+        # Dump stacks and exit stalled tests before the job timeout prevents log upload.
+        run: pytest tests/ -v --durations=20 -o faulthandler_timeout=60 -o faulthandler_exit_on_timeout=true
 
       - name: Run Node.js tests
         run: node --test tests/*.test.mjs
@@ -210,18 +213,18 @@ jobs:
         working-directory: packages/modal-infra
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           version: "0.9.7"
 

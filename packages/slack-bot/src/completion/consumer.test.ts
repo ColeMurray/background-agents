@@ -11,19 +11,7 @@ vi.mock("./delivery", async (importOriginal) => {
 });
 
 function makeEnv(): Env {
-  return {
-    SLACK_KV: {} as KVNamespace,
-    SLACK_COMPLETION_QUEUE: {} as Queue,
-    CONTROL_PLANE: {} as Fetcher,
-    DEPLOYMENT_NAME: "test",
-    CONTROL_PLANE_URL: "https://control-plane.test",
-    WEB_APP_URL: "https://app.test",
-    DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
-    SLACK_BOT_TOKEN: "xoxb-test",
-    SLACK_SIGNING_SECRET: "signing-secret",
-    ANTHROPIC_API_KEY: "test-key",
-  };
+  return {} as Env;
 }
 
 function job(): SlackCompletionJob {
@@ -65,6 +53,7 @@ describe("consumeSlackCompletions", () => {
   });
 
   it("processes and acknowledges a valid completion", async () => {
+    vi.mocked(processSlackCompletion).mockResolvedValue({ kind: "ack" });
     const input = batch(job());
 
     await consumeSlackCompletions(input as unknown as MessageBatch<unknown>, makeEnv());
@@ -72,6 +61,17 @@ describe("consumeSlackCompletions", () => {
     expect(processSlackCompletion).toHaveBeenCalledWith(job(), expect.any(Object));
     expect(input.message.ack).toHaveBeenCalledOnce();
     expect(input.message.retry).not.toHaveBeenCalled();
+  });
+
+  it("retries only an explicit safe pre-publication unavailable result", async () => {
+    vi.mocked(processSlackCompletion).mockResolvedValue({ kind: "retry" });
+    const input = batch(job());
+
+    await consumeSlackCompletions(input as unknown as MessageBatch<unknown>, makeEnv());
+
+    expect(input.message.retry).toHaveBeenCalledOnce();
+    expect(input.message.retry).toHaveBeenCalledWith();
+    expect(input.message.ack).not.toHaveBeenCalled();
   });
 
   it("acknowledges invalid jobs without processing them", async () => {
@@ -83,7 +83,7 @@ describe("consumeSlackCompletions", () => {
     expect(input.message.ack).toHaveBeenCalledOnce();
   });
 
-  it("acknowledges processing errors instead of risking duplicate Slack side effects", async () => {
+  it("acknowledges unhandled errors instead of assuming replay safety", async () => {
     vi.mocked(processSlackCompletion).mockRejectedValue(new Error("unexpected"));
     const input = batch(job());
 

@@ -58,6 +58,7 @@ describe("deliverPrompt", () => {
     expect(result).toEqual({ ok: true, data: { messageId: "message-1" } });
     expect(sendPrompt).toHaveBeenCalledWith(env, {
       sessionId: "session-1",
+      channel: "C123",
       content: "Fix it",
       authorId: "slack:U123",
       callbackContext: undefined,
@@ -76,19 +77,22 @@ describe("deliverPrompt", () => {
     expect(sendOrder).toBeLessThan(notifyOrder);
   });
 
-  it("does not notify drops when the prompt send fails", async () => {
-    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
-      references: [],
-      dropped: ["download_failed"],
-      sessionMissing: false,
-    });
-    vi.mocked(sendPrompt).mockResolvedValue({ ok: false, reason: "stale" });
+  it.each(["stale", "forbidden", "channel_scope_denied"] as const)(
+    "propagates %s send failure",
+    async (reason) => {
+      vi.mocked(uploadPreparedAttachments).mockResolvedValue({
+        references: [],
+        dropped: ["download_failed"],
+        sessionMissing: false,
+      });
+      vi.mocked(sendPrompt).mockResolvedValue({ ok: false, reason });
 
-    const result = await deliverPrompt(env, options());
+      const result = await deliverPrompt(env, options());
 
-    expect(result).toEqual({ ok: false, reason: "stale" });
-    expect(notifyDroppedAttachments).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ ok: false, reason });
+      expect(notifyDroppedAttachments).not.toHaveBeenCalled();
+    }
+  );
 
   it("sends no prompt for an image-only request that lost every image", async () => {
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
@@ -110,30 +114,27 @@ describe("deliverPrompt", () => {
     );
   });
 
-  it("surfaces staleness instead of a drop notice when the session is gone", async () => {
+  it.each([
+    ["stale", { sessionMissing: true }],
+    ["forbidden", { sessionMissing: false, sessionForbidden: true }],
+    ["channel_scope_denied", { sessionMissing: false, channelScopeDenied: true }],
+  ] as const)("propagates %s upload refusal", async (reason, refusal) => {
     vi.mocked(uploadPreparedAttachments).mockResolvedValue({
-      references: [],
+      references:
+        reason === "channel_scope_denied"
+          ? [{ attachmentId: "att-1", name: "accepted-before-rebind.png" }]
+          : [],
       dropped: ["upload_rejected"],
-      sessionMissing: true,
+      ...refusal,
     });
 
-    const result = await deliverPrompt(env, options({ imageOnly: true }));
+    const result = await deliverPrompt(
+      env,
+      options({ imageOnly: reason !== "channel_scope_denied" })
+    );
 
-    expect(result).toEqual({ ok: false, reason: "stale" });
+    expect(result).toEqual({ ok: false, reason });
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(notifyDroppedAttachments).not.toHaveBeenCalled();
-  });
-
-  it("still sends a text prompt when images dropped but user text exists", async () => {
-    vi.mocked(uploadPreparedAttachments).mockResolvedValue({
-      references: [],
-      dropped: ["download_failed"],
-      sessionMissing: false,
-    });
-
-    const result = await deliverPrompt(env, options({ imageOnly: false }));
-
-    expect(result.ok).toBe(true);
-    expect(sendPrompt).toHaveBeenCalled();
   });
 });

@@ -32,11 +32,13 @@ import {
   DEFAULT_EXPORT_LIMIT,
   SessionExportStore,
   type ExportSelection,
+  type ListSessionsForExportResult,
   type SessionExportRow,
 } from "../db/session-export-store";
 import { createLogger, type Logger } from "../logger";
 import { teamsEnforcementMode, viewerFromContext } from "../authorization/session-admission";
 import { TeamMembershipStore } from "../db/team-memberships";
+import { recordShadowListDenialCount } from "../authorization/session-shadow-audit";
 import { readBoundedBytes } from "../http/bounded-body";
 import { admit } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -313,8 +315,8 @@ async function handleExport(
     : new Map();
   const viewer = viewerFromContext(ctx, memberships);
   const { createdAfter, createdBefore } = query;
-  async function* records(): AsyncGenerator<ExportRecord> {
-    const page = await store.list({
+  const selectPage = () =>
+    store.list({
       ...selection,
       readScope: viewer,
       mode,
@@ -322,6 +324,16 @@ async function handleExport(
       ...(createdAfter === undefined ? {} : { createdAfter }),
       ...(createdBefore === undefined ? {} : { createdBefore }),
     });
+  let selectedPage: Promise<ListSessionsForExportResult> | undefined;
+  if (mode === "shadow") {
+    // Request auditing finishes before stream consumption. Select the same page once here;
+    // defer selection errors to the generator to preserve the NDJSON error response.
+    selectedPage = selectPage();
+    const page = await selectedPage.catch(() => null);
+    recordShadowListDenialCount(ctx, page?.shadowDenialCount ?? 0);
+  }
+  async function* records(): AsyncGenerator<ExportRecord> {
+    const page = await (selectedPage ?? selectPage());
     yield* page.sessions;
     if (page.nextCursor) {
       yield {

@@ -9,6 +9,13 @@ import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SkillAssignments } from "./skill-assignments";
 import { SkillImportReview } from "./skill-import-review";
 import { useImportPreview } from "./use-import-preview";
@@ -20,6 +27,7 @@ import {
 } from "./utils";
 
 const INITIAL_ASSIGNMENTS: SkillAssignmentInput[] = [{ type: "global" }];
+const NO_REPOSITORY = "no-repository";
 
 /**
  * Two-step import: read a repository into a preview, then store exactly what
@@ -124,20 +132,25 @@ export function SkillImport({
       <div className="space-y-4 rounded border border-border-muted p-4">
         <div>
           <Label htmlFor="import-repository">Repository</Label>
-          <select
-            id="import-repository"
-            value={repository}
-            onChange={(event) => editSource(() => setRepository(event.target.value))}
+          <Select
+            value={repository || NO_REPOSITORY}
+            onValueChange={(value) =>
+              editSource(() => setRepository(value === NO_REPOSITORY ? "" : value))
+            }
             disabled={reposLoading}
-            className="mt-1 w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
           >
-            <option value="">Select a repository</option>
-            {repos.map((repo) => (
-              <option key={repo.fullName} value={repo.fullName}>
-                {repo.fullName}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="import-repository" className="mt-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_REPOSITORY}>Select a repository</SelectItem>
+              {repos.map((repo) => (
+                <SelectItem key={repo.fullName} value={repo.fullName}>
+                  {repo.fullName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {reposError && (
             <p className="mt-1 text-xs text-destructive">Failed to load repositories.</p>
           )}

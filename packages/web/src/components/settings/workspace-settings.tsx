@@ -1,33 +1,45 @@
 "use client";
 
 import { useState } from "react";
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
+import { MergeMembersDialog } from "./merge-members-dialog";
+import { SignInAllowlistSection } from "./sign-in-allowlist-section";
 
 /**
  * Shows workspace members and roles, exposing member controls only when the user may manage them.
  */
 export function WorkspaceSettings() {
-  const { hasPermission } = useCurrentUserAuthorization();
+  const { authorization, hasPermission } = useCurrentUserAuthorization();
   const canReadMembers = hasPermission("workspace.members.read");
   const canReadRoles = hasPermission("workspace.roles.read");
   const canManage = hasPermission("workspace.members.manage");
+  const canManageAdmission =
+    canManage && authorization?.suspendedAt === null && isWorkspaceAdmin(authorization.role.key);
   const canAssignRoles = canManage && canReadRoles;
   const canTransfer = hasPermission("workspace.transfer_ownership");
-  const { members, roles, loading, error, updateMember } = useWorkspaceAdministration({
-    readMembers: canReadMembers,
-    readRoles: canReadRoles,
-  });
+  const canMerge = canReadMembers && hasPermission("workspace.members.merge");
+  const { members, roles, loading, error, refreshError, updateMember, previewMerge, mergeMembers } =
+    useWorkspaceAdministration({
+      readMembers: canReadMembers,
+      readRoles: canReadRoles,
+    });
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [pendingMemberIds, setPendingMemberIds] = useState<Set<string>>(() => new Set());
   const unsuspendedOwnerCount = members.filter(
     (member) => member.role.key === "owner" && member.suspendedAt === null
   ).length;
-
-  if (loading) return <p className="text-sm text-muted-foreground">Loading workspace access...</p>;
-  if (error) return <ErrorBanner>Failed to load workspace access.</ErrorBanner>;
 
   async function mutate(memberId: string, action: () => Promise<void>) {
     setMutationError(null);
@@ -49,18 +61,33 @@ export function WorkspaceSettings() {
     <div className="space-y-10">
       <div>
         <h2 className="text-xl font-semibold text-foreground">Workspace access</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Assign one role to each canonical user. Backend authorization remains authoritative.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Manage members and access.</p>
       </div>
 
       {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}
+      {refreshError && (
+        <ErrorBanner>
+          Couldn&apos;t refresh workspace access. Showing the last loaded data.
+        </ErrorBanner>
+      )}
 
-      {canReadMembers && (
-        <section className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Members
-          </h3>
+      {canManageAdmission && <SignInAllowlistSection key={authorization.userId} />}
+
+      {loading && <p className="text-sm text-muted-foreground">Loading workspace access...</p>}
+      {error && <ErrorBanner>Failed to load workspace access.</ErrorBanner>}
+
+      {canReadMembers && !loading && !error && (
+        <section id="workspace-members" className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Members
+            </h3>
+            {canMerge && members.length > 1 && (
+              <Button variant="outline" size="sm" onClick={() => setMergeOpen(true)}>
+                Merge accounts
+              </Button>
+            )}
+          </div>
           <div className="divide-y divide-border rounded-lg border border-border">
             {members.map((member) => (
               <div
@@ -79,27 +106,31 @@ export function WorkspaceSettings() {
                 (member.role.key !== "owner" ||
                   (canTransfer &&
                     !(member.suspendedAt === null && unsuspendedOwnerCount === 1))) ? (
-                  <select
-                    aria-label={`Role for ${member.displayName ?? member.userId}`}
+                  <Select
                     value={member.role.id}
                     disabled={pendingMemberIds.has(member.userId)}
-                    onChange={(event) =>
+                    onValueChange={(roleId) =>
                       void mutate(member.userId, () =>
-                        updateMember(member, { kind: "role", roleId: event.target.value })
+                        updateMember(member, { kind: "role", roleId })
                       )
                     }
-                    className="rounded border border-border bg-background px-2 py-1.5 text-sm"
                   >
-                    {roles
-                      .filter(
-                        (role) => role.key !== "owner" || canTransfer || role.id === member.role.id
-                      )
-                      .map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
-                  </select>
+                    <SelectTrigger aria-label={`Role for ${member.displayName ?? member.userId}`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles
+                        .filter(
+                          (role) =>
+                            role.key !== "owner" || canTransfer || role.id === member.role.id
+                        )
+                        .map((role) => (
+                          <SelectItem key={role.id} value={role.id}>
+                            {role.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 ) : (
                   <span className="text-sm text-foreground">{member.role.name}</span>
                 )}
@@ -126,10 +157,20 @@ export function WorkspaceSettings() {
               </div>
             ))}
           </div>
+          {canMerge && (
+            <MergeMembersDialog
+              open={mergeOpen}
+              onOpenChange={setMergeOpen}
+              members={members}
+              currentUserId={authorization?.userId ?? null}
+              previewMerge={previewMerge}
+              mergeMembers={mergeMembers}
+            />
+          )}
         </section>
       )}
 
-      {canReadRoles && (
+      {canReadRoles && !loading && !error && (
         <section className="space-y-3">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Roles

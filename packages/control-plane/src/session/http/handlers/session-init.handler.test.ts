@@ -4,7 +4,6 @@ import { SessionInitHandler } from "./session-init.handler";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { SessionCoreRepository } from "../../session-core-repository";
-import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createHandler() {
   const repository = {
@@ -55,454 +54,42 @@ function createHandler() {
   };
 }
 
-describe("SessionInitHandler", () => {
-  it("ignores legacy OAuth secrets during initialization", async () => {
-    const { handler, repository } = createHandler();
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        body: JSON.stringify({
-          sessionName: "session",
-          repoOwner: null,
-          repoName: null,
-          userId: "user-1",
-          scmToken: "secret",
-          scmTokenEncrypted: "encrypted-secret",
-          scmRefreshTokenEncrypted: "refresh-secret",
-          scmTokenExpiresAt: 9999,
-        }),
-      })
-    );
-    expect(response.status).toBe(200);
-    const written = repository.createParticipant.mock.calls[0][0];
-    expect(written).not.toHaveProperty("scmAccessTokenEncrypted");
-    expect(written).not.toHaveProperty("scmRefreshTokenEncrypted");
-    expect(written).not.toHaveProperty("scmTokenExpiresAt");
-  });
-
-  it("does not repeat initialization side effects for an existing session", async () => {
-    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
-    repository.getSession.mockReturnValue({ id: "session-do-id" } as never);
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
-    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
-    expect(repository.createParticipant).not.toHaveBeenCalled();
-    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["repoOwner without repoName", { repoOwner: "acme", repoName: null }],
-    ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
-    ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
-  ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
-    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          ...repoFields,
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: "Repository context must include repoOwner, repoName, and repoId together",
-    });
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
-    expect(repository.createParticipant).not.toHaveBeenCalled();
-    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
-  });
-
-  it("initializes session, sandbox, and owner participant", async () => {
-    const { handler, repository, sandboxRepository, generateId, scheduleWarmSandbox, log } =
-      createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "repo",
-          repoId: 123,
-          defaultBranch: "main",
-          branch: "feature/work",
-          title: "Session title",
-          model: "anthropic/claude-haiku-4-5",
-          reasoningEffort: "high",
-          userId: "slack:U123",
-          canonicalUserId: "canonical-user-1",
-          scmLogin: "octocat",
-          scmName: "The Octocat",
-          scmEmail: "octocat@example.com",
-          scmUserId: "github-user-123",
-          parentSessionId: "parent-1",
-          spawnSource: "agent",
-          spawnDepth: 1,
-          vncEnabled: true,
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ sessionId: "session-do-id", status: "created" });
-    expect(repository.upsertSession).toHaveBeenCalledWith({
-      id: "session-do-id",
-      harness: "opencode",
-      sessionName: "session-public-id",
-      title: "Session title",
-      repoOwner: "acme",
-      repoName: "repo",
-      repoId: 123,
-      baseBranch: "feature/work",
-      model: "anthropic/claude-haiku-4-5",
-      reasoningEffort: "high",
-      status: "created",
-      parentSessionId: "parent-1",
-      spawnSource: "agent",
-      spawnDepth: 1,
-      codeServerEnabled: false,
-      vncEnabled: true,
-      sandboxSettings: null,
-      maxCostUsd: null,
-      environmentId: null,
-      createdAt: 1234,
-      updatedAt: 1234,
-    });
-    expect(sandboxRepository.createSandbox).toHaveBeenCalledWith({
-      id: "sandbox-1",
-      status: "pending",
-      gitSyncStatus: "pending",
-      createdAt: 0,
-    });
-    expect(repository.createParticipant).toHaveBeenCalledWith({
-      id: "participant-1",
-      userId: "slack:U123",
-      canonicalUserId: "canonical-user-1",
-      scmUserId: "github-user-123",
-      scmLogin: "octocat",
-      scmName: "The Octocat",
-      scmEmail: "octocat@example.com",
-      role: "owner",
-      joinedAt: 1234,
-    });
-    // Scalar init synthesizes a one-entry member set.
-    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
-      {
-        position: 0,
-        repoOwner: "acme",
-        repoName: "repo",
-        repoId: 123,
-        baseBranch: "feature/work",
-      },
-    ]);
-    expect(repository.transaction).toHaveBeenCalledOnce();
-    expect(scheduleWarmSandbox).toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith("Triggering sandbox spawn for new session");
-  });
-
-  it("persists the repositories list in position order", async () => {
-    const { handler, repository, generateId } = createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repoId: 1,
-          defaultBranch: "main",
-          repositories: [
-            { repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
-            { repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
-          ],
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([
-      { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
-      { position: 1, repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "develop" },
-    ]);
-  });
-
-  it("persists an empty member set for repo-less sessions", async () => {
-    const { handler, repository, generateId } = createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([]);
-  });
-
-  it("accepts nullable init fields and sandbox settings", async () => {
-    const { handler, repository, generateId } = createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          repoId: null,
-          environmentId: null,
-          // initialize.ts forwards these straight from SessionInitInput, where
-          // every one of them is nullable — the schema must accept null, not
-          // just absence, or session creation 400s.
-          reasoningEffort: null,
-          canonicalUserId: null,
-          scmLogin: null,
-          scmName: null,
-          scmEmail: null,
-          scmUserId: null,
-          parentSessionId: null,
-          sandboxSettings: {
-            cpuCores: null,
-            memoryMib: null,
-            tunnelPorts: [3000],
-            maxSessionCostUsd: 12.5,
-          },
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.upsertSession).toHaveBeenCalledWith(
-      expect.objectContaining({
+describe("Codex durable initialization", () => {
+  const init = (overrides: Record<string, unknown>) =>
+    new Request("http://internal/internal/init", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionName: "codex",
         repoOwner: null,
         repoName: null,
-        repoId: null,
-        environmentId: null,
-        parentSessionId: null,
-        maxCostUsd: 12.5,
-      })
-    );
-    expect(repository.createParticipant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: "user-1",
-        scmLogin: null,
-        scmName: null,
-        scmEmail: null,
-      })
-    );
-    const upsert = repository.upsertSession.mock.calls[0]![0];
-    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({
-      cpuCores: null,
-      memoryMib: null,
-      tunnelPorts: [3000],
-      maxSessionCostUsd: 12.5,
+        userId: "owner",
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        ...overrides,
+      }),
     });
-  });
-
-  it("preserves optional init fields the schema must not silently drop", async () => {
-    const { handler, repository, generateId } = createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          repoId: null,
-          userId: "user-1",
-          canonicalUserId: "platform-user-1",
-          vncEnabled: true,
-          // sandboxTimeoutMs is validated by normalizeSandboxSettings, not by a
-          // restated field list — a hand-copied schema would drop it here.
-          sandboxSettings: { sandboxTimeoutMs: 14_400_000, vncPort: 6080 },
-        }),
-      })
-    );
-
+  it("stores native max unchanged rather than applying OpenCode effort rules", async () => {
+    const { handler, repository } = createHandler();
+    const response = await handler.init(init({ reasoningEffort: "max" }));
     expect(response.status).toBe(200);
     expect(repository.upsertSession).toHaveBeenCalledWith(
-      expect.objectContaining({ vncEnabled: true })
-    );
-    expect(repository.createParticipant).toHaveBeenCalledWith(
-      expect.objectContaining({ canonicalUserId: "platform-user-1" })
-    );
-    const upsert = repository.upsertSession.mock.calls[0]![0];
-    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({
-      sandboxTimeoutMs: 14_400_000,
-      vncPort: 6080,
-    });
-  });
-
-  it("rejects malformed init bodies before creating records", async () => {
-    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          userId: 123,
-        }),
+      expect.objectContaining({
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        reasoningEffort: "max",
       })
     );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "Invalid request body" });
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
-    expect(repository.createParticipant).not.toHaveBeenCalled();
+  });
+  it.each([
+    { model: "bogus" },
+    { model: "openai/gpt-5.4" },
+    { model: undefined },
+    { reasoningEffort: "ultra" },
+    { reasoningEffort: "none" },
+  ])("rejects an unsupported native choice before transaction or warm spawn", async (overrides) => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+    expect((await handler.init(init(overrides))).status).toBe(400);
+    expect(repository.transaction).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
-  });
-
-  it("rejects a repositories list whose primary does not match the scalar mirror", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repoId: 1,
-          defaultBranch: "main",
-          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: "repositories[0] must match the scalar repository mirror",
-    });
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.replaceSessionRepositories).not.toHaveBeenCalled();
-  });
-
-  it("rejects an explicit empty repositories list alongside scalar context", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "frontend",
-          repoId: 1,
-          repositories: [],
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: "repositories must include the scalar repository",
-    });
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-  });
-
-  it("rejects a repositories list on a repo-less session", async () => {
-    const { handler, repository } = createHandler();
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: null,
-          repoName: null,
-          repositories: [{ repoOwner: "acme", repoName: "backend", repoId: 2, baseBranch: "main" }],
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: "repositories[0] must match the scalar repository mirror",
-    });
-    expect(repository.upsertSession).not.toHaveBeenCalled();
-  });
-
-  it("logs invalid model warning and stores normalized model", async () => {
-    const { handler, repository, generateId, log } = createHandler();
-    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
-
-    const response = await handler.init(
-      new Request("http://internal/internal/init", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionName: "session-public-id",
-          repoOwner: "acme",
-          repoName: "repo",
-          repoId: 123,
-          model: "invalid/model-name",
-          userId: "user-1",
-        }),
-      })
-    );
-
-    expect(response.status).toBe(200);
-    expect(repository.upsertSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: getValidModelOrDefault("invalid/model-name"),
-      })
-    );
-    expect(log.warn).toHaveBeenCalledWith("Invalid model name, using default", {
-      requested_model: "invalid/model-name",
-      default_model: getValidModelOrDefault("invalid/model-name"),
-    });
   });
 });

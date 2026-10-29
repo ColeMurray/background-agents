@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import useSWR from "swr";
+import { useEffect, useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
 import {
   teamSessionsResponseSchema,
   type TeamSessionsResponse,
@@ -12,6 +12,9 @@ import { useAuthSession } from "@/lib/auth-session";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatRelativeTime } from "@/lib/time";
+import { MarkAllReadButton } from "@/components/mark-all-read-button";
+import { markSessionInboxRead, subscribeSessionInboxMarkedRead } from "@/lib/session-read-state";
+import { countUnreadSessions } from "@/lib/session-inbox-api";
 
 const TEAM_SESSIONS_REFRESH_MS = 30_000;
 type TeamSessionPage = Extract<TeamSessionsResponse, { items: unknown }>;
@@ -29,10 +32,14 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
   const [pagination, setPagination] = useState({ identity, cursors: [] as string[] });
   const cursors = pagination.identity === identity ? pagination.cursors : [];
   if (pagination.identity !== identity) setPagination({ identity, cursors: [] });
-  const params = new URLSearchParams({ bucket });
-  const cursor = cursors.at(-1);
-  if (cursor) params.set("cursor", cursor);
-  const key: BrowserApiPath = `/api/teams/${encodeURIComponent(teamId)}/sessions?${params.toString()}`;
+  const keyFor = (cursor?: string): BrowserApiPath => {
+    const params = new URLSearchParams({ bucket });
+    if (cursor) params.set("cursor", cursor);
+    return `/api/teams/${encodeURIComponent(teamId)}/sessions?${params.toString()}`;
+  };
+  const key = keyFor(cursors.at(-1));
+  const firstPageKey = keyFor();
+  const { mutate } = useSWRConfig();
   const result = useSWR<TeamSessionPage, Error>(
     userId ? ([key, userId] as const) : null,
     async ([path]: readonly [BrowserApiPath, string]) => {
@@ -43,6 +50,24 @@ export function useTeamSessionBucket(teamId: string, bucket: "needs_attention" |
       return page;
     },
     { refreshInterval: TEAM_SESSIONS_REFRESH_MS, keepPreviousData: false }
+  );
+  // A bulk read can empty later pages, so restart from the first page. Every
+  // cached page of this bucket may still hold read rows, so clear them, then
+  // drop their dedupe markers and revalidate; a request that started before
+  // the clear is discarded, whichever page is mounted when this runs.
+  useEffect(
+    () =>
+      subscribeSessionInboxMarkedRead(async () => {
+        setPagination({ identity, cursors: [] });
+        const isBucketPage = (cacheKey: unknown) =>
+          Array.isArray(cacheKey) &&
+          cacheKey[1] === userId &&
+          typeof cacheKey[0] === "string" &&
+          (cacheKey[0] === firstPageKey || cacheKey[0].startsWith(`${firstPageKey}&`));
+        await mutate(isBucketPage, undefined, { revalidate: false });
+        await mutate(isBucketPage);
+      }),
+    [firstPageKey, identity, mutate, userId]
   );
   const accessDenied =
     result.error instanceof TeamSessionsRequestError &&
@@ -81,7 +106,11 @@ export function TeamOverview({ teamId }: { teamId: string }) {
           Refresh
         </Button>
       </div>
-      <SessionBucket title="Needs attention" bucket={attention} />
+      <SessionBucket
+        title="Needs attention"
+        bucket={attention}
+        onMarkAllRead={() => markSessionInboxRead({ teamIds: [teamId] })}
+      />
       <SessionBucket title="In progress" bucket={progress} />
     </div>
   );
@@ -90,13 +119,23 @@ export function TeamOverview({ teamId }: { teamId: string }) {
 function SessionBucket({
   title,
   bucket,
+  onMarkAllRead,
 }: {
   title: string;
   bucket: ReturnType<typeof useTeamSessionBucket>;
+  onMarkAllRead?: () => Promise<unknown>;
 }) {
   return (
     <section aria-label={title} className="space-y-3">
-      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <div className="group flex min-h-6 items-center gap-2">
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        {onMarkAllRead && bucket.items.length > 0 && (
+          <MarkAllReadButton
+            count={bucket.hasMore || bucket.hasPrevious ? null : countUnreadSessions(bucket.items)}
+            onConfirm={onMarkAllRead}
+          />
+        )}
+      </div>
       {bucket.error && (
         <ErrorBanner role="alert">
           Unable to load {title.toLowerCase()} sessions.{" "}

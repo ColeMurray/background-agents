@@ -14,8 +14,7 @@ import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 type SlackChannelCondition = Extract<TriggerCondition, { type: "slack_channel" }>;
 
 export type SlackChannelConditionParseResult =
-  | { success: true; condition: SlackChannelCondition }
-  | { success: false; error: string };
+  { success: true; condition: SlackChannelCondition } | { success: false; error: string };
 
 /** Max length of a user-supplied `text_match` regex pattern (characters). */
 export const REGEX_PATTERN_MAX_LENGTH = 200;
@@ -94,6 +93,21 @@ export function parseSlackChannelCondition(condition: unknown): SlackChannelCond
 /** True when a Slack trigger has at least one valid watched-channel condition. */
 export function hasValidSlackChannelCondition(conditions: unknown[]): boolean {
   return conditions.some((condition) => parseSlackChannelCondition(condition).success);
+}
+
+/**
+ * True when the conditions hold a non-empty Slack User include list, which then
+ * names every author that may trigger the automation. An automation that
+ * accepts bot messages must have one, so an unlisted bot (such as one that
+ * reacts to the automation's own output) cannot start runs.
+ */
+export function hasSlackActorIncludeList(conditions: TriggerCondition[]): boolean {
+  return conditions.some(
+    (condition) =>
+      condition.type === "slack_actor" &&
+      condition.operator === "include" &&
+      condition.value.length > 0
+  );
 }
 
 /** Normalize validated Slack Channel conditions before persistence. */
@@ -181,9 +195,12 @@ export const slackConditions = {
     validate(c: { value: string[] }) {
       return isNonEmptyStringArray(c.value) ? null : "slack_actor requires at least one user ID";
     },
+    /** Lists hold user ids (`U…`) and bot ids (`B…`); either of the author's ids matches. */
     evaluate(c: { operator: "include" | "exclude"; value: string[] }, event: AutomationEvent) {
       if (event.source !== "slack") return true;
-      const inList = c.value.includes(event.actorUserId);
+      const inList = [event.actorUserId, event.botId].some(
+        (id) => id !== undefined && c.value.includes(id)
+      );
       return c.operator === "include" ? inList : !inList;
     },
   },

@@ -11,9 +11,15 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
+  StoredFileArtifactInfo,
   ArtifactType,
 } from "../types/artifacts";
-import { listArtifactsResponseSchema } from "../types/artifacts";
+import {
+  artifactTypeSchema,
+  generatedFileArtifactMetadataSchema,
+  isStoredFileArtifactType,
+  listArtifactsResponseSchema,
+} from "../types/artifacts";
 import type { EventResponse } from "../types/sandbox-events";
 import { listEventsResponseSchema } from "../types/sandbox-events";
 import type { Logger } from "../logger";
@@ -24,6 +30,17 @@ import {
 } from "../service-auth";
 
 export type { ControlPlaneFetcher };
+
+/** Failed purpose-protected reads must never fall back to previously collected content. */
+export class ProtectedReadError extends Error {
+  readonly kind: "denied" | "unavailable";
+
+  constructor(message: string, status?: number, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProtectedReadError";
+    this.kind = status === 403 || status === 404 ? "denied" : "unavailable";
+  }
+}
 
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
@@ -50,6 +67,10 @@ export interface ExtractorDeps {
    * Signatures are request-bound, so headers are built per URL.
    */
   auth: OutboundServiceCredential;
+  /** Revalidate outbound Slack delivery authority; protected read failures must abort delivery. */
+  readPurpose?: "slack-post";
+  /** Throw on any failed read, as purpose-protected reads do, without sending a purpose. */
+  failClosed?: boolean;
   /** Structured logger. Falls back to a silent no-op if not provided. */
   log?: Logger;
 }
@@ -66,6 +87,10 @@ async function buildExtractorAuthHeaders(
   };
 }
 
+function readsFailClosed(deps: ExtractorDeps): boolean {
+  return deps.failClosed === true || deps.readPurpose !== undefined;
+}
+
 /** Silent no-op logger used when the caller does not supply one. */
 const noopLogger: Logger = {
   debug: () => {},
@@ -80,14 +105,16 @@ const noopLogger: Logger = {
  *
  * Events are filtered server-side by `messageId`. Token events contain
  * cumulative text, so only the last one is kept. Artifacts are fetched from
- * the dedicated `/artifacts` endpoint, falling back to inline artifact events
- * when the endpoint errors.
+ * the dedicated `/artifacts` endpoint. Unprotected consumers may fall back to
+ * inline artifacts; fail-closed consumers throw on any failed read.
+ * `channel` is an optional provider-qualified identity (for example, `slack:C123`).
  */
 export async function extractAgentResponse(
   deps: ExtractorDeps,
   sessionId: string,
   messageId: string,
-  traceId?: string
+  traceId?: string,
+  channel?: string
 ): Promise<AgentResponse> {
   const log = deps.log ?? noopLogger;
   const startTime = Date.now();
@@ -102,6 +129,8 @@ export async function extractAgentResponse(
       const url = new URL(`https://internal/sessions/${sessionId}/events`);
       url.searchParams.set("message_id", messageId);
       url.searchParams.set("limit", String(EVENTS_PAGE_LIMIT));
+      if (channel) url.searchParams.set("channel", channel);
+      if (deps.readPurpose) url.searchParams.set("purpose", deps.readPurpose);
       if (cursor) {
         url.searchParams.set("cursor", cursor);
       }
@@ -116,11 +145,17 @@ export async function extractAgentResponse(
           http_status: response.status,
           duration_ms: Date.now() - startTime,
         });
+        if (readsFailClosed(deps))
+          throw new ProtectedReadError(
+            `Control plane events read failed: ${response.status}`,
+            response.status
+          );
         return {
           textContent: "",
           toolCalls: [],
           artifacts: [],
           mediaArtifacts: [],
+          fileArtifacts: [],
           success: false,
         };
       }
@@ -133,11 +168,13 @@ export async function extractAgentResponse(
           error: new Error("Invalid events response"),
           duration_ms: Date.now() - startTime,
         });
+        if (readsFailClosed(deps)) throw new ProtectedReadError("Invalid events response");
         return {
           textContent: "",
           toolCalls: [],
           artifacts: [],
           mediaArtifacts: [],
+          fileArtifacts: [],
           success: false,
         };
       }
@@ -146,7 +183,14 @@ export async function extractAgentResponse(
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
 
-    const artifacts = await fetchSessionArtifacts(deps, sessionId, traceId, base, allEvents);
+    const artifacts = await fetchSessionArtifacts(
+      deps,
+      sessionId,
+      traceId,
+      base,
+      allEvents,
+      channel
+    );
     const agentResponse = buildAgentResponseFromEvents(allEvents, artifacts);
 
     log.info("control_plane.fetch_events", {
@@ -169,7 +213,20 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
-    return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
+    if (readsFailClosed(deps))
+      throw error instanceof ProtectedReadError
+        ? error
+        : new ProtectedReadError("Control plane events read unavailable", undefined, {
+            cause: error,
+          });
+    return {
+      textContent: "",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [],
+      fileArtifacts: [],
+      success: false,
+    };
   }
 }
 
@@ -204,14 +261,27 @@ export function buildAgentResponseFromEvents(
     .map((event) => toEventArtifactInfo(event.data))
     .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
-  const mediaArtifacts: MediaArtifactInfo[] = [];
-  const mediaArtifactIds = new Set<string>();
+  const fileArtifacts: StoredFileArtifactInfo[] = [];
+  const fileArtifactIndexes = new Map<string, number>();
   for (const event of chronologicalEvents) {
     if (event.type !== "artifact") continue;
-    const mediaArtifact = toEventMediaArtifactInfo(event.data);
-    if (!mediaArtifact || mediaArtifactIds.has(mediaArtifact.id)) continue;
-    mediaArtifactIds.add(mediaArtifact.id);
-    mediaArtifacts.push(mediaArtifact);
+    const fileArtifact = toEventFileArtifactInfo(event.data, event.messageId);
+    if (!fileArtifact) continue;
+    const existingIndex = fileArtifactIndexes.get(fileArtifact.id);
+    if (existingIndex !== undefined) {
+      const existing = fileArtifacts[existingIndex];
+      if (
+        existing.type === "file" &&
+        !existing.available &&
+        fileArtifact.type === "file" &&
+        fileArtifact.available
+      ) {
+        fileArtifacts[existingIndex] = fileArtifact;
+      }
+      continue;
+    }
+    fileArtifactIndexes.set(fileArtifact.id, fileArtifacts.length);
+    fileArtifacts.push(fileArtifact);
   }
 
   const completionEvent = findLastEvent(chronologicalEvents, "execution_complete");
@@ -227,8 +297,14 @@ export function buildAgentResponseFromEvents(
   return {
     textContent,
     toolCalls,
-    artifacts: eventArtifacts.length > 0 ? eventArtifacts : artifacts,
-    mediaArtifacts,
+    artifacts:
+      eventArtifacts.length > 0
+        ? eventArtifacts
+        : artifacts.filter((artifact) => !isStoredFileArtifactType(artifact.type)),
+    fileArtifacts,
+    mediaArtifacts: fileArtifacts.filter(
+      (artifact): artifact is MediaArtifactInfo => artifact.type !== "file"
+    ),
     success,
     error: errorMessage,
   };
@@ -260,12 +336,16 @@ async function fetchSessionArtifacts(
   sessionId: string,
   traceId: string | undefined,
   base: Record<string, unknown>,
-  events: EventResponse[]
+  events: EventResponse[],
+  channel?: string
 ): Promise<ArtifactInfo[]> {
   const log = deps.log ?? noopLogger;
   const eventRange = getEventCreatedAtRange(events);
   try {
-    const artifactsUrl = `https://internal/sessions/${sessionId}/artifacts`;
+    const url = new URL(`https://internal/sessions/${sessionId}/artifacts`);
+    if (channel) url.searchParams.set("channel", channel);
+    if (deps.readPurpose) url.searchParams.set("purpose", deps.readPurpose);
+    const artifactsUrl = url.toString();
     const headers = await buildExtractorAuthHeaders(deps, artifactsUrl, traceId);
     const response = await deps.fetcher.fetch(artifactsUrl, {
       headers,
@@ -277,6 +357,11 @@ async function fetchSessionArtifacts(
         outcome: "error",
         http_status: response.status,
       });
+      if (readsFailClosed(deps))
+        throw new ProtectedReadError(
+          `Control plane artifacts read failed: ${response.status}`,
+          response.status
+        );
       return [];
     }
 
@@ -287,11 +372,12 @@ async function fetchSessionArtifacts(
         outcome: "error",
         error: new Error("Invalid artifacts response"),
       });
+      if (readsFailClosed(deps)) throw new ProtectedReadError("Invalid artifacts response");
       return [];
     }
     const data = parsed.data;
     return data.artifacts
-      .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
+      .filter((artifact) => !isStoredFileArtifactType(artifact.type))
       .filter((artifact) => isArtifactInEventRange(artifact.createdAt, eventRange))
       .map((artifact) => ({
         type: artifact.type,
@@ -305,6 +391,12 @@ async function fetchSessionArtifacts(
       outcome: "error",
       error: error instanceof Error ? error : new Error(String(error)),
     });
+    if (readsFailClosed(deps))
+      throw error instanceof ProtectedReadError
+        ? error
+        : new ProtectedReadError("Control plane artifacts read unavailable", undefined, {
+            cause: error,
+          });
     return [];
   }
 }
@@ -395,7 +487,7 @@ export function getArtifactLabelFromArtifact(
  */
 export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo | null {
   const type = toArtifactType(data.artifactType);
-  if (!type || type === "screenshot" || type === "video") return null;
+  if (!type || isStoredFileArtifactType(type)) return null;
 
   return {
     type,
@@ -431,15 +523,31 @@ export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaAr
   };
 }
 
+/** Validated general files and legacy media share one chronological delivery collection. */
+export function toEventFileArtifactInfo(
+  data: Record<string, unknown>,
+  messageId: string | null
+): StoredFileArtifactInfo | null {
+  if (data.artifactType !== "file") return toEventMediaArtifactInfo(data);
+
+  const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
+  if (!id) return null;
+  const parsed = generatedFileArtifactMetadataSchema.safeParse(data.metadata);
+  if (
+    !parsed.success ||
+    data.url !== parsed.data.objectKey ||
+    !parsed.data.objectKey.endsWith(`/files/${id}`) ||
+    parsed.data.messageId !== messageId
+  ) {
+    return { id, type: "file", available: false };
+  }
+  return { id, type: "file", available: true, metadata: parsed.data };
+}
+
 /**
  * Narrow an unknown value to a known ArtifactType or return null.
  */
 export function toArtifactType(value: unknown): ArtifactType | null {
-  return value === "pr" ||
-    value === "screenshot" ||
-    value === "video" ||
-    value === "preview" ||
-    value === "branch"
-    ? value
-    : null;
+  const parsed = artifactTypeSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }

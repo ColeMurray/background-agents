@@ -33,6 +33,8 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
     status: "completed",
     skipReason: null,
     failureReason: null,
+    attempt: 1,
+    retryAt: null,
     scheduledAt: FIRED_AT,
     startedAt: FIRED_AT + 5_000,
     completedAt: FIRED_AT + 65_000,
@@ -70,6 +72,31 @@ describe("RunHistory", () => {
     expect(screen.getByText("No runs yet.")).toBeInTheDocument();
   });
 
+  it("shows skeleton rows instead of the empty state while the first page loads", () => {
+    render(<RunHistory invocations={[]} total={0} loading={true} hasMore={false} />);
+
+    expect(screen.getByRole("status", { name: "Loading run history" })).toBeInTheDocument();
+    expect(screen.queryByText("No runs yet.")).not.toBeInTheDocument();
+  });
+
+  it("appends skeleton rows below loaded runs and hides load more while loading", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <RunHistory
+        invocations={[makeInvocation()]}
+        total={5}
+        loading={true}
+        hasMore={true}
+        onLoadMore={onLoadMore}
+      />
+    );
+
+    const skeleton = screen.getByRole("status", { name: "Loading run history" });
+    const row = screen.getByText("Nightly review");
+    expect(row.compareDocumentPosition(skeleton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Load more/ })).not.toBeInTheDocument();
+  });
+
   it("renders a childless skipped firing as a reason-only row", () => {
     const invocation = makeInvocation({
       status: "skipped",
@@ -86,6 +113,22 @@ describe("RunHistory", () => {
     expect(screen.queryByText(/completed/)).not.toBeInTheDocument();
   });
 
+  it("explains a firing skipped by the hourly bot-message limit", () => {
+    const invocation = makeInvocation({
+      status: "skipped",
+      source: "event",
+      skipReason: "slack_bot_trigger_limit",
+      completedAt: null,
+      runs: [],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(
+      screen.getByText("Skipped because bot messages reached this automation's hourly run limit")
+    ).toBeInTheDocument();
+  });
+
   it("renders an invocation of one exactly like a flat run row", () => {
     const invocation = makeInvocation();
 
@@ -100,6 +143,90 @@ describe("RunHistory", () => {
     // Single-repository firings don't get the fan-out treatment.
     expect(screen.queryByText("1 repositories")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /repositories/ })).not.toBeInTheDocument();
+  });
+
+  it("renders a childless unauthorized firing as a grant denial without a session", () => {
+    const invocation = makeInvocation({
+      status: "unauthorized",
+      source: "event",
+      skipReason: "repo_not_granted",
+      runs: [],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Repository is not granted to the automation's team. No sandbox or session was created."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText("repo_not_granted")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it.each(["skipReason", "failureReason"] as const)(
+    "renders an unauthorized run's %s as a grant denial, not a launched session",
+    (reasonField) => {
+      const invocation = makeInvocation({
+        status: "unauthorized",
+        source: "event",
+        runs: [
+          makeRun({
+            status: "unauthorized",
+            sessionId: null,
+            sessionTitle: null,
+            startedAt: null,
+            [reasonField]: "repo_not_granted",
+          }),
+        ],
+      });
+
+      render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+      expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Repository is not granted to the automation's team. No sandbox or session was created."
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText("repo_not_granted")).not.toBeInTheDocument();
+      expect(screen.queryByText("1m 0s")).not.toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    }
+  );
+
+  it("counts unauthorized targets and shows their grant denial in expanded history", () => {
+    const invocation = makeInvocation({
+      status: "partial_failed",
+      runs: [
+        makeRun(),
+        makeRun({
+          id: "run-denied",
+          status: "unauthorized",
+          repoName: "api",
+          sessionId: null,
+          sessionTitle: null,
+          startedAt: null,
+          failureReason: "repo_not_granted",
+        }),
+      ],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("1 completed, 1 unauthorized")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /2 repositories/ }));
+    expect(screen.getByText("Unauthorized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Repository is not granted to the automation's team. No sandbox or session was created."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "View session for acme/api" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View session for acme/web-app" })).toBeInTheDocument();
   });
 
   it("renders a failed single run with its failure reason", () => {
@@ -122,6 +249,53 @@ describe("RunHistory", () => {
       screen.getByText("Repository is not accessible for the configured SCM provider")
     ).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "View session" })).not.toBeInTheDocument();
+  });
+
+  it("shows a run waiting to retry with its launch failure and next attempt", () => {
+    const retryAt = FIRED_AT + 10 * 60_000;
+    const invocation = makeInvocation({
+      status: "retrying",
+      completedAt: null,
+      runs: [
+        makeRun({
+          status: "retrying",
+          attempt: 2,
+          retryAt,
+          sessionId: null,
+          sessionTitle: null,
+          startedAt: null,
+          completedAt: null,
+          failureReason: "Failed to initialize session DO: 500",
+        }),
+      ],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("Retrying")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 2")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `Launch failed: Failed to initialize session DO: 500. Retrying at ${new Date(retryAt).toLocaleTimeString()}.`
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "View session" })).not.toBeInTheDocument();
+  });
+
+  it("counts fan-out children waiting to retry", () => {
+    const invocation = makeInvocation({
+      status: "retrying",
+      completedAt: null,
+      runs: [
+        makeRun({ id: "run-web" }),
+        makeRun({ id: "run-api", repoName: "api", status: "retrying", completedAt: null }),
+      ],
+    });
+
+    render(<RunHistory invocations={[invocation]} total={1} loading={false} hasMore={false} />);
+
+    expect(screen.getByText("Retrying")).toBeInTheDocument();
+    expect(screen.getByText("1 completed, 1 retrying")).toBeInTheDocument();
   });
 
   it("summarizes a fan-out firing and expands into repository rows", () => {

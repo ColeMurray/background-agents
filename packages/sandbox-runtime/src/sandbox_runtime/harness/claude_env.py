@@ -215,6 +215,10 @@ def harness_env(config_dir: Path, credential: ClaudeCredential) -> dict[str, str
         # launched in one message still run concurrently, as OpenCode's task
         # tool does.
         "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        # Open-Inspect's memory tools are the agent's only memory. The CLI's
+        # file-based auto memory would compete with them in the system prompt;
+        # this variable overrides any settings file that enables it.
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_TELEMETRY": "1",

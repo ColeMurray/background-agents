@@ -7,19 +7,23 @@
 
 import type { RouteModule } from "../routing/hono-env";
 import { webhookRoutes } from "../webhooks";
+import { actorRoutes } from "./actors";
 import { analyticsRoutes } from "./analytics";
 import { auditEventRoutes } from "./audit-events";
 import { autofixRoutes } from "./autofix";
 import { automationRoutes } from "./automations";
 import { browserAuthRoutes } from "./browser-auth";
+import { channelBindingRoutes } from "./channel-bindings";
 import { commitSigningRoutes } from "./commit-signing";
 import { environmentSecretsRoutes } from "./environment-secrets";
 import { environmentRoutes } from "./environments";
+import { githubRoutingRoutes } from "./github-route";
 import { healthRoutes } from "./health";
 import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
+import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
 import { providerRuntimeCredentialRoutes } from "./provider-runtime-credentials";
@@ -32,8 +36,10 @@ import { slackNotifyRoutes } from "./slack-notify";
 import { signInProviderRoutes } from "./sign-in-providers";
 import { skillRoutes } from "./skills";
 import { teamRoutes } from "./teams";
+import { teamChannelBindingRoutes } from "./team-channel-bindings";
 import { teamSecretsRoutes } from "./team-secrets";
 import { teamSettingsRoutes } from "./settings-teams";
+import { admissionPolicyRoutes } from "./settings-admission-policy";
 
 /** Registration order is the precedence order: each module is mounted where it appears. */
 export const catalog: readonly RouteModule[] = [
@@ -42,8 +48,10 @@ export const catalog: readonly RouteModule[] = [
   browserAuthRoutes,
   signInProviderRoutes,
 
+  teamChannelBindingRoutes,
   teamRoutes,
   teamSettingsRoutes,
+  channelBindingRoutes,
 
   // Session management, then the agent-initiated Slack notification
   sessionRoutes,
@@ -100,6 +108,9 @@ export const catalog: readonly RouteModule[] = [
   // Personal keyboard shortcuts
   keyboardShortcutRoutes,
 
+  // Personal and shared memories, preferences, and new-session previews
+  memoryRoutes,
+
   // Workspace roles, members, and current-user authorization
   rbacRoutes,
 
@@ -108,4 +119,13 @@ export const catalog: readonly RouteModule[] = [
 
   // Webhooks (public routes — auth handled per-route)
   webhookRoutes,
+
+  // Read-only GitHub bot routing hints
+  githubRoutingRoutes,
+
+  // Bot actor enrollment with an attested profile
+  actorRoutes,
+
+  // Deployment-additive browser sign-in rules
+  admissionPolicyRoutes,
 ];

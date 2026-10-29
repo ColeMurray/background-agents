@@ -32,7 +32,7 @@ vi.mock("../image-builds/save-hooks", () => ({
   supersedeImageBuildsForSecretsChange: mocks.supersedeImageBuildsForSecretsChange,
 }));
 
-const env = () => createRepositoryGrantEnv(["environments.secrets.manage"]);
+const env = () => createRepositoryGrantEnv(["environments.secrets.manage", "environments.manage"]);
 const request = createRepositoryGrantRequest(environmentSecretsRoutes, env);
 const path = "/environments/env-1/secrets/import";
 const body = { repoOwner: "acme", repoName: "repo" };
@@ -58,6 +58,10 @@ const sourceRepository = {
 beforeEach(() => {
   vi.clearAllMocks();
   setupRepositoryGrantSpies();
+  // Admit the caller to manage the default team-owned destination.
+  vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+    new Map([["owner-team", "lead"]])
+  );
   mocks.checkRepositoryAccess.mockResolvedValue({
     repoId: 123,
     repoOwner: "acme",
@@ -78,41 +82,70 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment secret import source grants", () => {
-  it.each([null, "owner-team"] as const)(
-    "denies a granted source without a granting-team lead (destination owner %s)",
-    async (ownerTeamId) => {
-      vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
-        ...destination,
-        owner_team_id: ownerTeamId,
-        prebuild_enabled: 1,
-      });
-      vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
-        ownerTeamId === null ? new Map([["team-1", "lead"]]) : new Map([["owner-team", "member"]])
-      );
-      vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(
-        async (teamId) =>
-          teamId === "owner-team" ? [{ grant_kind: "repository", repo_external_id: 123 }] : []
-      );
-      vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
-        "other-team",
-        "owner-team",
-      ]);
+  it("denies a granted source without a granting-team lead (destination owner null)", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+      ...destination,
+      owner_team_id: null,
+      prebuild_enabled: 1,
+    });
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([["team-1", "lead"]])
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(async (teamId) =>
+      teamId === "owner-team" ? [{ grant_kind: "repository", repo_external_id: 123 }] : []
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
+      "other-team",
+      "owner-team",
+    ]);
 
-      const response = await request(path, "POST", body);
+    const response = await request(path, "POST", body);
 
-      expect(response.status).toBe(403);
-      await expect(response.json()).resolves.toEqual({
-        error: "Repository grant required",
-        code: "repository_grant_required",
-        reason_code: "repository_grant_required",
-        repository: "acme/repo",
-      });
-      expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).toHaveBeenCalledWith(123);
-      expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
-      expect(mocks.supersedeImageBuildsForSecretsChange).not.toHaveBeenCalled();
-      expect(mocks.scheduleImageBuildOnSave).not.toHaveBeenCalled();
-    }
-  );
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Repository grant required",
+      code: "repository_grant_required",
+      reason_code: "repository_grant_required",
+      repository: "acme/repo",
+    });
+    expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).toHaveBeenCalledWith(123);
+    expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
+    expect(mocks.supersedeImageBuildsForSecretsChange).not.toHaveBeenCalled();
+    expect(mocks.scheduleImageBuildOnSave).not.toHaveBeenCalled();
+  });
+
+  // Managing a team-owned destination requires its lead, and a destination team that covers
+  // the source is itself a granting team, so a non-lead member is now stopped at admission.
+  it("denies a non-lead destination member before source grants (destination owner owner-team)", async () => {
+    vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+      ...destination,
+      prebuild_enabled: 1,
+    });
+    vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
+      new Map([["owner-team", "member"]])
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listForTeam).mockImplementation(async (teamId) =>
+      teamId === "owner-team" ? [{ grant_kind: "repository", repo_external_id: 123 }] : []
+    );
+    vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([
+      "other-team",
+      "owner-team",
+    ]);
+
+    const response = await request(path, "POST", body);
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Forbidden",
+      code: "environment_action_denied",
+      reason_code: "not_owner_or_lead",
+    });
+    expect(mocks.checkRepositoryAccess).not.toHaveBeenCalled();
+    expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).not.toHaveBeenCalled();
+    expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
+    expect(mocks.supersedeImageBuildsForSecretsChange).not.toHaveBeenCalled();
+    expect(mocks.scheduleImageBuildOnSave).not.toHaveBeenCalled();
+  });
 
   it("denies an ungranted member source even when the source belongs to the environment", async () => {
     expect((await request(path, "POST", body)).status).toBe(409);
@@ -143,8 +176,13 @@ describe("environment secret import source grants", () => {
   });
 
   it.each([123, null])(
-    "allows any source granting-team lead with only environments.secrets.manage (%s)",
+    "allows any source granting-team lead with only environment secret and manage permissions (%s)",
     async (repoId) => {
+      // Workspace-owned so admission does not require leading the destination's granting team.
+      vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
+        ...destination,
+        owner_team_id: null,
+      });
       vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(
         new Map([
           ["owner-team", "member"],
@@ -163,7 +201,9 @@ describe("environment secret import source grants", () => {
         "other-team",
       ]);
       const environment = env();
-      environment.DB = authorizationDatabase({ permissions: ["environments.secrets.manage"] });
+      environment.DB = authorizationDatabase({
+        permissions: ["environments.secrets.manage", "environments.manage"],
+      });
       expect((await request(path, "POST", body, environment)).status).toBe(200);
       expect(EnvironmentSecretsStore.prototype.importFromRepo).toHaveBeenCalledWith(
         "env-1",
@@ -279,7 +319,8 @@ describe.each(["off", "shadow", "on"] as const)(
           repository: "acme/repo",
         });
         expect(mocks.checkRepositoryAccess).toHaveBeenCalledOnce();
-        expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+        // Only admission's memoized membership snapshot.
+        expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
         expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
         expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).not.toHaveBeenCalled();
         expect(EnvironmentSecretsStore.prototype.importFromRepo).not.toHaveBeenCalled();
@@ -368,10 +409,12 @@ describe.each(["off", "shadow", "on"] as const)(
 describe.each(["off", "shadow", "on"] as const)(
   "workspace environment secret ownership in %s mode",
   (mode) => {
-    it("preserves workspace-owned import with only its existing custom-role permission", async () => {
+    it("preserves workspace-owned import for a custom role without team membership", async () => {
       const environment = env();
       environment.TEAMS_ENFORCEMENT = mode;
-      environment.DB = authorizationDatabase({ permissions: ["environments.secrets.manage"] });
+      environment.DB = authorizationDatabase({
+        permissions: ["environments.secrets.manage", "environments.manage"],
+      });
       vi.mocked(TeamMembershipStore.prototype.listForUser).mockResolvedValue(new Map());
       vi.mocked(TeamRepositoryGrantStore.prototype.listTeamsForRepository).mockResolvedValue([]);
       vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue({
@@ -380,7 +423,8 @@ describe.each(["off", "shadow", "on"] as const)(
       });
 
       expect((await request(path, "POST", body, environment)).status).toBe(200);
-      expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+      // Only admission's memoized membership snapshot.
+      expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
       expect(TeamRepositoryGrantStore.prototype.listForTeam).not.toHaveBeenCalled();
       expect(TeamRepositoryGrantStore.prototype.listTeamsForRepository).toHaveBeenCalledWith(123);
       expect(mocks.checkRepositoryAccess).toHaveBeenCalledOnce();
@@ -408,7 +452,8 @@ describe.each(["owner", "administrator"] as const)(
 
       expect((await request(path, "POST", body)).status).toBe(200);
       expect(TeamRepositoryGrantStore.prototype.listForTeam).toHaveBeenCalledWith("owner-team");
-      expect(TeamMembershipStore.prototype.listForUser).not.toHaveBeenCalled();
+      // Only admission's memoized membership snapshot.
+      expect(TeamMembershipStore.prototype.listForUser).toHaveBeenCalledOnce();
       expect(mocks.checkRepositoryAccess).toHaveBeenCalledOnce();
       expect(EnvironmentSecretsStore.prototype.importFromRepo).toHaveBeenCalledWith(
         "env-1",

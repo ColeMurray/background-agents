@@ -5,13 +5,14 @@ import { SWRConfig } from "swr";
 import { Toaster } from "@/components/ui/sonner";
 import { SyntaxHighlightTheme } from "@/components/syntax-highlight-theme";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 
 async function swrFetcher<T>(url: BrowserApiPath): Promise<T> {
   // SWR falls back to this fetcher for every hook that omits its own, including
   // hooks whose key is local state rather than a request path.
   if (!url.startsWith("/api/")) throw new Error(`SWR key is not a BFF API path: ${url}`);
   const res = await browserApiFetch(url);
-  if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+  if (!res.ok) throw new SwrFetchError(res.status);
   return res.json();
 }
 

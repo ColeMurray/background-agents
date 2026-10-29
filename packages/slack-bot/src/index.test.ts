@@ -36,8 +36,10 @@ vi.mock("@open-inspect/shared/slack", async () => {
 });
 
 import app from "./index";
-import { clearBotUserIdCache } from "./bot-identity";
+import { clearBotIdentityCache } from "./bot-identity";
 import { clearLocalCache } from "./classifier/repos";
+import { clearEnvironmentsLocalCache } from "./classifier/environments";
+import { RepoClassifier } from "./classifier";
 
 function createMockKV() {
   const store = new Map<string, string>();
@@ -92,6 +94,9 @@ function makeEnv() {
   const controlPlaneFetch = vi.fn<ControlPlaneFetcher["fetch"]>();
   controlPlaneFetch.mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
+    if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
+    if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
     if (url.includes("/repos")) {
       return new Response(
         JSON.stringify(
@@ -157,10 +162,21 @@ function buildNumberedRepos(count: number) {
   });
 }
 
-/** Point CONTROL_PLANE.fetch at a fixed repo list (other routes return enabledModels). */
-function mockReposFetch(env: ReturnType<typeof makeEnv>, repos: Array<Record<string, unknown>>) {
+/** Point CONTROL_PLANE.fetch at a fixed catalog and binding scope. */
+function mockReposFetch(
+  env: ReturnType<typeof makeEnv>,
+  repos: Array<Record<string, unknown>>,
+  teamId: string | null = null,
+  environments: Array<Record<string, unknown>> = []
+) {
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
+    if (url.includes("/channel-bindings/slack/"))
+      return Response.json(teamId ? { teamId, kind: "primary" } : { teamId: null });
+    if (url.includes("/environments")) {
+      return Response.json({ environments, total: environments.length });
+    }
     if (url.includes("/repos")) {
       return new Response(JSON.stringify(mockReposResponseBody(repos)), {
         status: 200,
@@ -195,13 +211,32 @@ function makeSessionEnv(
     session?: unknown;
     prompt?: unknown | unknown[];
     promptStatus?: number | number[];
+    publicationStatus?: number;
+    teamId?: string | null;
     modelPreferencesStatus?: number;
+    slackDefaults?: Record<string, unknown>;
+    enabledModels?: string[];
   } = {}
 ): ReturnType<typeof makeEnv> {
   const env = makeEnv();
   let promptResponseIndex = 0;
   env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (new URL(url).pathname === "/actors/me") return new Response(null, { status: 204 });
+    if (url.endsWith("/integration-settings/slack")) {
+      return Response.json({
+        integrationId: "slack",
+        settings: responses.slackDefaults ? { defaults: responses.slackDefaults } : null,
+      });
+    }
+    if (url.includes("/channel-bindings/slack/"))
+      return Response.json(
+        responses.teamId ? { teamId: responses.teamId, kind: "primary" } : { teamId: null }
+      );
+    if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
+    if (new URL(url).pathname.endsWith("/artifacts")) {
+      return Response.json({ artifacts: [] }, { status: responses.publicationStatus ?? 200 });
+    }
     if (url.includes("/repos")) {
       order.push("repos");
       return new Response(
@@ -257,10 +292,13 @@ function makeSessionEnv(
       });
     }
 
-    return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-      status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ enabledModels: responses.enabledModels ?? ["anthropic/claude-haiku-4-5"] }),
+      {
+        status: responses.modelPreferencesStatus ?? DEFAULT_MODEL_PREFERENCES_STATUS,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   });
   return env;
 }
@@ -431,11 +469,24 @@ function slackEventRequest(event: Record<string, unknown>, eventId = crypto.rand
   });
 }
 
+function slackInteractionRequest(payload: Record<string, unknown>): Request {
+  return new Request("http://localhost/interactions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "x-slack-signature": "v0=test",
+      "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+    },
+    body: new URLSearchParams({ payload: JSON.stringify(payload) }),
+  });
+}
+
 describe("POST /events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     clearLocalCache();
+    clearEnvironmentsLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
     mockMessagesCreate.mockResolvedValue({
@@ -501,6 +552,40 @@ describe("POST /events", () => {
     );
   });
 
+  it("publishes a disabled App Home model as needing replacement", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const env = makeSessionEnv([], { enabledModels: ["anthropic/claude-haiku-4-5"] });
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", model: "openai/gpt-5.5", updatedAt: 1 })
+    );
+    const ctx = makeCtx();
+
+    await app.fetch(
+      slackEventRequest({ type: "app_home_opened", tab: "home", user: "U123" }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+
+    const view = mockPublishView.mock.calls[0][2];
+    expect(view.blocks).toContainEqual(
+      expect.objectContaining({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Your model `openai/gpt-5.5` is no longer enabled, so new requests are refused until you choose a model above.",
+          },
+        ],
+      })
+    );
+    const picker = view.blocks.find(
+      (block: { block_id?: string }) => block.block_id === "model_selection"
+    );
+    expect(picker.elements[0]).not.toHaveProperty("initial_option");
+  });
+
   it("does not dispatch app mentions without a user", async () => {
     const slackFetch = mockSlackFetch([]);
     const env = makeSessionEnv([]);
@@ -535,7 +620,7 @@ describe("POST /events", () => {
   it("sets Starting status for a new app mention before session creation", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
-    const env = makeSessionEnv(order);
+    const env = makeSessionEnv(order, { teamId: "team-a" });
     const ctx = makeCtx();
 
     const response = await app.fetch(
@@ -564,7 +649,6 @@ describe("POST /events", () => {
       loading_messages: ["Starting..."],
     });
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
-    expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
     expect(mockGetUserInfo).toHaveBeenCalledOnce();
 
@@ -572,6 +656,19 @@ describe("POST /events", () => {
     expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
 
     const sessionBodies = sessionFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(sessionBodies).toEqual([expect.objectContaining({ teamId: "team-a" })]);
+    for (const resource of ["repos", "environments"]) {
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
+      );
+      expect(catalogReads).toHaveLength(1);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
+    }
     expect(sessionBodies[0]).not.toHaveProperty("title");
     expect((env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }).put).toHaveBeenCalledWith(
       "thread:C123:111.222",
@@ -606,7 +703,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("resolves the actor once across clarification and selection", async () => {
+  it("resolves the actor once per event across clarification and selection", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
     const env = makeEnv();
@@ -616,6 +713,9 @@ describe("POST /events", () => {
     });
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/"))
+        return Response.json({ teamId: "team-a", kind: "primary" });
+      if (url.includes("/environments")) return Response.json({ environments: [], total: 0 });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -719,7 +819,7 @@ describe("POST /events", () => {
     const pickerBlockId = String(pickerBlock.block_id);
     const requestId = pickerBlockId.slice("target_picker:".length);
 
-    expect(mockGetUserInfo).not.toHaveBeenCalled();
+    expect(mockGetUserInfo).toHaveBeenCalledOnce();
     await expect(
       (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
         `pending:${requestId}`,
@@ -728,6 +828,7 @@ describe("POST /events", () => {
     ).resolves.toEqual(
       expect.objectContaining({
         requestId,
+        teamId: "team-a",
         channel: "C123",
         threadTs: "111.222",
         message: "frontend backend help",
@@ -771,7 +872,27 @@ describe("POST /events", () => {
 
     expect(selectionResponse.status).toBe(200);
     await flushWaitUntil(selectionCtx);
-    expect(mockGetUserInfo).toHaveBeenCalledOnce();
+    expect(mockGetUserInfo).toHaveBeenCalledTimes(2);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({ teamId: "team-a" }),
+    ]);
+    for (const resource of ["repos", "environments"]) {
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
+      );
+      expect(catalogReads).toHaveLength(resource === "repos" ? 3 : 2);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
+    }
+    expect(
+      env.CONTROL_PLANE.fetch.mock.calls.filter(([url]) =>
+        String(url).includes("/channel-bindings/slack/C123")
+      )
+    ).toHaveLength(2);
     expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
       expect.objectContaining({
         content: expect.stringContaining("[Ajan (U123)]: frontend backend help"),
@@ -780,6 +901,81 @@ describe("POST /events", () => {
 
     slackFetch.mockRestore();
   });
+
+  it.each([
+    {
+      match: "a repository with alternatives",
+      classification: { targetId: "acme/web", confidence: "medium", alternatives: ["acme/api"] },
+      buttonValues: ["acme/web", "acme/api"],
+    },
+    {
+      match: "an environment without alternatives",
+      classification: { targetId: "env_full_stack", confidence: "low", alternatives: [] },
+      buttonValues: ["env:env_full_stack"],
+    },
+  ])(
+    "offers the classifier's match as the first quick pick for $match",
+    async ({ classification, buttonValues }) => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_test",
+            name: "classify_target",
+            input: { ...classification, reasoning: "The login page could live in several places." },
+          },
+        ],
+      });
+      const slackFetch = mockSlackFetch();
+      const env = makeEnv();
+      mockReposFetch(
+        env,
+        [
+          { owner: "acme", name: "web", defaultBranch: "main", private: true },
+          { owner: "acme", name: "api", defaultBranch: "main", private: true },
+          { owner: "acme", name: "docs", defaultBranch: "main", private: true },
+        ],
+        null,
+        [
+          {
+            id: "env_full_stack",
+            name: "full-stack",
+            description: null,
+            prebuildEnabled: true,
+            createdAt: 1,
+            updatedAt: 1,
+            repositories: [{ repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" }],
+          },
+        ]
+      );
+      const ctx = makeCtx();
+
+      await app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          text: "<@B123> fix the login page",
+          user: "U123",
+          channel: "C123",
+          ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+
+      const clarification = slackApiBodies(slackFetch, "chat.postMessage").find((body) =>
+        String(body.text).includes("I couldn't determine which target")
+      );
+      expect(clarification?.blocks).toContainEqual(
+        expect.objectContaining({
+          type: "actions",
+          elements: buttonValues.map((value) => expect.objectContaining({ value })),
+        })
+      );
+
+      slackFetch.mockRestore();
+    }
+  );
 
   it("treats a malformed session creation response as a creation failure", async () => {
     const order: string[] = [];
@@ -806,9 +1002,17 @@ describe("POST /events", () => {
     expect(order).not.toContain("prompt");
     expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ text: "Sorry, I couldn't create a session. Please try again." }),
+        expect.objectContaining({
+          channel: "C123",
+          thread_ts: "111.222",
+          text: "Sorry, I couldn't create a session. Please try again.",
+        }),
       ])
     );
+    const threadMappingWrite = (
+      env.SLACK_KV as unknown as { put: ReturnType<typeof vi.fn> }
+    ).put.mock.calls.find(([key]) => key === "thread:C123:111.222");
+    expect(threadMappingWrite).toBeUndefined();
 
     slackFetch.mockRestore();
   });
@@ -839,6 +1043,8 @@ describe("POST /events", () => {
     expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          channel: "C123",
+          thread_ts: "111.222",
           text: "Session created but failed to send prompt. Please try again.",
         }),
       ])
@@ -881,7 +1087,463 @@ describe("POST /events", () => {
     });
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+      expect.objectContaining({ teamId: null }),
+    ]);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/channel-bindings/slack/D123",
+      expect.anything()
+    );
+    for (const resource of ["repos", "environments"]) {
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
+      );
+      expect(catalogReads).toHaveLength(1);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AD123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
+    }
 
+    slackFetch.mockRestore();
+  });
+
+  it.each([404, 503, "unbound", "malformed", "network"] as const)(
+    "refuses a new request before classification when binding lookup fails: %s",
+    async (failure) => {
+      const slackFetch = mockSlackFetch();
+      const classify = vi.spyOn(RepoClassifier.prototype, "classify");
+      const env = makeSessionEnv();
+      env.CONTROL_PLANE.fetch.mockImplementation(async () => {
+        if (failure === "network") throw new Error("offline");
+        if (failure === "unbound")
+          return Response.json({ code: "channel_unbound" }, { status: 404 });
+        return failure === "malformed"
+          ? Response.json({ teamId: null, kind: "primary" })
+          : new Response(null, { status: failure });
+      });
+      const ctx = makeCtx();
+      await app.fetch(
+        slackEventRequest({
+          type: "message",
+          channel_type: "im",
+          channel: "D123",
+          text: "Fix it",
+          user: "U123",
+          ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+      expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+        "https://internal/channel-bindings/slack/D123",
+        expect.objectContaining({
+          headers: expect.objectContaining({ "X-OpenInspect-Service": "slack-bot" }),
+        })
+      );
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(classify).not.toHaveBeenCalled();
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+        expect.objectContaining({
+          channel: "D123",
+          thread_ts: "111.222",
+          text: expect.stringContaining(failure === "unbound" ? "not bound" : "couldn't verify"),
+        }),
+      ]);
+      classify.mockRestore();
+      slackFetch.mockRestore();
+    }
+  );
+
+  describe.each(["app_mention", "message"] as const)("mapped %s follow-up scope", (type) => {
+    it.each([
+      ["rebound", "team-a"],
+      ["unbound", "team-a"],
+      ["missing", "team-a"],
+      ["rebound", null],
+      ["rebound", undefined],
+    ] as const)(
+      "tombstones before Slack reads when binding is %s and stored team is %s",
+      async (failure, teamId) => {
+        const channel = type === "message" ? "D123" : "C123";
+        const slackFetch = mockSlackFetch();
+        const classify = vi.spyOn(RepoClassifier.prototype, "classify");
+        const env = makeSessionEnv();
+        await env.SLACK_KV.put(
+          `thread:${channel}:111.222`,
+          JSON.stringify({
+            sessionId: "team-a-session",
+            teamId,
+            repoId: "acme/app",
+            repoFullName: "acme/app",
+            model: "anthropic/claude-haiku-4-5",
+            createdAt: 1,
+            lastPromptTs: "111.222",
+          })
+        );
+        env.CONTROL_PLANE.fetch.mockImplementation(async () => {
+          if (failure === "missing")
+            return Response.json({ code: "channel_unbound" }, { status: 404 });
+          return Response.json(
+            failure === "rebound" ? { teamId: "team-b", kind: "source" } : { teamId: null }
+          );
+        });
+        const ctx = makeCtx();
+        await app.fetch(
+          slackEventRequest({
+            type,
+            channel,
+            channel_type: type === "message" ? "im" : undefined,
+            text: "<@B123> confidential team-b follow-up",
+            user: "U123",
+            ts: "333.444",
+            thread_ts: "111.222",
+            files: [
+              {
+                id: "F1",
+                name: "secret.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/secret.png",
+                size: 16,
+              },
+            ],
+          }),
+          env,
+          ctx
+        );
+        await flushWaitUntil(ctx);
+        expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+        expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+          `https://internal/channel-bindings/slack/${channel}`,
+          expect.anything()
+        );
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(classify).not.toHaveBeenCalled();
+        expect(mockGetUserInfo).not.toHaveBeenCalled();
+        expect(
+          slackFetch.mock.calls.every(([url]) => String(url).includes("chat.postMessage"))
+        ).toBe(true);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({
+            channel,
+            thread_ts: "111.222",
+            text: "this session is no longer available from this channel",
+          }),
+        ]);
+        expect(await env.SLACK_KV.get(`thread-closed:${channel}:111.222:team-a-session`)).toBe("1");
+        expect(await env.SLACK_KV.get(`thread:${channel}:111.222`, "json")).toMatchObject({
+          closed: true,
+        });
+        classify.mockRestore();
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each([
+      "unavailable",
+      "network",
+      "timeout",
+      "malformed",
+      "invalid-json",
+      "404-empty",
+      "404-router",
+      "404-invalid-json",
+    ] as const)(
+      "preserves the thread when binding lookup is %s, then forwards after recovery",
+      async (failure) => {
+        const channel = type === "message" ? "D123" : "C123";
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const slackFetch = mockSlackFetch();
+        const classify = vi.spyOn(RepoClassifier.prototype, "classify");
+        const env = makeSessionEnv([], { teamId: "team-a" });
+        const session = {
+          sessionId: "team-a-session",
+          teamId: "team-a",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: 1,
+          lastPromptTs: "111.222",
+        };
+        await env.SLACK_KV.put(`thread:${channel}:111.222`, JSON.stringify(session));
+        const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+        let bindingUnavailable = true;
+        env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
+          const url = new URL(String(input));
+          if (url.pathname.includes("/channel-bindings/") && bindingUnavailable) {
+            if (failure === "network") throw new Error("offline");
+            if (failure === "timeout") throw new DOMException("timed out", "TimeoutError");
+            if (failure === "malformed") return Response.json({ teamId: "team-a" });
+            if (failure === "invalid-json") return new Response("{");
+            if (failure === "404-empty") return new Response(null, { status: 404 });
+            if (failure === "404-router")
+              return Response.json({ code: "not_found" }, { status: 404 });
+            if (failure === "404-invalid-json") return new Response("{", { status: 404 });
+            return new Response(null, { status: 503 });
+          }
+          return dispatch(input, init);
+        });
+        const event = {
+          type,
+          channel,
+          channel_type: type === "message" ? "im" : undefined,
+          text: "<@B123> follow up",
+          user: "U123",
+          ts: "333.444",
+          thread_ts: "111.222",
+        };
+        const ctx = makeCtx();
+        await app.fetch(slackEventRequest(event), env, ctx);
+        await flushWaitUntil(ctx);
+
+        expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(classify).not.toHaveBeenCalled();
+        expect(mockGetUserInfo).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledOnce();
+        expect(JSON.parse(warn.mock.calls[0][0])).toMatchObject({
+          msg: "channel_binding.followup_unavailable",
+          channel,
+        });
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({
+            channel,
+            thread_ts: "111.222",
+            text: "I couldn't verify this channel's binding. Please try again.",
+          }),
+        ]);
+        expect(slackFetch).toHaveBeenCalledOnce();
+        expect(
+          await env.SLACK_KV.get(`thread-closed:${channel}:111.222:team-a-session`)
+        ).toBeNull();
+        expect(await env.SLACK_KV.get(`thread:${channel}:111.222`, "json")).toEqual(session);
+        const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+        expect(kv.put.mock.calls.filter(([key]) => key.startsWith("thread"))).toHaveLength(1);
+        expect(kv.delete).not.toHaveBeenCalled();
+
+        bindingUnavailable = false;
+        env.CONTROL_PLANE.fetch.mockClear();
+        const recoveredCtx = makeCtx();
+        await app.fetch(slackEventRequest({ ...event, ts: "444.555" }), env, recoveredCtx);
+        await flushWaitUntil(recoveredCtx);
+        expect(
+          env.CONTROL_PLANE.fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)
+        ).toEqual([
+          `/channel-bindings/slack/${channel}`,
+          "/actors/me",
+          `/sessions/${session.sessionId}/prompt`,
+        ]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(
+          await env.SLACK_KV.get(`thread-closed:${channel}:111.222:team-a-session`)
+        ).toBeNull();
+        expect(kv.delete).not.toHaveBeenCalled();
+        classify.mockRestore();
+        slackFetch.mockRestore();
+        warn.mockRestore();
+      }
+    );
+  });
+
+  it.each(["prompt", "attachment"] as const)(
+    "tombstones a matching mapped thread if %s admission observes a rebind",
+    async (write) => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+      let uploads = 0;
+      env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(write === "prompt" ? "/prompt" : "/attachments")) {
+          expect(url.searchParams.get("channel")).toBe("slack:C123");
+          if (write === "attachment" && uploads++ === 0) {
+            return Response.json({ attachmentId: "att-1", mimeType: "image/png" }, { status: 201 });
+          }
+          return Response.json({ code: "slack_channel_scope_denied" }, { status: 403 });
+        }
+        return dispatch(input, init);
+      });
+      await env.SLACK_KV.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "team-a-session",
+          teamId: "team-a",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: 1,
+        })
+      );
+      const ctx = makeCtx();
+      await app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          channel: "C123",
+          text: "<@B123> follow up",
+          user: "U123",
+          ts: "333.444",
+          thread_ts: "111.222",
+          files:
+            write === "attachment"
+              ? ["F1", "F2"].map((id) => ({
+                  id,
+                  name: "secret.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/secret.png",
+                  size: 16,
+                }))
+              : [],
+        }),
+        env,
+        ctx
+      );
+      await flushWaitUntil(ctx);
+      expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBe("1");
+      if (write === "attachment") expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+        expect.objectContaining({ text: "this session is no longer available from this channel" })
+      );
+      slackFetch.mockRestore();
+    }
+  );
+
+  it("allows a mapped team follow-up only after reading the current binding", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { teamId: "team-a" });
+    await env.SLACK_KV.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "team-a-session",
+        teamId: "team-a",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: 1,
+      })
+    );
+    const ctx = makeCtx();
+    await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        channel: "C123",
+        text: "<@B123> follow up",
+        user: "U123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+    expect(env.CONTROL_PLANE.fetch.mock.calls[0][0]).toBe(
+      "https://internal/channel-bindings/slack/C123"
+    );
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBeNull();
+    slackFetch.mockRestore();
+  });
+
+  it("reopens a closed thread once its binding and visibility allow posting again", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { teamId: "team-a" });
+    await env.SLACK_KV.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "team-a-session",
+        teamId: "team-a",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: 1,
+        closed: true,
+      })
+    );
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session", "1");
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session:notice", "1");
+    const closedSession = await env.SLACK_KV.get("thread:C123:111.222", "json");
+    const event = {
+      type: "app_mention",
+      channel: "C123",
+      text: "<@B123> follow up",
+      user: "U123",
+      ts: "333.444",
+      thread_ts: "111.222",
+    };
+    env.CONTROL_PLANE.fetch.mockRejectedValueOnce(new Error("offline"));
+    const unavailableCtx = makeCtx();
+    await app.fetch(slackEventRequest({ ...event, ts: "222.333" }), env, unavailableCtx);
+    await flushWaitUntil(unavailableCtx);
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledOnce();
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(await env.SLACK_KV.get("thread:C123:111.222", "json")).toEqual(closedSession);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBe("1");
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session:notice")).toBe("1");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+      expect.objectContaining({
+        text: "I couldn't verify this channel's binding. Please try again.",
+        thread_ts: "111.222",
+      }),
+    ]);
+    const ctx = makeCtx();
+    await app.fetch(slackEventRequest(event), env, ctx);
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBeNull();
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session:notice")).toBeNull();
+    expect(await env.SLACK_KV.get("thread:C123:111.222", "json")).not.toHaveProperty("closed");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).not.toContainEqual(
+      expect.objectContaining({ text: "this session is no longer available from this channel" })
+    );
+    slackFetch.mockRestore();
+  });
+
+  it.each([
+    ["the channel is bound to another team", { teamId: "team-b" }],
+    ["the session cannot post to the channel", { teamId: "team-a", publicationStatus: 403 }],
+  ] as const)("keeps a closed thread closed while %s", async (_reason, responses) => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], responses);
+    await env.SLACK_KV.put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "team-a-session",
+        teamId: "team-a",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: 1,
+        closed: true,
+      })
+    );
+    await env.SLACK_KV.put("thread-closed:C123:111.222:team-a-session", "1");
+    const ctx = makeCtx();
+    await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        channel: "C123",
+        text: "<@B123> follow up",
+        user: "U123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+    await flushWaitUntil(ctx);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(await env.SLACK_KV.get("thread-closed:C123:111.222:team-a-session")).toBe("1");
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({ text: "this session is no longer available from this channel" })
+    );
     slackFetch.mockRestore();
   });
 
@@ -942,6 +1604,295 @@ describe("POST /events", () => {
     );
 
     slackFetch.mockRestore();
+  });
+
+  describe("first-contact actor enrollment", () => {
+    const IMAGE_FILE = {
+      id: "F1",
+      name: "screenshot.png",
+      mimetype: "image/png",
+      url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+      size: 16,
+    };
+
+    function controlPlaneRequests(env: ReturnType<typeof makeEnv>) {
+      return env.CONTROL_PLANE.fetch.mock.calls.map(([input, init]) => ({
+        path: new URL(String(input)).pathname,
+        actor: new Headers(init?.headers).get("X-OpenInspect-Actor"),
+        // Attachment uploads send multipart bytes rather than JSON.
+        body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
+      }));
+    }
+
+    /**
+     * Return the enrollment request, after asserting that no request before it
+     * carried an actor: any such request would enroll the actor without its
+     * email and split it from the user who owns that email.
+     */
+    function expectEnrolledFirst(env: ReturnType<typeof makeEnv>, laterPath: string) {
+      const requests = controlPlaneRequests(env);
+      const paths = requests.map((request) => request.path);
+      const enrollment = paths.indexOf("/actors/me");
+      if (enrollment === -1) throw new Error(`no enrollment in ${paths.join(", ")}`);
+      expect(requests.slice(0, enrollment).filter((request) => request.actor !== null)).toEqual([]);
+      expect(paths.slice(enrollment + 1)).toContain(laterPath);
+      return requests[enrollment];
+    }
+
+    function mentionNewThread(env: ReturnType<typeof makeEnv>, ctx: ReturnType<typeof makeCtx>) {
+      return app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          text: "<@B123> fix the auth tests",
+          user: "U123",
+          channel: "C123",
+          ts: "111.222",
+        }),
+        env,
+        ctx
+      );
+    }
+
+    async function putThreadSession(env: ReturnType<typeof makeEnv>, lastPromptTs?: string) {
+      await env.SLACK_KV.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          createdAt: Date.now(),
+          lastPromptTs,
+        })
+      );
+    }
+
+    function replyInThread(
+      env: ReturnType<typeof makeEnv>,
+      ctx: ReturnType<typeof makeCtx>,
+      event: Record<string, unknown>
+    ) {
+      return app.fetch(
+        slackEventRequest({
+          type: "app_mention",
+          channel: "C123",
+          ts: "333.444",
+          thread_ts: "111.222",
+          ...event,
+        }),
+        env,
+        ctx
+      );
+    }
+
+    beforeEach(() => {
+      mockGetUserInfo.mockImplementation(async (_token: string, user: string) => ({
+        ok: true,
+        user: { id: user, name: user, profile: { display_name: "Ada", email: "ada@example.com" } },
+      }));
+    });
+
+    it("enrolls the mentioning user with their Slack email before reading the catalog", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const ctx = makeCtx();
+
+      expect((await mentionNewThread(env, ctx)).status).toBe(200);
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/repos")).toEqual({
+        path: "/actors/me",
+        actor: "slack:U123",
+        body: { displayName: "Ada", email: "ada@example.com" },
+      });
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ actorEmail: "ada@example.com" }),
+      ]);
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls a new person in an existing thread before delivering their prompt", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv();
+      await putThreadSession(env);
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, { text: "<@B123> also check the logout path", user: "U456" });
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/sessions/session-1/prompt")).toEqual({
+        path: "/actors/me",
+        actor: "slack:U456",
+        body: { displayName: "Ada", email: "ada@example.com" },
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls before a flagged image mention reads settings or uploads the image", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, {
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 fix the auth tests",
+        user: "U123",
+        files: [IMAGE_FILE],
+      });
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/sessions/session-1/attachments")).toMatchObject({
+        actor: "slack:U123",
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it("enrolls before a flagged image follow-up uploads the image", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv();
+      await putThreadSession(env, "111.222");
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, {
+        text: "<@B123> !model:anthropic/claude-haiku-4-5 also check logout",
+        user: "U456",
+        files: [IMAGE_FILE],
+      });
+      await flushWaitUntil(ctx);
+
+      expect(expectEnrolledFirst(env, "/sessions/session-1/attachments")).toMatchObject({
+        actor: "slack:U456",
+      });
+
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["a new mention in a thread", undefined],
+      ["a follow-up", "111.222"],
+    ])("enrolls while the thread history of %s is still loading", async (_case, lastPromptTs) => {
+      const slackFetch = mockSlackFetch();
+      const slackDispatch = slackFetch.getMockImplementation()!;
+      const history = createDeferred<void>();
+      slackFetch.mockImplementation(async (input, init) => {
+        const url = String(input);
+        // Admission also reads the thread; only the history fetch has limit=200.
+        if (url.includes("conversations.replies") && url.includes("limit=200")) {
+          await history.promise;
+        }
+        return slackDispatch(input, init);
+      });
+      const env = lastPromptTs ? makeSessionEnv() : makeSessionEnv([], { teamId: "team-a" });
+      if (lastPromptTs) await putThreadSession(env, lastPromptTs);
+      const ctx = makeCtx();
+
+      await replyInThread(env, ctx, { text: "<@B123> fix the auth tests", user: "U123" });
+      await vi.waitFor(() =>
+        expect(controlPlaneRequests(env).map((request) => request.path)).toContain("/actors/me")
+      );
+      history.resolve();
+      await flushWaitUntil(ctx);
+
+      slackFetch.mockRestore();
+    });
+
+    function refuseEnrollment(env: ReturnType<typeof makeEnv>, refusal: () => Response) {
+      const dispatch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+      env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) =>
+        new URL(String(input)).pathname === "/actors/me" ? refusal() : dispatch(input, init)
+      );
+    }
+
+    const emailRequired = () =>
+      Response.json(
+        { error: "Actor enrollment requires an attested email", code: "actor_email_required" },
+        { status: 403 }
+      );
+    const unavailable = () => new Response("unavailable", { status: 500 });
+    const admissionDenied = () =>
+      Response.json({ code: "actor_admission_denied" }, { status: 403 });
+
+    it.each([
+      ["the control plane needs an email", emailRequired, "read Slack profile emails"],
+      ["admission denies the account", admissionDenied, "admission allowlists"],
+      ["the control plane is unavailable", unavailable, "try again"],
+    ])(
+      "stops a new mention before any actor-carrying request when %s",
+      async (_case, refusal, reply) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], { teamId: "team-a" });
+        refuseEnrollment(env, refusal);
+        const ctx = makeCtx();
+
+        await mentionNewThread(env, ctx);
+        await flushWaitUntil(ctx);
+
+        const requests = controlPlaneRequests(env);
+        expect(requests.filter((request) => request.actor !== null)).toEqual([
+          expect.objectContaining({ path: "/actors/me" }),
+        ]);
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({ thread_ts: "111.222", text: expect.stringContaining(reply) }),
+        ]);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each([
+      ["the control plane needs an email", emailRequired, "read Slack profile emails"],
+      ["admission denies the account", admissionDenied, "admission allowlists"],
+      ["the control plane is unavailable", unavailable, "try again"],
+    ])(
+      "stops a follow-up before any actor-carrying request when %s",
+      async (_case, refusal, reply) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv();
+        await putThreadSession(env, "111.222");
+        refuseEnrollment(env, refusal);
+        const ctx = makeCtx();
+
+        await replyInThread(env, ctx, {
+          text: "<@B123> also check logout",
+          user: "U456",
+          files: [IMAGE_FILE],
+        });
+        await flushWaitUntil(ctx);
+
+        expect(controlPlaneRequests(env).filter((request) => request.actor !== null)).toEqual([
+          expect.objectContaining({ path: "/actors/me" }),
+        ]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({ thread_ts: "111.222", text: expect.stringContaining(reply) }),
+        ]);
+
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("lets the control plane decide when Slack returns no email", async () => {
+      mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { teamId: "team-a" });
+      const ctx = makeCtx();
+
+      await mentionNewThread(env, ctx);
+      await flushWaitUntil(ctx);
+
+      // A known actor enrolls without an email, so the message proceeds.
+      expect(expectEnrolledFirst(env, "/repos")).toEqual({
+        path: "/actors/me",
+        actor: "slack:U123",
+        body: {},
+      });
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+
+      slackFetch.mockRestore();
+    });
   });
 
   it("sets Starting status for follow-up prompts in existing threads", async () => {
@@ -1078,7 +2029,7 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("uses an enabled fallback model for a reasoning-only existing-thread override", async () => {
+  it("keeps a disabled session model for a reasoning-only existing-thread override", async () => {
     const slackFetch = mockSlackFetch();
     const env = makeSessionEnv();
     const kv = env.SLACK_KV as unknown as {
@@ -1100,7 +2051,7 @@ describe("POST /events", () => {
     const response = await app.fetch(
       slackEventRequest({
         type: "app_mention",
-        text: "<@B123> !reasoning:max add coverage",
+        text: "<@B123> !reasoning:high add coverage",
         user: "U123",
         channel: "C123",
         ts: "333.444",
@@ -1113,16 +2064,19 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
-    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+    // Like a follow-up without flags, the prompt sends no model, so the
+    // session keeps running the model its harness was chosen for.
+    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+    expect(promptBodies).toEqual([
       expect.objectContaining({
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "max",
+        reasoningEffort: "high",
         callbackContext: expect.objectContaining({
-          model: "anthropic/claude-haiku-4-5",
-          reasoningEffort: "max",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "high",
         }),
       }),
     ]);
+    expect(promptBodies[0]).not.toHaveProperty("model");
     expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
       "https://internal/model-preferences?strict=true",
       expect.objectContaining({ method: "GET" })
@@ -1176,6 +2130,458 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
+  describe("agent harness and model availability", () => {
+    const anthropicModel = "anthropic/claude-haiku-4-5";
+    const openAIModel = "openai/gpt-5.4";
+    const harnessRefusal = {
+      prompt: {
+        error: 'Model "openai/gpt-5.4" cannot run on the Claude Agent harness.',
+        code: "HARNESS_MODEL_INCOMPATIBLE",
+      },
+      promptStatus: 400,
+    };
+
+    async function deliver(env: ReturnType<typeof makeEnv>, event: Record<string, unknown>) {
+      const ctx = makeCtx();
+      const response = await app.fetch(
+        slackEventRequest({ type: "app_mention", user: "U123", channel: "C123", ...event }),
+        env,
+        ctx
+      );
+      expect(response.status).toBe(200);
+      for (let index = 0; index < ctx.waitUntil.mock.calls.length; index++) {
+        await flushWaitUntil(ctx, index);
+      }
+    }
+
+    function sessionDefaultsNotices(slackFetch: ReturnType<typeof mockSlackFetch>) {
+      return slackApiBodies(slackFetch, "chat.update").flatMap((body) =>
+        ((body.blocks ?? []) as Array<{ type: string; elements?: Array<{ text: string }> }>)
+          .filter((block) => block.type === "context")
+          .map((block) => block.elements?.[0]?.text)
+      );
+    }
+
+    function postedTexts(slackFetch: ReturnType<typeof mockSlackFetch>) {
+      return slackApiBodies(slackFetch, "chat.postMessage").map((body) => body.text);
+    }
+
+    function slackSettingsFetches(env: ReturnType<typeof makeEnv>) {
+      return env.CONTROL_PLANE.fetch.mock.calls.filter(([input]) =>
+        String(input).endsWith("/integration-settings/slack")
+      );
+    }
+
+    async function seedThread(env: ReturnType<typeof makeEnv>, model: string) {
+      const kv = env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> };
+      await kv.put(
+        "thread:C123:111.222",
+        JSON.stringify({
+          sessionId: "session-1",
+          repoId: "acme/app",
+          repoFullName: "acme/app",
+          model,
+          createdAt: Date.now(),
+        })
+      );
+    }
+
+    it.each([
+      ["keeps the acknowledgement bare for the user's defaults", "fix the auth tests", []],
+      [
+        "reports only a non-default model selection",
+        "!reasoning high fix the auth tests",
+        ["Session defaults: Claude Haiku 4.5 · high reasoning"],
+      ],
+    ] as const)("on Claude Agent, %s", async (_case, text, notices) => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
+
+      await deliver(env, { text: `<@B123> ${text}`, ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ harness: "claude", model: anthropicModel }),
+      ]);
+      expect(sessionDefaultsNotices(slackFetch)).toEqual(notices);
+
+      slackFetch.mockRestore();
+    });
+
+    it("refuses an OpenAI App Home model on Claude Agent without creating a session", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        slackDefaults: { harness: "claude" },
+        enabledModels: [anthropicModel, openAIModel],
+      });
+      await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+      );
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(postedTexts(slackFetch)).toEqual([
+        "Starting work...",
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model` and a model Claude Agent can run, or change your model or agent harness in the Slack app\'s Home tab.',
+      ]);
+    });
+
+    it.each([
+      ["app_mention", ""],
+      ["message", ""],
+      ["app_mention", "!reasoning high "],
+    ])("refuses a disabled App Home model for a new %s with '%s'", async (type, prefix) => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [anthropicModel],
+        slackDefaults: { model: anthropicModel, harness: "claude" },
+      });
+      await env.SLACK_KV.put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+      );
+
+      await deliver(env, {
+        type,
+        channel_type: "im",
+        text: `<@B123> ${prefix}fix the auth tests`,
+        ts: "111.222",
+      });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+      expect(postedTexts(slackFetch)).toContain(
+        prefix
+          ? 'Your requested model "GPT 5.4" is no longer enabled. Start a new request with `!model` and an enabled model.'
+          : 'Your App Home model "GPT 5.4" is no longer enabled. Choose another model in the Slack app\'s Home tab, or start your request with `!model` and an enabled model.'
+      );
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["slack", "", undefined],
+      ["system", "", undefined],
+      ["slack", "!reasoning high ", undefined],
+      ["system", "!reasoning high ", undefined],
+      ["slack", "", "openai/gpt-5.2"],
+      ["system", "", "openai/gpt-5.2"],
+    ])(
+      "refuses a disabled %s default with '%s' and stored model %s",
+      async (source, prefix, storedModel) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [openAIModel],
+          slackDefaults: source === "slack" ? { model: anthropicModel } : undefined,
+        });
+        if (storedModel) {
+          await env.SLACK_KV.put(
+            "user_prefs:U123",
+            JSON.stringify({ userId: "U123", model: storedModel, updatedAt: 1 })
+          );
+        }
+
+        await deliver(env, { text: `<@B123> ${prefix}fix the auth tests`, ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(postedTexts(slackFetch)).toContain(
+          prefix
+            ? 'Your requested model "Claude Haiku 4.5" is no longer enabled. Start a new request with `!model` and an enabled model.'
+            : `The ${source === "slack" ? "Slack" : "system"} default model "Claude Haiku 4.5" is no longer enabled. Ask an admin to enable it in Settings > Models or update the ${source === "slack" ? "Slack" : "system"} default model. You can choose another model in the Slack app's Home tab, or start your request with \`!model\` and an enabled model.`
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each(["!reasoning high", `!model ${openAIModel} !reasoning high`])(
+      "keeps request-model guidance and pending state across App Home changes for '%s'",
+      async (prefix) => {
+        const slackFetch = mockSlackFetch();
+        const responses = { enabledModels: [openAIModel, anthropicModel] };
+        const env = makeSessionEnv([], responses);
+        const classify = vi.spyOn(RepoClassifier.prototype, "classify").mockResolvedValueOnce({
+          target: null,
+          confidence: "low",
+          reasoning: "Please choose a target.",
+          needsClarification: true,
+          source: "llm",
+        });
+        await env.SLACK_KV.put(
+          "user_prefs:U123",
+          JSON.stringify({ userId: "U123", model: openAIModel, updatedAt: 1 })
+        );
+
+        await deliver(env, { text: `<@B123> ${prefix} fix the auth tests`, ts: "111.222" });
+
+        const clarification = slackApiBodies(slackFetch, "chat.postMessage").find((body) =>
+          String(body.text).includes("I couldn't determine which target")
+        );
+        const blocks = clarification?.blocks as Array<{ block_id?: string }> | undefined;
+        const pickerBlockId = blocks?.find((block) =>
+          block.block_id?.startsWith("target_picker:")
+        )?.block_id;
+        if (!pickerBlockId) throw new Error("expected request-bound picker block");
+        const requestId = pickerBlockId.slice("target_picker:".length);
+        const pending = await env.SLACK_KV.get(`pending:${requestId}`, "json");
+        expect(pending).toEqual(
+          expect.objectContaining({
+            requestId,
+            channel: "C123",
+            threadTs: "111.222",
+            launchPlan: { sessionDefaults: { model: openAIModel, reasoningEffort: "high" } },
+          })
+        );
+
+        responses.enabledModels = [anthropicModel];
+        const payload = {
+          type: "block_actions",
+          user: { id: "U123" },
+          channel: { id: "C123" },
+          message: { ts: "222.333", thread_ts: "111.222" },
+          actions: [
+            {
+              action_id: "select_repo",
+              block_id: pickerBlockId,
+              selected_option: { value: "acme/app" },
+            },
+          ],
+        };
+        const expectedTexts = [clarification?.text];
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const ctx = makeCtx();
+          expect((await app.fetch(slackInteractionRequest(payload), env, ctx)).status).toBe(200);
+          for (let index = 0; index < ctx.waitUntil.mock.calls.length; index++)
+            await flushWaitUntil(ctx, index);
+
+          expectedTexts.push(
+            "Starting work...",
+            'Your requested model "GPT 5.4" is no longer enabled. Start a new request with `!model` and an enabled model.'
+          );
+          expect(postedTexts(slackFetch)).toEqual(expectedTexts);
+          expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+          expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+          expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+          expect(await env.SLACK_KV.get(`pending:${requestId}`, "json")).toEqual(pending);
+          expect(slackApiBodies(slackFetch, "chat.update")).toEqual([]);
+
+          if (attempt === 0) {
+            await env.SLACK_KV.put(
+              "user_prefs:U123",
+              JSON.stringify({ userId: "U123", model: anthropicModel, updatedAt: 2 })
+            );
+          }
+        }
+
+        classify.mockRestore();
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("keeps App Home guidance for a retired-model replacement matching the Slack default", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [anthropicModel],
+        slackDefaults: { model: "openai/gpt-6-sol" },
+      });
+      await env.SLACK_KV.put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: "openai/gpt-5.3-codex", updatedAt: 1 })
+      );
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(postedTexts(slackFetch)).toContain(
+        'Your App Home model "GPT-6 Sol" is no longer enabled. Choose another model in the Slack app\'s Home tab, or start your request with `!model` and an enabled model.'
+      );
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["an App Home choice over a disabled Slack default", true, ""],
+      ["!model over a disabled Slack default", false, `!model ${anthropicModel} `],
+      ["!model over a disabled App Home choice", true, `!model ${anthropicModel} `],
+    ] as const)("allows %s", async (_case, hasAppHomeModel, prefix) => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [anthropicModel],
+        slackDefaults: { model: openAIModel },
+      });
+      const prefs = { userId: "U123", model: prefix ? openAIModel : anthropicModel, updatedAt: 1 };
+      if (hasAppHomeModel) await env.SLACK_KV.put("user_prefs:U123", JSON.stringify(prefs));
+
+      await deliver(env, { text: `<@B123> ${prefix}fix the auth tests`, ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ model: anthropicModel }),
+      ]);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await env.SLACK_KV.get("user_prefs:U123", "json")).toEqual(
+        hasAppHomeModel ? prefs : null
+      );
+      slackFetch.mockRestore();
+    });
+
+    it("refuses an unflagged launch if authoritative model preferences are unavailable", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { modelPreferencesStatus: 503 });
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(postedTexts(slackFetch)).toContain(
+        "Model preferences are temporarily unavailable. Please try again."
+      );
+      slackFetch.mockRestore();
+    });
+
+    it.each(["KV error", "malformed record"])(
+      "refuses a new launch when the App Home preference cannot be read: %s",
+      async (failure) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [anthropicModel],
+          slackDefaults: { model: anthropicModel },
+        });
+        await env.SLACK_KV.put(
+          "user_prefs:U123",
+          JSON.stringify({
+            userId: "U123",
+            model: openAIModel,
+            updatedAt: failure === "malformed record" ? "invalid" : 1,
+          })
+        );
+        if (failure === "KV error") {
+          const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+          const get = kv.get.getMockImplementation()!;
+          kv.get.mockImplementation(async (key, type) => {
+            if (key === "user_prefs:U123") throw new Error("KV unavailable");
+            return get(key, type);
+          });
+        }
+
+        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+        expect(postedTexts(slackFetch)).toContain(
+          "Model preferences are temporarily unavailable. Please try again."
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it.each(["HTTP error", "malformed response", "invalid JSON", "fetch error"])(
+      "refuses a new launch when Slack defaults cannot be read: %s",
+      async (failure) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          enabledModels: [anthropicModel],
+          slackDefaults: { model: openAIModel },
+        });
+        const fetch = env.CONTROL_PLANE.fetch.getMockImplementation()!;
+        env.CONTROL_PLANE.fetch.mockImplementation(async (input, init) => {
+          if (String(input).endsWith("/integration-settings/slack")) {
+            if (failure === "fetch error") throw new Error("Slack settings unavailable");
+            if (failure === "invalid JSON") return new Response("invalid");
+            if (failure === "malformed response")
+              return Response.json({ settings: { defaults: { model: 123 } } });
+            return new Response("unavailable", { status: 503 });
+          }
+          return fetch(input, init);
+        });
+
+        await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+        expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+        expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+        expect(postedTexts(slackFetch)).toContain(
+          "Model preferences are temporarily unavailable. Please try again."
+        );
+        slackFetch.mockRestore();
+      }
+    );
+
+    it("runs on the harness chosen in App Home over the workspace harness", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], { enabledModels: [anthropicModel, openAIModel] });
+      await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+        "user_prefs:U123",
+        JSON.stringify({ userId: "U123", model: anthropicModel, harness: "claude", updatedAt: 1 })
+      );
+
+      await deliver(env, { text: "<@B123> fix the auth tests", ts: "111.222" });
+
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ harness: "claude", model: anthropicModel }),
+      ]);
+      expect(sessionDefaultsNotices(slackFetch)).toEqual([]);
+
+      slackFetch.mockRestore();
+    });
+
+    it("relays the control plane's refusal of a !model the thread's harness cannot run", async () => {
+      const slackFetch = mockSlackFetch();
+      const env = makeSessionEnv([], {
+        enabledModels: [anthropicModel, openAIModel],
+        ...harnessRefusal,
+      });
+      await seedThread(env, anthropicModel);
+
+      await deliver(env, {
+        text: `<@B123> !model ${openAIModel} add coverage`,
+        ts: "333.444",
+        thread_ts: "111.222",
+      });
+
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
+        expect.objectContaining({ model: openAIModel }),
+      ]);
+      expect(postedTexts(slackFetch)).toEqual([
+        'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. A thread keeps the harness its session started on. Reply without `!model`, or start a new thread to use that model.',
+      ]);
+
+      slackFetch.mockRestore();
+    });
+
+    it.each([
+      ["an Anthropic thread", "anthropic/claude-sonnet-4-6", "!reasoning high "],
+      ["a GPT thread", "openai/gpt-5.5", "!reasoning high "],
+      ["an Anthropic thread", "anthropic/claude-sonnet-4-6", ""],
+      ["a GPT thread", "openai/gpt-5.5", ""],
+    ] as const)(
+      "keeps the disabled model of %s (%s) on a '%s' follow-up with Claude Agent configured",
+      async (_case, sessionModel, prefix) => {
+        const slackFetch = mockSlackFetch();
+        const env = makeSessionEnv([], {
+          slackDefaults: { harness: "claude" },
+          enabledModels: [openAIModel, anthropicModel],
+        });
+        await seedThread(env, sessionModel);
+
+        await deliver(env, {
+          text: `<@B123> ${prefix}add coverage`,
+          ts: "333.444",
+          thread_ts: "111.222",
+        });
+
+        const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
+        expect(promptBodies).toHaveLength(1);
+        if (prefix) expect(promptBodies[0]).toHaveProperty("reasoningEffort", "high");
+        expect(promptBodies[0]).not.toHaveProperty("model");
+        expect(promptBodies[0]).toHaveProperty("callbackContext.model", sessionModel);
+        expect(slackSettingsFetches(env)).toEqual([]);
+
+        slackFetch.mockRestore();
+      }
+    );
+  });
+
   it("preserves an existing session mapping after a transient prompt failure", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order);
@@ -1227,117 +2633,123 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("fetches thread history after an existing session proves stale", async () => {
-    const order: string[] = [];
-    const slackFetch = mockSlackFetch(order, {
-      threadMessages: [{ type: "message", text: "Earlier request", user: "U456", ts: "111.222" }],
-    });
-    const env = makeSessionEnv(order, {
-      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
-      promptStatus: [404, 200],
-    });
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "thread:C123:111.222",
-      JSON.stringify({
+  it.each([
+    [404, 404, true],
+    [403, 200, false],
+    [404, 200, false],
+    [404, 503, false],
+  ] as const)(
+    "closes a mapping only with channel-wide denial (prompt %s, publication %s, closed %s)",
+    async (promptStatus, publicationStatus, closed) => {
+      const slackFetch = mockSlackFetch();
+      const classify = vi.spyOn(RepoClassifier.prototype, "classify");
+      const env = makeSessionEnv([], {
+        prompt: [{ error: "Denied" }, { messageId: "authorized-prompt" }],
+        promptStatus: [promptStatus, 200],
+        publicationStatus,
+        teamId: "team-a",
+      });
+      const mapping = {
         sessionId: "stale-session",
         repoId: "acme/app",
         repoFullName: "acme/app",
         model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "high",
+        teamId: "team-a",
         createdAt: Date.now(),
-      })
-    );
-    const ctx = makeCtx();
-
-    const response = await app.fetch(
-      slackEventRequest({
+      };
+      await env.SLACK_KV.put("thread:C123:111.222", JSON.stringify(mapping));
+      const event = {
         type: "app_mention",
         text: "<@B123> now add coverage",
         user: "U123",
         channel: "C123",
         ts: "333.444",
         thread_ts: "111.222",
-      }),
-      env,
-      ctx
-    );
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    expect(
-      slackFetch.mock.calls.filter(
-        ([input]) =>
-          String(input).includes("conversations.replies") && String(input).includes("limit=200")
-      )
-    ).toHaveLength(1);
-    const promptBodies = promptFetchBodies(env.CONTROL_PLANE.fetch);
-    expect(promptBodies).toHaveLength(2);
-    expect(promptBodies[1].content).toContain("Context from the Slack thread");
-    expect(promptBodies[1].content).toContain("Earlier request");
-    const storedMapping = (
-      env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }
-    ).get("thread:C123:111.222", "json");
-    await expect(storedMapping).resolves.toEqual(
-      expect.objectContaining({ sessionId: "session-1" })
-    );
-
-    slackFetch.mockRestore();
-  });
-
-  it("keeps the thread's session defaults when replacing a stale session", async () => {
-    const slackFetch = mockSlackFetch();
-    const env = makeSessionEnv([], {
-      prompt: [{ error: "Session not found" }, { messageId: "msg-2" }],
-      promptStatus: [404, 200],
-    });
-    // "high" is not this model's default effort, so an App Home reset would
-    // show up as "max" on the replacement session.
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "thread:C123:111.222",
-      JSON.stringify({
-        sessionId: "stale-session",
-        repoId: "acme/app",
-        repoFullName: "acme/app",
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "high",
-        createdAt: Date.now(),
-      })
-    );
-    const ctx = makeCtx();
-
-    const response = await app.fetch(
-      slackEventRequest({
-        type: "app_mention",
-        text: "<@B123> now add coverage",
-        user: "U123",
-        channel: "C123",
-        ts: "333.444",
-        thread_ts: "111.222",
-      }),
-      env,
-      ctx
-    );
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([
-      expect.objectContaining({
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "high",
-      }),
-    ]);
-    await expect(
-      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
-        "thread:C123:111.222",
-        "json"
-      )
-    ).resolves.toEqual(
-      expect.objectContaining({ sessionId: "session-1", reasoningEffort: "high" })
-    );
-
-    slackFetch.mockRestore();
-  });
+      };
+      const ctx = makeCtx();
+      expect((await app.fetch(slackEventRequest(event), env, ctx)).status).toBe(200);
+      await flushWaitUntil(ctx);
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      await expect(env.SLACK_KV.get("thread:C123:111.222", "json")).resolves.toEqual(
+        closed ? expect.objectContaining({ ...mapping, closed: true }) : mapping
+      );
+      const publication = env.CONTROL_PLANE.fetch.mock.calls.filter(([url]) =>
+        String(url).includes("/artifacts")
+      );
+      expect(publication).toHaveLength(promptStatus === 404 ? 1 : 0);
+      if (promptStatus === 404) {
+        const [url, init] = publication[0]!;
+        expect(new URL(String(url)).pathname).toBe("/sessions/stale-session/artifacts");
+        expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C123");
+        expect(new URL(String(url)).searchParams.get("purpose")).toBe("slack-post");
+        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBeNull();
+      }
+      const reply =
+        promptStatus === 403
+          ? "you do not have access to this session"
+          : "this session is no longer available from this channel";
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+        expect.objectContaining({ channel: "C123", thread_ts: "111.222", text: reply }),
+      ]);
+      const requestCount = env.CONTROL_PLANE.fetch.mock.calls.length;
+      for (const text of closed ? ["<@B123> again", "<@B123>"] : ["<@B123> authorized follow-up"]) {
+        const next = makeCtx();
+        await app.fetch(
+          slackEventRequest({ ...event, text, user: "U456", ts: "444.555" }),
+          env,
+          next
+        );
+        await flushWaitUntil(next);
+      }
+      if (closed) {
+        // Each reply re-checks the closure live; denied publication keeps it closed.
+        expect(
+          env.CONTROL_PLANE.fetch.mock.calls
+            .slice(requestCount)
+            .map(([url]) => new URL(String(url)).pathname)
+        ).toEqual([
+          "/channel-bindings/slack/C123",
+          "/sessions/stale-session/artifacts",
+          "/channel-bindings/slack/C123",
+          "/sessions/stale-session/artifacts",
+        ]);
+        expect(slackApiBodies(slackFetch, "chat.postMessage").map((body) => body.text)).toEqual([
+          reply,
+          reply,
+          reply,
+        ]);
+      } else {
+        expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(2);
+        const [url, init] = env.CONTROL_PLANE.fetch.mock.calls.at(-1)!;
+        expect(new URL(String(url)).pathname).toBe("/sessions/stale-session/prompt");
+        expect(new URL(String(url)).searchParams.get("channel")).toBe("slack:C123");
+        expect(new Headers(init?.headers).get("X-OpenInspect-Actor")).toBe("slack:U456");
+        const stored = await env.SLACK_KV.get<Record<string, unknown>>(
+          "thread:C123:111.222",
+          "json"
+        );
+        expect(stored).toMatchObject(mapping);
+        expect(stored?.closed).not.toBe(true);
+      }
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(classify).not.toHaveBeenCalled();
+      expect(
+        env.CONTROL_PLANE.fetch.mock.calls.some(([url]) =>
+          /\/(repos|environments|integration-settings)(?:\/|\?|$)/.test(String(url))
+        )
+      ).toBe(false);
+      expect(
+        slackFetch.mock.calls.some(
+          ([url]) =>
+            String(url).includes("conversations.replies") && String(url).includes("limit=200")
+        )
+      ).toBe(false);
+      classify.mockRestore();
+      slackFetch.mockRestore();
+    }
+  );
 
   it("forwards interim human messages on follow-ups to an existing session", async () => {
     const order: string[] = [];
@@ -2024,9 +3436,85 @@ describe("POST /interactions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearLocalCache();
+    clearEnvironmentsLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+  });
+
+  it("saves and clears the App Home harness choice", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { slackDefaults: { harness: "claude" } });
+    const kv = env.SLACK_KV as unknown as {
+      get: (key: string, type: string) => Promise<unknown>;
+    };
+
+    async function selectHarness(value: string) {
+      const ctx = makeCtx();
+      const response = await app.fetch(
+        slackInteractionRequest({
+          type: "block_actions",
+          user: { id: "U123" },
+          actions: [{ action_id: "select_harness", selected_option: { value } }],
+        }),
+        env,
+        ctx
+      );
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+    }
+
+    await selectHarness("opencode");
+    expect(await kv.get("user_prefs:U123", "json")).toEqual(
+      expect.objectContaining({ harness: "opencode" })
+    );
+    expect(mockPublishView).toHaveBeenCalledOnce();
+
+    await selectHarness("__workspace__");
+    expect(await kv.get("user_prefs:U123", "json")).not.toHaveProperty("harness");
+
+    await selectHarness("not-a-harness");
+    expect(mockPublishView).toHaveBeenCalledTimes(2);
+
+    slackFetch.mockRestore();
+  });
+
+  it("keeps a stored reasoning effort for the workspace default model when saving a harness", async () => {
+    mockPublishView.mockResolvedValue({ ok: true });
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], {
+      slackDefaults: { model: "openai/gpt-5.4" },
+      enabledModels: ["anthropic/claude-haiku-4-5", "openai/gpt-5.4"],
+    });
+    const kv = env.SLACK_KV as unknown as {
+      get: (key: string, type: string) => Promise<unknown>;
+      put: (key: string, value: string) => Promise<void>;
+    };
+    // No App Home model, so the effort applies to the Slack default model, not DEFAULT_MODEL.
+    await kv.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", reasoningEffort: "xhigh", updatedAt: 1 })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_actions",
+        user: { id: "U123" },
+        actions: [{ action_id: "select_harness", selected_option: { value: "opencode" } }],
+      }),
+      env,
+      ctx
+    );
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    expect(await kv.get("user_prefs:U123", "json")).toEqual(
+      expect.objectContaining({ harness: "opencode", reasoningEffort: "xhigh" })
+    );
+
+    slackFetch.mockRestore();
   });
 
   it("sets Starting status for repo-selection starts before session creation", async () => {
@@ -2053,15 +3541,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);
@@ -2114,6 +3594,88 @@ describe("POST /interactions", () => {
     slackFetch.mockRestore();
   });
 
+  it("refuses a target-picker launch whose model the harness cannot run", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], {
+      slackDefaults: { harness: "claude" },
+      enabledModels: ["anthropic/claude-haiku-4-5", "openai/gpt-5.4"],
+    });
+    const kv = env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> };
+    await kv.put(
+      "pending:C123:111.222",
+      JSON.stringify({ message: "Please handle this", userId: "U123" })
+    );
+    await kv.put(
+      "user_prefs:U123",
+      JSON.stringify({ userId: "U123", model: "openai/gpt-5.4", updatedAt: 1 })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_actions",
+        user: { id: "U123" },
+        channel: { id: "C123" },
+        message: { ts: "111.222" },
+        actions: [{ action_id: "select_repo", selected_option: { value: "acme/app" } }],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+    await flushWaitUntil(ctx, 1);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({
+        text: 'Model "openai/gpt-5.4" cannot run on the Claude Agent harness. Start your request with `!model` and a model Claude Agent can run, or change your model or agent harness in the Slack app\'s Home tab.',
+      })
+    );
+
+    slackFetch.mockRestore();
+  });
+
+  it("refuses a deferred target-picker model disabled since the request was planned", async () => {
+    const slackFetch = mockSlackFetch();
+    const env = makeSessionEnv([], { enabledModels: ["anthropic/claude-haiku-4-5"] });
+    const pending = {
+      message: "Please handle this",
+      userId: "U123",
+      launchPlan: { sessionDefaults: { model: "openai/gpt-5.4", reasoningEffort: "high" } },
+    };
+    await env.SLACK_KV.put("pending:C123:111.222", JSON.stringify(pending));
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_actions",
+        user: { id: "U123" },
+        channel: { id: "C123" },
+        message: { ts: "111.222" },
+        actions: [{ action_id: "select_repo", selected_option: { value: "acme/app" } }],
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    for (let index = 0; index < ctx.waitUntil.mock.calls.length; index++)
+      await flushWaitUntil(ctx, index);
+    expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+    expect(await env.SLACK_KV.get("thread:C123:111.222")).toBeNull();
+    expect(await env.SLACK_KV.get("pending:C123:111.222", "json")).toEqual(pending);
+    expect(slackApiBodies(slackFetch, "chat.postMessage")).toContainEqual(
+      expect.objectContaining({
+        text: 'Your requested model "GPT 5.4" is no longer enabled. Start a new request with `!model` and an enabled model.',
+        thread_ts: "111.222",
+      })
+    );
+    expect(slackApiBodies(slackFetch, "chat.update")).toEqual([]);
+    slackFetch.mockRestore();
+  });
+
   it("does not set Starting status when selected repo is no longer available", async () => {
     const slackFetch = mockSlackFetch([]);
     const env = makeEnv();
@@ -2127,6 +3689,7 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(JSON.stringify(mockReposResponseBody([])), {
           status: 200,
@@ -2151,15 +3714,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);
@@ -2195,15 +3750,7 @@ describe("POST /interactions", () => {
         },
       };
 
-      const request = new Request("http://localhost/interactions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "x-slack-signature": "v0=test",
-          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-        },
-        body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-      });
+      const request = slackInteractionRequest(payload);
 
       const env = makeEnv();
       const ctx = makeCtx();
@@ -2244,15 +3791,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2290,15 +3829,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2350,15 +3881,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2398,15 +3921,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2449,15 +3964,7 @@ describe("POST /interactions", () => {
       },
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const ctx = makeCtx();
@@ -2473,127 +3980,7 @@ describe("POST /interactions", () => {
     expect(kvPut).not.toHaveBeenCalledWith("user_repo_branch:U123:acme/unknown", "release/2026-03");
   });
 
-  it("prefers repo branch over global branch when creating a session", async () => {
-    const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const payload = {
-      type: "block_actions",
-      user: { id: "U123" },
-      channel: { id: "C123" },
-      message: { ts: "111.222" },
-      actions: [
-        {
-          action_id: "select_repo",
-          selected_option: { value: "acme/app" },
-        },
-      ],
-    };
-
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
-
-    const env = makeEnv();
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "pending:C123:111.222",
-      JSON.stringify({
-        message: "Please handle this",
-        userId: "U123",
-      })
-    );
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "user_preferences:U123",
-      JSON.stringify({
-        userId: "U123",
-        model: "anthropic/claude-haiku-4-5",
-        reasoningEffort: "medium",
-        branch: "global-branch",
-        updatedAt: Date.now(),
-      })
-    );
-    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
-      "user_repo_branch:U123:acme/app",
-      "repo-branch"
-    );
-
-    env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-      if (url.includes("/repos")) {
-        return new Response(
-          JSON.stringify(
-            mockReposResponseBody([
-              {
-                id: "acme/app",
-                owner: "acme",
-                name: "app",
-                fullName: "acme/app",
-                defaultBranch: "main",
-                private: true,
-              },
-            ])
-          ),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      if (url.endsWith("/sessions")) {
-        return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      if (url.includes("/prompt")) {
-        return new Response(JSON.stringify({ messageId: "msg-1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    const ctx = makeCtx();
-    const response = await app.fetch(request, env, ctx);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
-
-    await flushWaitUntil(ctx);
-    await flushWaitUntil(ctx, 1);
-    expect(ctx.waitUntil).toHaveBeenCalledTimes(3);
-
-    const sessionCall = env.CONTROL_PLANE.fetch.mock.calls.find(([input]) => {
-      const url = typeof input === "string" ? input : (input as URL).toString();
-      return url.endsWith("/sessions");
-    });
-
-    expect(sessionCall).toBeTruthy();
-    const init = sessionCall?.[1] as RequestInit;
-    const body = JSON.parse(String(init.body)) as { branch?: string };
-    expect(body.branch).toBe("repo-branch");
-
-    slackFetch.mockRestore();
-  });
-
-  it("forwards display identity fields from getUserInfo to session creation", async () => {
+  it("forwards display identity and prefers repo branch over global branch on session creation", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
         status: 200,
@@ -2627,15 +4014,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2645,9 +4024,22 @@ describe("POST /interactions", () => {
         userId: "U123",
       })
     );
+    await env.SLACK_KV.put(
+      "user_prefs:U123",
+      JSON.stringify({
+        userId: "U123",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: "medium",
+        branch: "global-branch",
+        updatedAt: Date.now(),
+      })
+    );
+    await env.SLACK_KV.put("user_repo_branch:U123:acme/app", "repo-branch");
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -2677,7 +4069,7 @@ describe("POST /interactions", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({ enabledModels: [] }), {
+      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -2698,6 +4090,7 @@ describe("POST /interactions", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.actorDisplayName).toBe("Jane");
     expect(body.actorEmail).toBe("jane@example.com");
+    expect(body.branch).toBe("repo-branch");
     expect(mockGetUserInfo).toHaveBeenCalledOnce();
     // Identity travels via the signed actor assertion, never the body.
     expect(body.actorUserId).toBeUndefined();
@@ -2729,15 +4122,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2750,6 +4135,8 @@ describe("POST /interactions", () => {
 
     env.CONTROL_PLANE.fetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/integration-settings/slack")) return Response.json({ settings: null });
+      if (url.includes("/channel-bindings/slack/")) return Response.json({ teamId: null });
       if (url.includes("/repos")) {
         return new Response(
           JSON.stringify(
@@ -2779,7 +4166,7 @@ describe("POST /interactions", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({ enabledModels: [] }), {
+      return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -2821,15 +4208,7 @@ describe("POST /interactions", () => {
       ],
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
@@ -2859,15 +4238,7 @@ describe("POST /interactions", () => {
       value: "repo-150",
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
@@ -2909,15 +4280,7 @@ describe("POST /interactions", () => {
         },
       ],
     };
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
     const ctx = makeCtx();
 
     const response = await app.fetch(request, env, ctx);
@@ -2934,31 +4297,45 @@ describe("POST /interactions", () => {
   });
 
   it("returns all repos (beyond the old 5-item limit) for the repo clarification picker", async () => {
+    const slackFetch = mockSlackFetch();
     const payload = {
       type: "block_suggestion",
       action_id: "select_repo",
+      block_id: "target_picker:00000000-0000-4000-8000-000000000001",
       user: { id: "U123" },
+      channel: { id: "C123" },
       value: "",
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
+    request.headers.delete("x-slack-signature");
+    request.headers.delete("x-slack-request-timestamp");
 
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
     mockReposFetch(env, repos);
+    await env.SLACK_KV.put(
+      "pending:00000000-0000-4000-8000-000000000001",
+      JSON.stringify({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        channel: "C123",
+        threadTs: "111.222",
+        message: "Fix it",
+        userId: "U123",
+        teamId: null,
+      })
+    );
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
 
     expect(response.status).toBe(200);
+    expect(mockVerifySlackSignature).toHaveBeenCalledWith(
+      null,
+      null,
+      new URLSearchParams({ payload: JSON.stringify(payload) }).toString(),
+      env.SLACK_SIGNING_SECRET
+    );
     expect(ctx.waitUntil).not.toHaveBeenCalled();
 
     const body = (await response.json()) as {
@@ -2972,29 +4349,37 @@ describe("POST /interactions", () => {
       description: { type: "plain_text", text: "Start without cloning a repository" },
       value: "__no_repository__",
     });
+    expect(slackFetch).not.toHaveBeenCalled();
+    slackFetch.mockRestore();
   });
 
-  it("filters repo clarification suggestions by the typed query", async () => {
+  it.each([null, "team-a"])("filters channel clarification suggestions (%s)", async (teamId) => {
+    const slackFetch = mockSlackFetch();
     const payload = {
       type: "block_suggestion",
       action_id: "select_repo",
+      block_id: "target_picker:00000000-0000-4000-8000-000000000001",
       user: { id: "U123" },
+      channel: { id: "C123" },
       value: "repo-150",
     };
 
-    const request = new Request("http://localhost/interactions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "x-slack-signature": "v0=test",
-        "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload) }),
-    });
+    const request = slackInteractionRequest(payload);
 
     const env = makeEnv();
     const repos = buildNumberedRepos(150);
-    mockReposFetch(env, repos);
+    mockReposFetch(env, repos, teamId);
+    await env.SLACK_KV.put(
+      "pending:00000000-0000-4000-8000-000000000001",
+      JSON.stringify({
+        requestId: "00000000-0000-4000-8000-000000000001",
+        channel: "C123",
+        threadTs: "111.222",
+        message: "Fix it",
+        userId: "U123",
+        teamId,
+      })
+    );
 
     const ctx = makeCtx();
     const response = await app.fetch(request, env, ctx);
@@ -3016,5 +4401,90 @@ describe("POST /interactions", () => {
         value: "acme/repo-150",
       },
     ]);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith(
+      "pending:00000000-0000-4000-8000-000000000001",
+      "json"
+    );
+    expect(env.CONTROL_PLANE.fetch).toHaveBeenCalledWith(
+      "https://internal/channel-bindings/slack/C123",
+      expect.anything()
+    );
+    for (const resource of ["repos", "environments"]) {
+      const catalogReads = env.CONTROL_PLANE.fetch.mock.calls.filter(
+        ([url]) => new URL(String(url)).pathname === `/${resource}`
+      );
+      expect(catalogReads).toHaveLength(1);
+      for (const [url, init] of catalogReads) {
+        expect(String(url)).toBe(`https://internal/${resource}?channel=slack%3AC123`);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-OpenInspect-Actor")).toBe("slack:U123");
+        expect(headers.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
+      }
+    }
+    expect(slackFetch).not.toHaveBeenCalled();
+    slackFetch.mockRestore();
+  });
+
+  it.each<{ binding?: unknown; pending?: unknown; payload?: Record<string, unknown> }>([
+    { binding: { teamId: "team-b", kind: "primary" } },
+    { binding: { teamId: null } },
+    { binding: 404 },
+    { binding: 503 },
+    { binding: { invalid: true } },
+    { binding: new Error("CP offline") },
+    { pending: null },
+    { pending: new Error("KV unavailable") },
+    { pending: { teamId: undefined } },
+    { payload: { block_id: undefined } },
+    { payload: { block_id: "malformed" } },
+    { payload: { user: { id: "other" } } },
+    { payload: { user: undefined } },
+    { payload: { channel: { id: "other" } } },
+    { payload: { channel: undefined } },
+  ])("withholds suggestions and visible instructions for untrusted scope: %j", async (failure) => {
+    const slackFetch = mockSlackFetch();
+    const env = makeEnv();
+    const requestId = "00000000-0000-4000-8000-000000000001";
+    const pending = {
+      requestId,
+      channel: "C123",
+      threadTs: "111.222",
+      userId: "U123",
+      message: "Fix it",
+      teamId: "team-a",
+    };
+    const kv = env.SLACK_KV as unknown as ReturnType<typeof createMockKV>;
+    kv.get.mockImplementation(async () => {
+      if (failure.pending instanceof Error) throw failure.pending;
+      return failure.pending === null ? null : { ...pending, ...(failure.pending as object) };
+    });
+    env.CONTROL_PLANE.fetch.mockImplementation(async () => {
+      if (failure.binding instanceof Error) throw failure.binding;
+      return typeof failure.binding === "number"
+        ? new Response(null, { status: failure.binding })
+        : Response.json(failure.binding ?? { teamId: "team-a", kind: "primary" });
+    });
+    const ctx = makeCtx();
+    const response = await app.fetch(
+      slackInteractionRequest({
+        type: "block_suggestion",
+        action_id: "select_repo",
+        value: "app",
+        user: { id: "U123" },
+        channel: { id: "C123" },
+        block_id: `target_picker:${requestId}`,
+        ...failure.payload,
+      }),
+      env,
+      ctx
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ options: [] });
+    expect(env.CONTROL_PLANE.fetch.mock.calls.map(([url]) => String(url))).toEqual(
+      "binding" in failure ? ["https://internal/channel-bindings/slack/C123"] : []
+    );
+    expect(slackFetch).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    slackFetch.mockRestore();
   });
 });

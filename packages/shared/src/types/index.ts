@@ -104,6 +104,26 @@ export {
   teamMembershipSchema,
 } from "./teams";
 export type { Team, TeamRole, TeamJoinPolicy, SessionVisibility, TeamMembership } from "./teams";
+export { teamIdSchema } from "./team-id";
+
+export {
+  teamChannelBindingProviderSchema,
+  teamChannelBindingKindSchema,
+  teamChannelBindingSchema,
+  putTeamChannelBindingRequestSchema,
+  teamChannelBindingResponseSchema,
+  teamChannelBindingsResponseSchema,
+  channelBindingResponseSchema,
+} from "./team-channel-bindings";
+export type {
+  TeamChannelBindingProvider,
+  TeamChannelBindingKind,
+  TeamChannelBinding,
+  PutTeamChannelBindingRequest,
+  TeamChannelBindingResponse,
+  TeamChannelBindingsResponse,
+  ChannelBindingResponse,
+} from "./team-channel-bindings";
 
 export {
   SESSION_ACTIONS,
@@ -112,6 +132,7 @@ export {
   checkSessionAccess,
   sessionCapabilities,
   checkAutomationAccess,
+  checkAutomationExecutorReassignment,
   automationCapabilities,
   checkEnvironmentAccess,
   environmentCapabilities,
@@ -135,6 +156,8 @@ export {
   sessionInboxItemSchema,
   sessionInboxPageSchema,
   sessionInboxSnapshotSchema,
+  sessionInboxMarkReadRequestSchema,
+  sessionInboxMarkReadResponseSchema,
 } from "./session-inbox";
 export type {
   SessionInboxCategory,
@@ -142,6 +165,7 @@ export type {
   SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
+  SessionInboxMarkReadRequest,
 } from "./session-inbox";
 
 export {
@@ -265,6 +289,7 @@ export {
   auditEventSchema,
   auditEventListResponseSchema,
   AUTHORIZATION_DECISION_ACTIONS,
+  AUDIT_OBSERVATION_ACTIONS,
   AUDIT_OPERATION_ACTIONS,
   AUTHORIZATION_DECISION_METADATA_SCHEMA,
   authorizationDecisionMetadataV1Schema,
@@ -272,6 +297,7 @@ export {
 } from "./audit-events";
 export type {
   AuditEventInterpretation,
+  AuditObservationAction,
   AuditOperationAction,
   AuthorizationDecisionMetadataV1,
   AuditOperationResult,
@@ -302,6 +328,8 @@ export type {
   AutomationRepository,
   AutomationRepositoryInput,
   Automation,
+  AutomationCapabilities,
+  AutomationView,
   AutomationExecutionSummary,
   AutomationListItem,
   CreateAutomationRequest,
@@ -310,6 +338,9 @@ export type {
   ListAutomationsResponse,
   AutomationInvocation,
   ListAutomationInvocationsResponse,
+  WebhookTriggerResponse,
+  WebhookFollowUpRefusedResponse,
+  WebhookInvocationStatusResponse,
 } from "./automations";
 
 export {
@@ -388,6 +419,7 @@ export {
   ANALYTICS_DAYS,
   ANALYTICS_BREAKDOWN_BY,
   ANALYTICS_SCOPES,
+  DEFAULT_ANALYTICS_DAYS,
   DEFAULT_ANALYTICS_SCOPE,
   ANALYTICS_SPAWN_SOURCE_SCOPE,
   ANALYTICS_SCOPE_SPAWN_SOURCES,
@@ -406,6 +438,7 @@ export type {
   AnalyticsTimeseriesResponse,
   AnalyticsBreakdownEntry,
   AnalyticsBreakdownResponse,
+  AnalyticsSessionOriginEntry,
   SessionRun,
   AnalyticsRunsResponse,
   AnalyticsPullRequestFunnel,

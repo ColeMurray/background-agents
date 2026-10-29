@@ -5,6 +5,14 @@
 Proposed design for V1. This document intentionally distinguishes product-visible version control,
 which is deferred, from immutable internal revisions, which are required for reproducible sessions.
 
+**Historical baseline note (2026-10-02):** The authorization and environment-naming descriptions
+below record the baseline when this proposal was written, not current product behavior. The product
+now has workspace roles, Teams and membership checks, team-owned sessions/environments/automations,
+team secrets, and repository grants. Environment names are unique within an owning team or the
+workspace. Repository skills remain workspace resources with permission and grant checks, not
+team-owned resources. See [Authentication and Authorization](../AUTH.md) for current access rules;
+the baseline and V1 decisions below are retained as historical design context.
+
 ## Summary
 
 Open-Inspect should let admitted users create and edit reusable agent skills in the web application,
@@ -232,9 +240,7 @@ create-session request carries a discriminated choice, never an ambiguous nullab
 
 ```ts
 type SessionSkillSelection =
-  | { mode: "all" }
-  | { mode: "none" }
-  | { mode: "profile"; profileId: string };
+  { mode: "all" } | { mode: "none" } | { mode: "profile"; profileId: string };
 ```
 
 Bot, automation, Slack, Linear, and GitHub-created sessions use `{ mode: "all" }` unless their

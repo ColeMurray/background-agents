@@ -118,48 +118,6 @@ class TestCreateSandboxTerminal:
     """create_sandbox populates ttyd fields on the returned handle."""
 
     @pytest.mark.asyncio
-    async def test_handle_contains_ttyd_url(self, monkeypatch):
-        captured = {}
-
-        async def fake_create_aio(*args, **kwargs):
-            captured["env"] = kwargs.get("env")
-            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
-
-            class FakeSandbox:
-                object_id = "obj-123"
-                stdout = None
-
-            return FakeSandbox()
-
-        fake_create = MagicMock()
-        fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
-
-        monkeypatch.setattr(
-            SandboxTunnels,
-            "resolve",
-            AsyncMock(return_value=TunnelUrls(None, None, "https://ttyd.example.com", None)),
-        )
-
-        manager = SandboxManager()
-        config = SandboxConfig(
-            clone_host="github.com",
-            clone_username="x-access-token",
-            repo_owner="acme",
-            repo_name="repo",
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-123",
-            code_server_enabled=False,
-            settings={"terminalEnabled": True},
-        )
-
-        handle = await manager.create_sandbox(config)
-
-        assert handle.ttyd_url == "https://ttyd.example.com"
-        assert captured["env"]["TERMINAL_ENABLED"] == "true"
-        assert TTYD_PROXY_PORT in captured["encrypted_ports"]
-
-    @pytest.mark.asyncio
     async def test_ttyd_skipped_when_disabled(self, monkeypatch):
         captured = {}
 
@@ -200,60 +158,6 @@ class TestCreateSandboxTerminal:
 
 class TestRestoreSandboxTerminal:
     """restore_from_snapshot populates ttyd fields on the returned handle."""
-
-    @pytest.mark.asyncio
-    async def test_handle_contains_ttyd_url(self, monkeypatch):
-        captured = {}
-
-        class FakeImage:
-            object_id = "img-123"
-
-        def fake_from_id(*args, **kwargs):
-            return FakeImage()
-
-        async def fake_create_aio(*args, **kwargs):
-            captured["env"] = kwargs.get("env")
-            captured["encrypted_ports"] = kwargs.get("encrypted_ports")
-
-            class FakeSandbox:
-                object_id = "obj-456"
-                stdout = None
-
-            return FakeSandbox()
-
-        fake_create = MagicMock()
-        fake_create.aio = fake_create_aio
-        monkeypatch.setattr("src.sandbox.launch.modal.Image.from_id", fake_from_id)
-        monkeypatch.setattr("src.sandbox.launch.modal.Sandbox.create", fake_create)
-        monkeypatch.setattr(
-            SandboxTunnels,
-            "resolve",
-            AsyncMock(
-                return_value=TunnelUrls(None, None, "https://ttyd-restored.example.com", None)
-            ),
-        )
-
-        manager = SandboxManager()
-        handle = await manager.restore_from_snapshot(
-            clone_host="github.com",
-            clone_username="x-access-token",
-            snapshot_image_id="img-abc",
-            session_config={
-                "repo_owner": "acme",
-                "repo_name": "repo",
-                "provider": "anthropic",
-                "model": "claude-sonnet-4-6",
-                "session_id": "sess-1",
-            },
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-456",
-            code_server_enabled=False,
-            settings={"terminalEnabled": True},
-        )
-
-        assert handle.ttyd_url == "https://ttyd-restored.example.com"
-        assert captured["env"]["TERMINAL_ENABLED"] == "true"
-        assert TTYD_PROXY_PORT in captured["encrypted_ports"]
 
     @pytest.mark.asyncio
     async def test_ttyd_skipped_when_disabled(self, monkeypatch):

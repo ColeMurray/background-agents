@@ -1,10 +1,11 @@
 "use client";
 
+import type { ModelCategory } from "@open-inspect/shared/models";
 import {
-  getReasoningConfig,
-  isValidReasoningEffort,
-  type ModelCategory,
-} from "@open-inspect/shared/models";
+  getHarnessReasoningConfig,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
 import {
   Select,
   SelectContent,
@@ -20,23 +21,27 @@ const MODEL_DEFAULT_VALUE = "__model_default__";
 
 export function ModelReasoningDefaultsFields({
   model,
+  harness,
   reasoningEffort,
   modelOptions,
+  modelRequired,
   onChange,
 }: {
   model: string;
+  harness: HarnessId;
   reasoningEffort: string;
   modelOptions: ModelCategory[];
+  modelRequired: boolean;
   onChange: (model: string, reasoningEffort: string) => void;
 }) {
-  const reasoningConfig = getReasoningConfig(model);
+  const reasoningConfig = getHarnessReasoningConfig(harness, model);
 
   return (
     <div className="grid sm:grid-cols-2 gap-3 mb-4">
       <label className="text-sm">
         <span className="block text-foreground font-medium mb-1">Default model</span>
         <Select
-          value={model || SYSTEM_DEFAULT_VALUE}
+          value={model || (modelRequired ? "" : SYSTEM_DEFAULT_VALUE)}
           onValueChange={(nextModel) => {
             if (nextModel === SYSTEM_DEFAULT_VALUE) {
               onChange("", "");
@@ -44,17 +49,19 @@ export function ModelReasoningDefaultsFields({
             }
             onChange(
               nextModel,
-              reasoningEffort && isValidReasoningEffort(nextModel, reasoningEffort)
+              reasoningEffort && isValidHarnessReasoningEffort(harness, nextModel, reasoningEffort)
                 ? reasoningEffort
                 : ""
             );
           }}
         >
           <SelectTrigger className="w-full" aria-label="Default model">
-            <SelectValue />
+            <SelectValue placeholder="Choose a model" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={SYSTEM_DEFAULT_VALUE}>Use system default</SelectItem>
+            {!modelRequired && (
+              <SelectItem value={SYSTEM_DEFAULT_VALUE}>Use system default</SelectItem>
+            )}
             {modelOptions.map((group) => (
               <SelectGroup key={group.category}>
                 <SelectLabel>{group.category}</SelectLabel>

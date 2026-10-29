@@ -10,6 +10,7 @@ import {
   queryDO,
   seedSandboxAuth,
   waitForSandboxStatus,
+  closeWebSocket,
 } from "./helpers";
 
 beforeEach(cleanD1Tables);
@@ -79,7 +80,7 @@ describe("sandbox early connect (via SELF.fetch)", () => {
     );
     expect(row.last_activity).not.toBeNull();
 
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("cancels an attached booting sandbox and does not revive it on late readiness", async () => {
@@ -135,8 +136,8 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       )
     ).toEqual([{ status: "failed", error_message: "Execution was cancelled before it started" }]);
 
-    ws!.close();
-    clientWs.close();
+    await closeWebSocket(ws!);
+    await closeWebSocket(clientWs);
   });
 
   it("moves a spawning row to connecting at attach and tells clients, without publishing ready", async () => {
@@ -165,8 +166,8 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       { status: "connecting" },
     ]);
 
-    ws!.close();
-    clientWs.close();
+    await closeWebSocket(ws!);
+    await closeWebSocket(clientWs);
   });
 
   it("records boot phases once per sequence and serves the latest in the snapshot", async () => {
@@ -262,8 +263,8 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       await queryDO<{ boot_phase: string | null }>(stub, "SELECT boot_phase FROM sandbox")
     ).toEqual([{ boot_phase: null }]);
 
-    ws!.close();
-    clientWs.close();
+    await closeWebSocket(ws!);
+    await closeWebSocket(clientWs);
   });
 
   it("strips a legacy output tail from a persisted boot phase snapshot", async () => {
@@ -327,7 +328,7 @@ describe("sandbox early connect (via SELF.fetch)", () => {
       { status: "failed" },
     ]);
 
-    ws!.close();
+    await closeWebSocket(ws!);
   });
 
   it("strips a legacy output tail while landing a structured fatal report", async () => {

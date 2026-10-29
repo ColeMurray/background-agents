@@ -128,7 +128,7 @@ async def test_client_retries_transient_fetch_failures(monkeypatch):
         return httpx.Response(503 if attempts < 3 else 200, content=b"ok")
 
     sleep = AsyncMock()
-    monkeypatch.setattr("sandbox_runtime.managed_skills.asyncio.sleep", sleep)
+    monkeypatch.setattr("sandbox_runtime.control_plane_fetch.asyncio.sleep", sleep)
     client = ManagedSkillsClient(
         "https://control.example", "session", "token", transport=httpx.MockTransport(handler)
     )

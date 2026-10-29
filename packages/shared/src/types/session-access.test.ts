@@ -6,6 +6,7 @@ import {
   SESSION_ACTIONS,
   automationCapabilities,
   checkAutomationAccess,
+  checkAutomationExecutorReassignment,
   checkEnvironmentAccess,
   checkSessionAccess,
   environmentCapabilities,
@@ -400,6 +401,25 @@ describe("checkAutomationAccess", () => {
     });
   });
 
+  it("lets only team leads and workspace admins reassign an executor", () => {
+    const executor = viewer("owner", "member", false, ["automations.manage.own"]);
+    const member = viewer("team member", "member", false, ["automations.manage.any"]);
+    const lead = viewer("team lead", "member", false, ["automations.manage.own"]);
+    const admin = viewer("non-member", "administrator", false, ["automations.manage.any"]);
+    const denied = { allowed: false, reason: "not_owner_or_lead" };
+    expect(checkAutomationExecutorReassignment(executor, target)).toEqual(denied);
+    expect(checkAutomationExecutorReassignment(member, target)).toEqual(denied);
+    expect(checkAutomationExecutorReassignment(lead, target)).toEqual({ allowed: true });
+    expect(checkAutomationExecutorReassignment(admin, target)).toEqual({ allowed: true });
+    expect(
+      checkAutomationExecutorReassignment(lead, { ownerTeamId: null, executorUserId: "user_owner" })
+    ).toEqual(denied);
+    expect(checkAutomationExecutorReassignment({ kind: "service", teamId: null }, target)).toEqual({
+      allowed: false,
+      reason: "missing_permission",
+    });
+  });
+
   it.each([
     [null, null, true],
     [null, "team_one", true],
@@ -444,7 +464,7 @@ describe("checkEnvironmentAccess", () => {
     });
   });
 
-  it("requires the manage grant and lead/admin role independently", () => {
+  it("requires the manage grant and lead/admin role independently on team-owned rows", () => {
     expect(
       checkEnvironmentAccess(
         viewer("team lead", null, false, ["environments.use"]),
@@ -464,14 +484,60 @@ describe("checkEnvironmentAccess", () => {
         allowed: true,
       }
     );
-    expect(
-      checkEnvironmentAccess(
-        viewer("team lead", "member", false, ["environments.manage"]),
-        { ownerTeamId: null },
-        "manage"
-      )
-    ).toEqual({ allowed: false, reason: "not_owner_or_lead" });
   });
+
+  it.each([
+    [null, [], false, false, false, false],
+    [
+      null,
+      ["environments.secrets.manage", "environments.settings.manage", "environments.images.manage"],
+      false,
+      false,
+      false,
+      false,
+    ],
+    [null, ["environments.read"], false, true, false, false],
+    [null, ["environments.manage"], false, false, true, false],
+    ["member", ["environments.manage"], false, false, true, false],
+    [null, ["environments.use"], false, false, false, true],
+    [
+      null,
+      ["environments.read", "environments.manage", "environments.use"],
+      false,
+      true,
+      true,
+      true,
+    ],
+    [
+      null,
+      ["environments.read", "environments.manage", "environments.use"],
+      true,
+      false,
+      false,
+      false,
+    ],
+  ] as const)(
+    "projects workspace grants for role %s, permissions %j, suspended %s",
+    (role, permissions, suspended, read, manage, use) => {
+      const workspace = { ownerTeamId: null };
+      const actor = viewer("non-member", role, suspended, permissions);
+      const permits = { read, manage, use };
+      for (const action of ENVIRONMENT_ACTIONS) {
+        expect(checkEnvironmentAccess(actor, workspace, action)).toEqual(
+          suspended
+            ? { allowed: false, reason: "suspended" }
+            : permits[action]
+              ? { allowed: true }
+              : { allowed: false, reason: "missing_permission" }
+        );
+      }
+      expect(environmentCapabilities(actor, workspace)).toEqual({
+        canRead: read,
+        canManage: manage,
+        canUse: use,
+      });
+    }
+  );
 
   it("denies suspended and outside-team users for every action", () => {
     for (const action of ENVIRONMENT_ACTIONS) {
@@ -491,7 +557,8 @@ describe("checkEnvironmentAccess", () => {
     [null, "team_other", true],
     ["team_one", "team_one", true],
     ["team_one", "team_other", false],
-    ["team_one", null, true],
+    // Unbound services launch workspace sessions, which cannot use team environments.
+    ["team_one", null, false],
   ] as const)(
     "limits service environment use for row team %s and binding %s",
     (ownerTeamId, teamId, allowed) => {

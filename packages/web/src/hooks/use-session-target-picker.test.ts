@@ -8,6 +8,7 @@ import type {
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
 import { foldImageBuildStatusByScope, imageBuildScopeKey } from "@/lib/image-builds";
+import { SwrFetchError } from "@/lib/swr-fetch-error";
 import type { Repo } from "@/hooks/use-repos";
 import {
   MULTIPLE_REPOSITORIES_OPTION_VALUE,
@@ -22,11 +23,13 @@ import {
 const mocks = vi.hoisted(() => ({
   repos: vi.fn(),
   environments: vi.fn(),
+  branches: vi.fn(),
+  imageBuilds: vi.fn(),
 }));
 vi.mock("@/hooks/use-repos", () => ({ useRepos: mocks.repos }));
 vi.mock("@/hooks/use-environments", () => ({ useEnvironments: mocks.environments }));
-vi.mock("@/hooks/use-branches", () => ({ useBranches: () => ({ branches: [], loading: false }) }));
-vi.mock("@/hooks/use-image-builds", () => ({ useImageBuilds: () => ({ data: undefined }) }));
+vi.mock("@/hooks/use-branches", () => ({ useBranches: mocks.branches }));
+vi.mock("@/hooks/use-image-builds", () => ({ useImageBuilds: mocks.imageBuilds }));
 
 function environment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -124,10 +127,18 @@ describe("useSessionTargetPicker", () => {
     mocks.environments
       .mockReset()
       .mockReturnValue({ environments: [environment()], loading: false });
+    mocks.branches.mockReset().mockReturnValue({ branches: [], loading: false });
+    mocks.imageBuilds.mockReset().mockReturnValue({ data: undefined });
   });
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("limits workspace session creation to workspace-owned environments", () => {
+    renderHook(() => useSessionTargetPicker({ teamId: null }));
+    expect(mocks.environments).toHaveBeenLastCalledWith({ ownerTeamId: null });
   });
 
   it("passes teamId to the catalog hooks and prioritizes the team default over stored targets", () => {
@@ -136,7 +147,7 @@ describe("useSessionTargetPicker", () => {
       useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
     );
     expect(mocks.repos).toHaveBeenCalledWith(true, "team-1");
-    expect(mocks.environments).toHaveBeenCalledWith("team-1");
+    expect(mocks.environments).toHaveBeenCalledWith({ teamId: "team-1" });
     expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
   });
 
@@ -258,18 +269,14 @@ describe("useSessionTargetPicker", () => {
   });
 
   it.each(["acme/web", MULTIPLE_REPOSITORIES_OPTION_VALUE])(
-    "blocks a selected scoped repository target backed by stale catalog data after an error (%s)",
+    "blocks a selected scoped repository target while its catalog is denied (%s)",
     (value) => {
       mocks.environments.mockReturnValue({ environments: [], loading: false });
       const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
       act(() => result.current.pickerProps.onTargetSelectValueChange(value));
       expect(result.current.isLaunchable).toBe(true);
       const explicitTarget = result.current.pickerProps.sessionTarget;
-      mocks.repos.mockReturnValue({
-        repos: [repo()],
-        loading: false,
-        error: new Error("Forbidden"),
-      });
+      mocks.repos.mockReturnValue({ repos: [], loading: false, error: new SwrFetchError(403) });
       rerender();
       expect(result.current.isLaunchable).toBe(false);
       expect(result.current.buildRequestFields()).toBeNull();
@@ -559,54 +566,44 @@ describe("useSessionTargetPicker", () => {
     }
   );
 
-  it.each([false, true])(
-    "preserves an explicit environment through catalog errors without launching stale data (cached: %s)",
-    (cached) => {
-      const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
-      act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
-      mocks.environments.mockReturnValue({
-        environments: cached ? [environment()] : [],
-        loading: false,
-        error: new Error("Unavailable"),
-      });
-      rerender();
-      expect(result.current.isLaunchable).toBe(false);
-      expect(result.current.buildRequestFields()).toBeNull();
-      expect(result.current.configKey).toBe("");
-      expect(result.current.pickerProps.sessionTarget).toEqual({
-        kind: "environment",
-        environmentId: "env-1",
-      });
-      expect(result.current.pickerProps.selectionError).toBeNull();
-      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
-      rerender();
-      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
-      expect(result.current.pickerProps.selectionError).toBeNull();
-    }
-  );
+  it("preserves an explicit environment through a denied catalog without launching it", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+    act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
+    mocks.environments.mockReturnValue({
+      environments: [],
+      loading: false,
+      error: new SwrFetchError(403),
+    });
+    rerender();
+    expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.configKey).toBe("");
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-1",
+    });
+    expect(result.current.pickerProps.selectionError).toBeNull();
+    mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    expect(result.current.pickerProps.selectionError).toBeNull();
+  });
 
-  it.each([false, true])(
-    "does not replace an explicit workspace repository during catalog errors (cached: %s)",
-    (cached) => {
-      const { result, rerender } = renderHook(() => useSessionTargetPicker());
-      act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
-      mocks.repos.mockReturnValue({
-        repos: cached ? [repo()] : [],
-        loading: false,
-        error: new Error("Unavailable"),
-      });
-      rerender();
-      expect(result.current.buildRequestFields()).toBeNull();
-      expect(result.current.pickerProps.sessionTarget).toEqual({
-        kind: "repo",
-        repoFullName: "acme/web",
-      });
-      expect(result.current.pickerProps.selectionError).toBeNull();
-      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
-      rerender();
-      expect(result.current.isLaunchable).toBe(true);
-    }
-  );
+  it("does not replace an explicit workspace repository during a denied catalog", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker());
+    act(() => result.current.pickerProps.onTargetSelectValueChange("acme/web"));
+    mocks.repos.mockReturnValue({ repos: [], loading: false, error: new SwrFetchError(403) });
+    rerender();
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "repo",
+      repoFullName: "acme/web",
+    });
+    expect(result.current.pickerProps.selectionError).toBeNull();
+    mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+    rerender();
+    expect(result.current.isLaunchable).toBe(true);
+  });
 
   it("treats an explicit branch choice as an explicit target, but not as target reselection", () => {
     const { result, rerender } = renderHook(() => useSessionTargetPicker());
@@ -677,6 +674,62 @@ describe("useSessionTargetPicker", () => {
     expect(result.current.pickerProps.selectionError).toBeNull();
   });
 
+  it("holds an automatic environment target without launching stale data after a denial", () => {
+    const { result, rerender } = renderHook(() =>
+      useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+    );
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    mocks.environments.mockReturnValue({
+      environments: [],
+      loading: false,
+      error: new SwrFetchError(403),
+    });
+    rerender();
+    expect(result.current.isLaunchable).toBe(false);
+    expect(result.current.buildRequestFields()).toBeNull();
+    expect(result.current.pickerProps.sessionTarget).toEqual({
+      kind: "environment",
+      environmentId: "env-1",
+    });
+    expect(result.current.pickerProps.displayTargetName).toBe("Environment (env-1)");
+    mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+  });
+
+  it("falls back to the next team's loaded repositories when its environment catalog fails", () => {
+    const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+      initialProps: { teamId: "team-1", defaultEnvironmentId: "env-1" as string | null },
+    });
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    mocks.environments.mockReturnValue({
+      environments: [],
+      loading: false,
+      error: new Error("Unavailable"),
+    });
+    rerender({ teamId: "team-2", defaultEnvironmentId: null });
+    expect(result.current.buildRequestFields()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      branch: "main",
+    });
+  });
+
+  it("selects the next team's default environment when its repository catalog fails", () => {
+    mocks.environments.mockReturnValue({ environments: [], loading: false });
+    const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+      initialProps: { teamId: "team-1", defaultEnvironmentId: null as string | null },
+    });
+    expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+    mocks.repos.mockReturnValue({ repos: [], loading: false, error: new Error("Unavailable") });
+    mocks.environments.mockReturnValue({
+      environments: [environment({ id: "env-2" })],
+      loading: false,
+    });
+    rerender({ teamId: "team-2", defaultEnvironmentId: "env-2" });
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-2" });
+  });
+
   it("preserves normalized multi-repository selections when the catalog uses mixed case", () => {
     mocks.repos.mockReturnValue({
       repos: [repo({ fullName: "Acme/Web", owner: "Acme", name: "Web" })],
@@ -694,6 +747,165 @@ describe("useSessionTargetPicker", () => {
     rerender({ teamId: "team-2" });
     expect(result.current.buildRequestFields()).toEqual({
       repositories: [{ repoOwner: "acme", repoName: "web" }],
+    });
+  });
+  it.each([new Error("Failed to fetch"), new SwrFetchError(503)])(
+    "keeps launching an automatic environment target from cached data through %s",
+    (error) => {
+      const { result, rerender } = renderHook(() =>
+        useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+      );
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false, error });
+      rerender();
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+      expect(result.current.configKey).not.toBe("");
+    }
+  );
+
+  it.each([undefined, "team-1"])(
+    "keeps launching an automatic repository from cached data through a transient error (team: %s)",
+    (teamId) => {
+      mocks.environments.mockReturnValue({ environments: [], loading: false });
+      const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId }));
+      expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+      mocks.repos.mockReturnValue({
+        repos: [repo()],
+        loading: false,
+        error: new SwrFetchError(500),
+      });
+      rerender();
+      expect(result.current.isLaunchable).toBe(true);
+      expect(result.current.repos).toEqual([repo()]);
+      expect(result.current.buildRequestFields()).toEqual({
+        repoOwner: "acme",
+        repoName: "web",
+        branch: "main",
+      });
+    }
+  );
+
+  it("launches an explicit target from cached data through a transient error", () => {
+    const { result, rerender } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+    act(() => result.current.pickerProps.onTargetSelectValueChange("env:env-1"));
+    mocks.environments.mockReturnValue({
+      environments: [environment()],
+      loading: false,
+      error: new SwrFetchError(503),
+    });
+    rerender();
+    expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+    expect(result.current.pickerProps.selectionError).toBeNull();
+  });
+
+  describe("anticipated target", () => {
+    const branchCalls = () => mocks.branches.mock.calls.map(([owner, name]) => `${owner}/${name}`);
+
+    beforeEach(() => {
+      mocks.repos.mockReturnValue({ repos: [], loading: true });
+      mocks.environments.mockReturnValue({ environments: [], loading: true });
+    });
+
+    it("starts target-keyed reads from the stored repository while the catalogs load", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      const { result } = renderHook(() => useSessionTargetPicker());
+      expect(mocks.branches).toHaveBeenLastCalledWith("acme", "web");
+      expect(mocks.imageBuilds).toHaveBeenLastCalledWith(true);
+      expect(result.current.anticipatedRequestFields).toEqual({
+        repoOwner: "acme",
+        repoName: "web",
+      });
+      expect(result.current.buildRequestFields()).toBeNull();
+      expect(result.current.isLaunchable).toBe(false);
+    });
+
+    it("anticipates the team default environment over the stored target", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      const { result } = renderHook(() =>
+        useSessionTargetPicker({ teamId: "team-1", defaultEnvironmentId: "env-1" })
+      );
+      expect(result.current.anticipatedRequestFields).toEqual({ environmentId: "env-1" });
+      expect(mocks.imageBuilds).toHaveBeenLastCalledWith(true);
+      expect(branchCalls().every((call) => call === "/")).toBe(true);
+      expect(result.current.buildRequestFields()).toBeNull();
+    });
+
+    it("switches to the confirmed fallback when the stored repository is gone", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/gone");
+      const { result, rerender } = renderHook(() => useSessionTargetPicker());
+      expect(mocks.branches).toHaveBeenLastCalledWith("acme", "gone");
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      mocks.environments.mockReturnValue({ environments: [], loading: false });
+      rerender();
+      expect(mocks.branches).toHaveBeenLastCalledWith("acme", "web");
+      expect(result.current.buildRequestFields()).toEqual({
+        repoOwner: "acme",
+        repoName: "web",
+        branch: "main",
+      });
+      expect(result.current.anticipatedRequestFields).toEqual(result.current.buildRequestFields());
+    });
+
+    it("keeps the branches key while the catalogs confirm the anticipated repository", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      const { result, rerender } = renderHook(() => useSessionTargetPicker());
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      mocks.environments.mockReturnValue({ environments: [], loading: false });
+      rerender();
+      expect(result.current.sessionTarget).toEqual({ kind: "repo", repoFullName: "acme/web" });
+      expect(new Set(branchCalls())).toEqual(new Set(["acme/web"]));
+    });
+
+    it("anticipates nothing for an explicit selection made while the catalogs load", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      const { result } = renderHook(() => useSessionTargetPicker());
+      act(() => result.current.pickerProps.onTargetSelectValueChange("acme/api"));
+      expect(result.current.anticipatedRequestFields).toBeNull();
+      expect(mocks.branches).toHaveBeenLastCalledWith("", "");
+      expect(mocks.imageBuilds).toHaveBeenLastCalledWith(false);
+    });
+
+    it.each([
+      [
+        "an unparseable stored value",
+        () => localStorage.setItem("open-inspect-last-selected-repo", "garbage"),
+      ],
+      [
+        "blocked storage",
+        () =>
+          vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+            throw new Error("blocked");
+          }),
+      ],
+    ])("anticipates nothing for %s", (_, arrange) => {
+      arrange();
+      const { result } = renderHook(() => useSessionTargetPicker());
+      expect(result.current.anticipatedRequestFields).toBeNull();
+      expect(branchCalls().every((call) => call === "/")).toBe(true);
+      expect(mocks.imageBuilds).toHaveBeenLastCalledWith(false);
+    });
+
+    it("anticipates the latest persisted target after a context change", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", "acme/web");
+      mocks.repos.mockReturnValue({ repos: [repo()], loading: false });
+      mocks.environments.mockReturnValue({ environments: [environment()], loading: false });
+      const { result, rerender } = renderHook((options) => useSessionTargetPicker(options), {
+        initialProps: { teamId: "team-1", defaultEnvironmentId: "env-1" as string | null },
+      });
+      expect(result.current.buildRequestFields()).toEqual({ environmentId: "env-1" });
+      mocks.repos.mockReturnValue({ repos: [], loading: true });
+      mocks.environments.mockReturnValue({ environments: [], loading: true });
+      mocks.branches.mockClear();
+      rerender({ teamId: "team-2", defaultEnvironmentId: null });
+      expect(result.current.anticipatedRequestFields).toEqual({ environmentId: "env-1" });
+      expect(branchCalls().every((call) => call === "/")).toBe(true);
+    });
+
+    it("does not anticipate a stored No repository in a team context", () => {
+      localStorage.setItem("open-inspect-last-selected-repo", NO_REPOSITORY_OPTION_VALUE);
+      const { result } = renderHook(() => useSessionTargetPicker({ teamId: "team-1" }));
+      expect(result.current.anticipatedRequestFields).toBeNull();
+      expect(mocks.imageBuilds).toHaveBeenLastCalledWith(false);
     });
   });
 });

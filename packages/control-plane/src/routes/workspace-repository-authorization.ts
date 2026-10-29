@@ -1,3 +1,4 @@
+import { isWorkspaceAdmin, type EffectiveAuthorization } from "@open-inspect/shared/rbac";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { TeamRepositoryGrantStore } from "../db/team-repository-grants";
 import { TeamStore } from "../db/teams";
@@ -10,12 +11,17 @@ export interface RepositoryAuthorizationTarget {
   repoId: number | null;
 }
 
+export const REPOSITORY_GRANT_REQUIRED = {
+  message: "Repository grant required",
+  code: "repository_grant_required",
+} as const;
+
 function deniedRepository(repository: RepositoryAuthorizationTarget): Response {
   return json(
     {
-      error: "Repository grant required",
-      code: "repository_grant_required",
-      reason_code: "repository_grant_required",
+      error: REPOSITORY_GRANT_REQUIRED.message,
+      code: REPOSITORY_GRANT_REQUIRED.code,
+      reason_code: REPOSITORY_GRANT_REQUIRED.code,
       repository: `${repository.owner}/${repository.name}`,
     },
     403
@@ -51,28 +57,22 @@ export async function authorizeTeamRepositories(
   );
 }
 
-/** Unowned repositories stay workspace-level; any granting team may authorize its members. */
-export async function authorizeWorkspaceRepositories(
+/**
+ * The first repository the principal lacks a grant for, or null when all are allowed. Unowned
+ * repositories stay workspace-level; any granting team may authorize its members. Memberships
+ * are cached on `ctx` for the rest of the request.
+ */
+async function findUngrantedRepository<T extends { repoId: number | null }>(
   ctx: RequestContext,
-  target: {
-    repositories: readonly RepositoryAuthorizationTarget[];
-    requireLead?: boolean;
-  }
-): Promise<Response | null> {
-  if (target.repositories.length === 0) return null;
-  const authorization = ctx.authorization;
-  if (!authorization) {
-    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
-  }
-  const roleKey = authorization.role.key;
-  if (roleKey === "owner" || roleKey === "administrator") return null;
-
-  const store = new TeamRepositoryGrantStore(ctx.db);
-  const teams = new TeamStore(ctx.db);
+  authorization: EffectiveAuthorization,
+  target: { repositories: readonly T[]; requireLead?: boolean },
+  store: Pick<TeamRepositoryGrantStore, "listTeamsForRepository">,
+  teams: Pick<TeamStore, "isActive">
+): Promise<T | null> {
+  if (isWorkspaceAdmin(authorization.role.key)) return null;
   for (const repository of target.repositories) {
     const repoId = repository.repoId;
-    if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0)
-      return deniedRepository(repository);
+    if (repoId === null || !Number.isSafeInteger(repoId) || repoId <= 0) return repository;
     const owners = await store.listTeamsForRepository(repoId);
     if (owners.length === 0) continue;
     const memberships = (ctx.sessionMemberships ??= await new TeamMembershipStore(
@@ -87,7 +87,99 @@ export async function authorizeWorkspaceRepositories(
         break;
       }
     }
-    if (!allowed) return deniedRepository(repository);
+    if (!allowed) return repository;
   }
   return null;
+}
+
+/** Route admission over {@link findUngrantedRepository}: a denial response, or null when allowed. */
+export async function authorizeWorkspaceRepositories(
+  ctx: RequestContext,
+  target: {
+    repositories: readonly RepositoryAuthorizationTarget[];
+    requireLead?: boolean;
+  }
+): Promise<Response | null> {
+  if (target.repositories.length === 0) return null;
+  const authorization = ctx.authorization;
+  if (!authorization) {
+    return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
+  }
+  const ungranted = await findUngrantedRepository(
+    ctx,
+    authorization,
+    target,
+    new TeamRepositoryGrantStore(ctx.db),
+    new TeamStore(ctx.db)
+  );
+  return ungranted ? deniedRepository(ungranted) : null;
+}
+
+/**
+ * Workspace repository-grant admission evaluated as a given principal, for policies that check
+ * someone other than (or in addition to) the caller. The request's cached team memberships are
+ * reused only when the principal is the caller.
+ */
+export class RepositoryGrantAuthorizer {
+  private readonly owners = new Map<number, string[]>();
+  private readonly activeTeams = new Map<string, boolean>();
+
+  constructor(
+    private readonly ctx: RequestContext,
+    private readonly grants: Pick<
+      TeamRepositoryGrantStore,
+      "listTeamsForRepository" | "listOwnersForRepositories"
+    >,
+    private readonly teams: Pick<TeamStore, "isActive">
+  ) {}
+
+  /** One request-local metadata snapshot for aggregate read and lead checks. */
+  async preload(
+    authorization: EffectiveAuthorization,
+    repositories: readonly { repoId: number | null }[]
+  ): Promise<void> {
+    if (isWorkspaceAdmin(authorization.role.key)) return;
+    const ids = repositories
+      .map((repo) => repo.repoId)
+      .filter(
+        (id): id is number =>
+          id !== null && Number.isSafeInteger(id) && id > 0 && !this.owners.has(id)
+      );
+    if (!ids.length) return;
+    for (const [repoId, owners] of await this.grants.listOwnersForRepositories(ids)) {
+      this.owners.set(
+        repoId,
+        owners.map((owner) => owner.teamId)
+      );
+      for (const owner of owners) this.activeTeams.set(owner.teamId, owner.active);
+    }
+  }
+
+  /**
+   * The first repository `authorization` lacks a grant for, or null when all are allowed. Only
+   * the stable `repoId` is consulted, so callers may pass any repository-shaped value.
+   */
+  ungrantedRepository<T extends { repoId: number | null }>(
+    authorization: EffectiveAuthorization,
+    repositories: readonly T[],
+    options: { requireLead?: boolean } = {}
+  ): Promise<T | null> {
+    // Share (and populate) the request's membership cache only when checking the caller.
+    const ctx =
+      authorization.userId === this.ctx.authorization?.userId
+        ? this.ctx
+        : { ...this.ctx, sessionMemberships: undefined };
+    return findUngrantedRepository(
+      ctx,
+      authorization,
+      { repositories, ...options },
+      {
+        listTeamsForRepository: async (repoId) =>
+          this.owners.get(repoId) ?? this.grants.listTeamsForRepository(repoId),
+      },
+      {
+        isActive: async (teamId) => this.activeTeams.get(teamId) ?? this.teams.isActive(teamId),
+      }
+    );
+  }
 }

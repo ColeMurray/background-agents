@@ -1,25 +1,30 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
 import {
-  SCOPED_PERMISSION_PAIRS,
-  resolveScopedPermission,
-  type PermissionId,
-} from "@open-inspect/shared/rbac";
+  ACTOR_ADMISSION_DENIED_CODE,
+  ACTOR_EMAIL_REQUIRED_CODE,
+  type ActorProfileClaims,
+} from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
-import type {
-  AuthorizationDecisionRequirement,
-  RouteAuthorizationDecision,
-} from "../authorization/request-audit";
+import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
+import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
+import { AdmissionPolicyStore } from "../db/admission-policy-store";
+import {
+  evaluateOwnedResourceAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
+import type { RouteAuthorizationDecision } from "../authorization/request-audit";
 import { AuthorizationError, AuthorizationService } from "../authorization/service";
 import { serviceAllowsPermission } from "../authorization/service-permissions";
-import { evaluateSessionAdmission, viewerFromContext } from "../authorization/session-admission";
+import { parseChannelScope } from "../authorization/channel-scope";
+import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
-import { AutomationStore } from "../db/automation-store";
-import { TeamStore } from "../db/teams";
-import { TeamMembershipStore } from "../db/team-memberships";
-import { resolveTeamAccess } from "@open-inspect/shared/types/team-access";
-import { UserStore } from "../db/user-store";
+import { TeamChannelBindingStore } from "../db/team-channel-bindings";
+import { SessionIndexStore } from "../db/session-index";
+import { IdentityClaimStore } from "../db/identity-claim-store";
+import { normalizeEmail } from "../db/email";
+import { isEmailAttestingProvider, requiresEnrollmentEmail, UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
 import { createLogger } from "../logger";
@@ -29,12 +34,21 @@ import type {
   RouteAuthentication,
   RouteAuthorizationRequirement,
   RouteParams,
+  ServiceActorClaimsResult,
 } from "../routes/shared";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
 import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import type { Env } from "../types";
+import { KnownActorProfileClaim, type KnownActor } from "./known-actor-profile";
 import { logPrincipal } from "./request-lifecycle";
+import { enforceTeamRequirement } from "./team-admission";
+import {
+  authorizationDenial,
+  authorizationUnavailable,
+  type AuthorizationEvidence,
+  type AuthorizationFailure,
+} from "./authorization-evidence";
 
 const logger = createLogger("router");
 
@@ -50,19 +64,6 @@ export type RouteAdmissionResult =
       /** Present for authorization denials; absent for authentication and infrastructure failures. */
       decision?: DeniedAuthorizationDecision;
     };
-
-/** A denial with optional audit evidence; infrastructure failures carry none. */
-export interface AuthorizationFailure {
-  response: Response;
-  decision?: DeniedAuthorizationDecision;
-  /** Deployment-capability refusals skip the general request log, as at the final gate. */
-  requestLog?: "emit" | "skip";
-}
-
-interface AuthorizationEvidence {
-  requirements: AuthorizationDecisionRequirement[];
-  effectivePermissions: PermissionId[];
-}
 
 type RouteAuthorizationResult =
   | { kind: "allowed"; decision: AllowedAuthorizationDecision }
@@ -83,33 +84,6 @@ function denied(
 
 function emptyEvidence(): AuthorizationEvidence {
   return { requirements: [], effectivePermissions: [] };
-}
-
-function authorizationDenial(
-  response: Response,
-  evidence: AuthorizationEvidence,
-  failedRequirement: AuthorizationDecisionRequirement,
-  reasonCode: string,
-  reason: string,
-  failedPermission?: PermissionId
-): AuthorizationFailure {
-  return {
-    response,
-    decision: {
-      kind: "denied",
-      ...evidence,
-      requirements: [...evidence.requirements, failedRequirement],
-      reasonCode,
-      reason,
-      ...(failedPermission ? { failedPermission } : {}),
-    },
-  };
-}
-
-function authorizationUnavailable(): AuthorizationFailure {
-  return {
-    response: json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503),
-  };
 }
 
 function resultForFailure(
@@ -350,7 +324,11 @@ function enforceStaticServicePermissionCeiling(
         ? requirement.permission
         : requirement.kind === "session"
           ? legacyPermissionForAction(requirement.action)
-          : null;
+          : requirement.kind === "environment"
+            ? (`environments.${requirement.need}` as const)
+            : requirement.kind === "automation" && requirement.operation === "read"
+              ? "automations.read"
+              : null;
     if (permission && !serviceAllowsPermission(principal.service, permission)) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "service_capability_required" }, 403),
@@ -365,9 +343,61 @@ function enforceStaticServicePermissionCeiling(
   return null;
 }
 
+async function enforceSlackWriteScope(
+  params: RouteParams,
+  request: Request,
+  pathname: string,
+  ctx: RequestContext,
+  evidence: AuthorizationEvidence
+): Promise<AuthorizationFailure | null> {
+  if (
+    ctx.principal?.kind !== "service" ||
+    ctx.principal.service !== "slack-bot" ||
+    request.method !== "POST" ||
+    !/^\/sessions\/[^/]+\/(prompt|attachments)$/.test(pathname)
+  ) {
+    return null;
+  }
+
+  const refusal = { error: "Slack channel scope denied", code: "slack_channel_scope_denied" };
+  const deny = (status: 400 | 403 | 404): AuthorizationFailure =>
+    authorizationDenial(
+      json(refusal, status),
+      evidence,
+      { kind: "session", sessionIdParam: "id", action: "collaborate" },
+      refusal.code,
+      refusal.error
+    );
+  const channels = new URL(request.url).searchParams.getAll("channel");
+  const scope = channels.length === 1 ? parseChannelScope(channels[0]) : null;
+  if (!scope || scope.provider !== "slack") return deny(400);
+
+  try {
+    const [binding, session] = await Promise.all([
+      new TeamChannelBindingStore(ctx.db).get("slack", scope.externalId),
+      new SessionIndexStore(ctx.db).get(params.id),
+    ]);
+    if (!session) return deny(404);
+    if ((binding?.teamId ?? null) !== session.ownerTeamId) return deny(403);
+    // Actor collaboration is authorized separately after this live channel check.
+    return null;
+  } catch (cause) {
+    logger.error("Slack channel scope authorization unavailable", {
+      event: "authorization.slack_channel_scope_unavailable",
+      error: cause instanceof Error ? cause : String(cause),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return { response: json(refusal, 503) };
+  }
+}
+
 /**
  * Resolve the verified service actor to its canonical user exactly once,
  * before any RBAC lookup, so the subject authorized is the subject attributed.
+ * An actor already known still has its route's profile claims applied, since
+ * the request that enrolled it may have carried none. An unknown actor from a
+ * provider that requires an enrollment email is refused without one.
  */
 async function finalizeServiceActor(
   policy: RouteAdmissionPolicy,
@@ -378,7 +408,12 @@ async function finalizeServiceActor(
 ): Promise<AuthorizationFailure | null> {
   if (!loadsCanonicalSubject(policy)) return null;
   const principal = ctx.principal;
-  if (principal?.kind !== "service" || !principal.actor || principal.actor.canonicalUserId) {
+  if (principal?.kind !== "service" || !principal.actor) return null;
+  if (principal.actor.canonicalUserId) {
+    await completeKnownActorProfile(policy, request, ctx, {
+      ...principal.actor,
+      canonicalUserId: principal.actor.canonicalUserId,
+    });
     return null;
   }
 
@@ -395,20 +430,72 @@ async function finalizeServiceActor(
     if (prepared?.kind === "rejected") return { response: prepared.response };
     const claims = prepared?.claims;
     const actor = principal.actor;
-    const user = await new UserStore(ctx.db).resolveOrCreateUser({
-      provider: actor.provider,
-      providerUserId: actor.providerUserId,
-      displayName: claims?.displayName,
-      providerEmail:
-        actor.provider === "slack" || actor.provider === "linear" ? claims?.email : undefined,
-      avatarUrl: claims?.avatarUrl,
-    });
+    const email = isEmailAttestingProvider(actor.provider) ? normalizeEmail(claims?.email) : null;
+    if (requiresEnrollmentEmail(actor.provider) && email === null) {
+      logger.warn("Refused to enroll a service actor without an attested email", {
+        event: "auth.service_actor_email_required",
+        provider: actor.provider,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        response: json(
+          { error: "Actor enrollment requires an attested email", code: ACTOR_EMAIL_REQUIRED_CODE },
+          403
+        ),
+      };
+    }
+    // Resolve existing accounts first so linking preserves role and suspension;
+    // the store checks admission immediately before creating a new user.
+    const user = await new UserStore(ctx.db).resolveOrCreateUser(
+      {
+        provider: actor.provider,
+        providerUserId: actor.providerUserId,
+        displayName: claims?.displayName,
+        providerEmail: email ?? undefined,
+        avatarUrl: claims?.avatarUrl,
+      },
+      async (identity) => {
+        const admissionPolicy = await resolveEffectiveAdmissionPolicy(
+          admissionPolicyConfigFromEnv(env),
+          new AdmissionPolicyStore(ctx.db)
+        );
+        const attestedEmail = isEmailAttestingProvider(identity.provider)
+          ? normalizeEmail(identity.providerEmail)
+          : null;
+        admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
+      }
+    );
+    const knownActor: KnownActor = { ...actor, canonicalUserId: user.id };
+    // Enrolled by a concurrent request after this one authenticated (#2470):
+    // apply claims exactly as for an actor known at authentication.
+    if (user.outcome === "existing" && claims) {
+      await claimKnownActorProfile(ctx, knownActor, claims);
+    }
     ctx.principal = {
       ...principal,
-      actor: { ...actor, canonicalUserId: user.id },
+      actor: knownActor,
     };
     return null;
   } catch (cause) {
+    if (cause instanceof AdmissionDeniedError) {
+      logger.warn("Refused to enroll a service actor outside workspace admission", {
+        event: "auth.service_actor_admission_denied",
+        provider: principal.actor.provider,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        response: json(
+          {
+            error:
+              "Your account is not authorized to join this workspace. Sign in on the web or ask an administrator to check the admission allowlists.",
+            code: ACTOR_ADMISSION_DENIED_CODE,
+          },
+          403
+        ),
+      };
+    }
     logger.error("Failed to finalize verified service actor", {
       event: "auth.service_actor_resolution_failed",
       error: cause instanceof Error ? cause : String(cause),
@@ -417,6 +504,52 @@ async function finalizeServiceActor(
     });
     return authorizationUnavailable();
   }
+}
+
+/**
+ * A known actor's identity is final, so its route's claims can only complete
+ * the profile. Best effort and never a denial: the handler still answers for
+ * the body, so a body the route would refuse just writes nothing.
+ */
+async function completeKnownActorProfile(
+  policy: RouteAdmissionPolicy,
+  request: Request,
+  ctx: RequestContext,
+  actor: KnownActor
+): Promise<void> {
+  if (!policy.serviceActorClaims) return;
+  let prepared: ServiceActorClaimsResult;
+  try {
+    prepared = await policy.serviceActorClaims(request.clone(), ctx);
+  } catch (cause) {
+    return warnProfileClaimFailed(ctx, cause);
+  }
+  if (prepared.kind === "claims") await claimKnownActorProfile(ctx, actor, prepared.claims);
+}
+
+async function claimKnownActorProfile(
+  ctx: RequestContext,
+  actor: KnownActor,
+  claims: ActorProfileClaims
+): Promise<void> {
+  try {
+    const profileClaim = new KnownActorProfileClaim(
+      new UserStore(ctx.db),
+      new IdentityClaimStore(ctx.db)
+    );
+    await profileClaim.claim(actor, claims);
+  } catch (cause) {
+    warnProfileClaimFailed(ctx, cause);
+  }
+}
+
+function warnProfileClaimFailed(ctx: RequestContext, cause: unknown): void {
+  logger.warn("Failed to complete known service actor profile", {
+    event: "auth.service_actor_profile_failed",
+    error: cause instanceof Error ? cause : String(cause),
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
@@ -538,150 +671,33 @@ async function enforcePermissionRequirement(
   );
 }
 
-async function enforceAutomationRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" }>,
+async function enforceOwnedResourceRequirement(
+  requirement: Extract<RouteAuthorizationRequirement, { kind: "automation" | "environment" }>,
   params: RouteParams,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): Promise<AuthorizationFailure | null> {
-  if (ctx.principal?.kind !== "user") {
-    // Ownership is defined for canonical human users only. Service policy
-    // normally rejects bots earlier; this keeps a future `requireAll`
-    // composition from skipping the ownership check.
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  const automationId = params[requirement.automationIdParam];
-  if (!automationId) return { response: json({ error: "Invalid automation route" }, 400) };
-
   try {
-    const authorization = ctx.authorization;
-    if (!authorization) throw new Error("Missing request authorization");
-    const store = new AutomationStore(ctx.db);
-    const storedAutomation = await store.getById(automationId);
-    if (!storedAutomation) return { response: error("Automation not found", 404) };
-    const automation = await store.resolveCanonicalOwner(storedAutomation);
-
-    const permissionStem = `automations.${requirement.operation}` as const;
-    const pair = SCOPED_PERMISSION_PAIRS[permissionStem];
-    const isOwner = automation.user_id === ctx.principal.userId;
-    const scope = resolveScopedPermission(permissionStem, authorization.permissions);
-    if (!scope || (scope === "own" && !isOwner)) {
-      return authorizationDenial(
-        json({ error: "Forbidden", code: "permission_required", permission: pair.own }, 403),
-        evidence,
-        requirement,
-        "permission_required",
-        "Forbidden",
-        pair.own
-      );
+    const result = await evaluateOwnedResourceAdmission(requirement, params, ctx);
+    // Denials keep the loaded environment too, so the audit attributes its owner team.
+    if (result.kind !== "error" && "admission" in result && result.admission) {
+      ctx.environmentAdmission = result.admission;
     }
-
-    evidence.requirements.push(requirement);
-    evidence.effectivePermissions.push(pair[scope]);
-    ctx.automationAdmission = { automation };
-    return null;
-  } catch {
-    return authorizationUnavailable();
-  }
-}
-
-async function enforceTeamRequirement(
-  requirement: Extract<RouteAuthorizationRequirement, { kind: "team" }>,
-  params: RouteParams,
-  ctx: RequestContext,
-  evidence: AuthorizationEvidence
-): Promise<AuthorizationFailure | null> {
-  if (ctx.principal?.kind !== "user") {
-    return authorizationDenial(
-      json({ error: "Forbidden", code: "service_capability_required" }, 403),
-      evidence,
-      requirement,
-      "service_capability_required",
-      "Forbidden"
-    );
-  }
-  const teamId = params[requirement.teamIdParam];
-  if (!teamId) return { response: json({ error: "Invalid team route" }, 400) };
-  try {
-    const team = await new TeamStore(ctx.db).getById(teamId);
-    if (!team)
-      return authorizationDenial(
-        error("Team not found", 404),
-        evidence,
-        requirement,
-        "team_not_visible",
-        "Team not found"
-      );
-    const memberships = new TeamMembershipStore(ctx.db);
-    const viewer = viewerFromContext(
-      ctx,
-      (ctx.sessionMemberships ??= await memberships.listForUser(ctx.principal.userId))
-    );
-    if (viewer.kind !== "user") throw new Error("Missing team viewer");
-    const isAdmin = viewer.roleKey === "owner" || viewer.roleKey === "administrator";
-    const isMember = isAdmin || viewer.memberships.has(teamId);
-    if (
-      !isMember &&
-      (requirement.need === "member" ||
-        requirement.need === "removeMember" ||
-        (requirement.need === "read" && team.archivedAt !== null))
-    )
-      return authorizationDenial(
-        error("Team not found", 404),
-        evidence,
-        requirement,
-        "team_not_visible",
-        "Team not found"
-      );
-    const access = resolveTeamAccess(
-      {
-        userId: viewer.userId,
-        roleKey: viewer.roleKey,
-        memberships: viewer.memberships,
-      },
-      { ...team, leadCount: await memberships.countLeads(teamId) }
-    );
-    let capabilityDenied: boolean;
-    if (requirement.need === "removeMember") {
-      const targetUserId = params[requirement.targetUserIdParam];
-      if (!targetUserId) return { response: error("Invalid team member route", 400) };
-      capabilityDenied = targetUserId !== viewer.userId && !access.canManageMembers;
-      // Preserve the existing 404 for an absent target membership.
-      if (
-        capabilityDenied &&
-        !(await memberships.listMembers(teamId)).some((member) => member.userId === targetUserId)
-      ) {
-        return { response: error("Team membership not found", 404) };
-      }
-    } else {
-      capabilityDenied =
-        requirement.need !== "read" && requirement.need !== "member" && !access[requirement.need];
+    if (result.kind === "error") {
+      return { response: ownedResourceAdmissionResponse(result) };
     }
-    if (capabilityDenied) {
-      const reasonCode =
-        requirement.need === "canJoin"
-          ? team.archivedAt !== null
-            ? "team_archived"
-            : team.joinPolicy === "invite_only"
-              ? "invite_only"
-              : "already_member"
-          : "team_capability_required";
+    if (result.kind === "denied") {
       return authorizationDenial(
-        json({ error: "Forbidden", code: reasonCode, reason_code: reasonCode }, 403),
+        ownedResourceAdmissionResponse(result),
         evidence,
         requirement,
-        reasonCode,
-        "Forbidden"
+        result.reasonCode,
+        result.reason,
+        result.failedPermission
       );
     }
     evidence.requirements.push(requirement);
-    ctx.teamAdmission = { team, access };
+    if (result.effectivePermission) evidence.effectivePermissions.push(result.effectivePermission);
     return null;
   } catch {
     return authorizationUnavailable();
@@ -691,6 +707,7 @@ async function enforceTeamRequirement(
 async function enforceSessionRequirement(
   requirement: Extract<RouteAuthorizationRequirement, { kind: "session" }>,
   params: RouteParams,
+  request: Request,
   env: Env,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
@@ -698,6 +715,36 @@ async function enforceSessionRequirement(
   const sessionId = params[requirement.sessionIdParam];
   if (!sessionId) return { response: json({ error: "Invalid session route" }, 400) };
   try {
+    if (ctx.principal?.kind === "service" && !ctx.principal.actor) {
+      const query = new URL(request.url).searchParams;
+      const channels = query.getAll("channel");
+      const postRead = query.get("purpose") === "slack-post";
+      if (postRead && (channels.length !== 1 || ctx.principal.service !== "slack-bot")) {
+        return authorizationDenial(
+          error("Session not found", 404),
+          evidence,
+          requirement,
+          "session_not_visible",
+          "Session not found"
+        );
+      }
+      if (channels.length > 0) {
+        const scope = channels.length === 1 ? parseChannelScope(channels[0]) : null;
+        if (!scope || ctx.principal.service !== `${scope.provider}-bot`) {
+          return authorizationDenial(
+            error("Session not found", 404),
+            evidence,
+            requirement,
+            "session_not_visible",
+            "Session not found"
+          );
+        }
+        ctx.serviceTeamId =
+          (await new TeamChannelBindingStore(ctx.db).get(scope.provider, scope.externalId))
+            ?.teamId ?? null;
+        if (postRead) ctx.serviceReadPurpose = "slack-post";
+      }
+    }
     const result = await evaluateSessionAdmission(
       ctx,
       env,
@@ -760,7 +807,7 @@ function allowed(
 
 /**
  * Ordered trust transition for an authenticated request: principal kind,
- * sandbox capability, service capability and ceiling, actor finalization,
+ * sandbox capability, service capability and ceiling, Slack write scope, actor finalization,
  * active canonical subject, then route permission and resource requirements.
  */
 async function enforceRouteAuthorization(
@@ -798,6 +845,9 @@ async function enforceRouteAuthorization(
   const ceilingFailure = enforceStaticServicePermissionCeiling(policy, ctx, evidence);
   if (ceilingFailure) return resultForFailure(ceilingFailure);
 
+  const scopeFailure = await enforceSlackWriteScope(params, request, pathname, ctx, evidence);
+  if (scopeFailure) return resultForFailure(scopeFailure);
+
   const actorFailure = await finalizeServiceActor(policy, request, pathname, env, ctx);
   if (actorFailure) return resultForFailure(actorFailure);
 
@@ -812,13 +862,21 @@ async function enforceRouteAuthorization(
           failure = await enforcePermissionRequirement(requirement, ctx, evidence);
           break;
         case "automation":
-          failure = await enforceAutomationRequirement(requirement, params, ctx, evidence);
+        case "environment":
+          failure = await enforceOwnedResourceRequirement(requirement, params, ctx, evidence);
           break;
         case "team":
           failure = await enforceTeamRequirement(requirement, params, ctx, evidence);
           break;
         case "session":
-          failure = await enforceSessionRequirement(requirement, params, env, ctx, evidence);
+          failure = await enforceSessionRequirement(
+            requirement,
+            params,
+            request,
+            env,
+            ctx,
+            evidence
+          );
           break;
       }
       if (failure) return resultForFailure(failure);

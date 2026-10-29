@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
@@ -6,6 +6,10 @@ import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-hel
 const SECRET = "callback-secret";
 const SIZE_LIMIT_ERROR =
   "The agent's response exceeded the event size limit and was not delivered in full.";
+
+beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -49,7 +53,11 @@ async function postFailedCompletion(options: {
   );
   const linearFetch = vi
     .spyOn(globalThis, "fetch")
-    .mockResolvedValue(Response.json({ data: { commentCreate: { success: true } } }));
+    .mockImplementation(async (_input, init) =>
+      String(init?.body).includes("IssueTeam")
+        ? Response.json({ data: { issue: { id: "issue-1", team: { id: "external-team-1" } } } })
+        : Response.json({ data: { commentCreate: { success: true } } })
+    );
   const env = makeLinearBotEnv(kv, {
     SERVICE_AUTH_SECRET: SECRET,
     LINEAR_API_KEY: "linear-key",
@@ -66,6 +74,7 @@ async function postFailedCompletion(options: {
       issueId: "issue-1",
       issueIdentifier: "ENG-1",
       issueUrl: "https://linear.app/acme/issue/ENG-1",
+      linearTeamId: "external-team-1",
       model: "anthropic/claude-haiku-4-5",
     },
   };
@@ -83,8 +92,8 @@ async function postFailedCompletion(options: {
 
   expect(response.status).toBe(200);
   await Promise.all(ctx.waitUntil.mock.calls.map(([promise]) => promise));
-  expect(linearFetch).toHaveBeenCalledOnce();
-  const body = JSON.parse(String(linearFetch.mock.calls[0][1]?.body));
+  expect(linearFetch).toHaveBeenCalledTimes(2);
+  const body = JSON.parse(String(linearFetch.mock.calls[1][1]?.body));
   return body.variables.input.body;
 }
 

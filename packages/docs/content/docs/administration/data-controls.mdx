@@ -4,8 +4,9 @@ description: How archiving a session works, how to restore archived sessions fro
 audience: team-owner
 owner: web
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-02"
 relatedCode:
+  - packages/shared/src/types/session-access.ts
   - packages/web/src/components/archive-session-dialog.tsx
   - packages/web/src/components/settings/data-controls-settings.tsx
   - packages/web/src/components/action-bar.tsx
@@ -21,7 +22,7 @@ Archiving takes a session out of the inbox and the sessions list without deletin
 
 ## Prerequisites
 
-- Archiving and restoring require the `sessions.lifecycle` permission (Owner, Administrator, Member). Viewers can see archived sessions on the Data Controls page but do not get the **Unarchive** button.
+- Archiving and restoring require `sessions.lifecycle` and lifecycle access to the specific session. Team-owned sessions require current owning-team membership, even for Owners and Administrators. Viewers can see readable archived sessions but do not get the **Unarchive** button. Private access rules also apply; see [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 
 ## Archiving a session
 
@@ -56,7 +57,7 @@ The web app has no multi-select for archiving. The control plane accepts a batch
 
 ## Restoring from Settings › Data Controls
 
-Settings › Data Controls is described as "Manage your archived chats and data." Its **Archived chats** section lists the workspace's archived sessions 20 at a time, with a **Load more** button when more exist. Each row shows the session title (or its repository when untitled), when it was last updated, and the repository.
+Settings › Data Controls is described as "Manage your archived chats and data." Its **Archived chats** section lists readable archived sessions 20 at a time, with a **Load more** button when more exist. Each row shows the session title (or its repository when untitled), when it was last updated, and the repository.
 
 <Steps>
 <Step>
@@ -101,8 +102,9 @@ For operators and service integrations, the control plane exports paginated sess
 
 </Accordion>
   <Accordion title="No Unarchive button on Data Controls">
-    Your role lacks `sessions.lifecycle`. Viewers can browse archived sessions but cannot restore
-    them; ask a Member, Administrator, or Owner.
+    Your role lacks `sessions.lifecycle`, or you lack lifecycle access to this session. Reading does
+    not grant restoration access. Ask someone with the required session access; for a team-owned
+    session, they must be a current team member even if they are an Administrator or Owner.
 
 </Accordion>
   <Accordion title="A restored session shows an old status">

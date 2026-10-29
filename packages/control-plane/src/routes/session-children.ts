@@ -25,6 +25,7 @@ import {
   viewerFromContext,
 } from "../authorization/session-admission";
 import { createLogger } from "../logger";
+import { recordShadowListDenials } from "../authorization/session-shadow-audit";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import { activePromptAuthorSchema, type ActivePromptAuthor } from "../session/active-prompt-author";
@@ -52,9 +53,11 @@ function sandboxChildAccess(
   return async (child: SessionEntry, action: SessionAction): Promise<boolean> => {
     if (ctx.principal?.kind !== "sandbox" || ctx.principal.sessionId !== parent.id) return false;
     if (child.ownerTeamId !== parent.ownerTeamId) return false;
+    // Non-read actions on team-owned children need the active prompt author's current membership.
     if (
-      child.visibility === "workspace" ||
-      (child.visibility === "team" && parent.visibility === "team")
+      (action === "read" || child.ownerTeamId === null) &&
+      (child.visibility === "workspace" ||
+        (child.visibility === "team" && parent.visibility === "team"))
     )
       return true;
 
@@ -142,7 +145,9 @@ export async function handleListChildren(
     return json(childSessionListResponseSchema.parse({ children: visible }));
   }
 
-  return json(childSessionListResponseSchema.parse({ children }));
+  const response = json(childSessionListResponseSchema.parse({ children }));
+  recordShadowListDenials(ctx, readScope, children, teamsEnforcementMode(ctx, env));
+  return response;
 }
 
 export async function handleGetChild(
@@ -210,10 +215,7 @@ export async function handlePromptChild(
   if (!authorResponse.ok) return authorResponse;
   const author = activePromptAuthorSchema.safeParse(await authorResponse.json());
   if (!author.success) return error("Failed to get active prompt author", 500);
-  if (
-    childSession.visibility === "private" &&
-    !(await sandboxChildAccess(ctx, parentSession, author.data)(childSession, "collaborate"))
-  )
+  if (!(await sandboxChildAccess(ctx, parentSession, author.data)(childSession, "collaborate")))
     return error("Child session not found", 404);
 
   let admissionLease: ChildAdmissionLease | null = null;
@@ -236,6 +238,9 @@ export async function handlePromptChild(
     }
   }
 
+  // The participant identity attributes the follow-up; the account its parent prompt was queued
+  // under, null included, decides whose prompt it counts as.
+  const { promptAccountUserId = null, ...promptAuthor } = author.data;
   // A transport error is ambiguous: the child may have accepted the prompt before the response
   // was lost. Keep the lease until active-state finalization or its expiry rather than undercounting.
   const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
@@ -244,7 +249,8 @@ export async function handlePromptChild(
     body: JSON.stringify({
       parentSessionId: parentId,
       content: parsed.content,
-      author: author.data,
+      author: promptAuthor,
+      promptAccountUserId,
     }),
   });
   if (response.ok) {

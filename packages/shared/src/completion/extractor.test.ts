@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { verifyServiceSignature, sha256Hex } from "../service-auth";
+import type { EventResponse } from "../types/sandbox-events";
+import { getResponseFileArtifacts } from "../types/artifacts";
 import {
   buildAgentResponseFromEvents,
   extractAgentResponse,
+  ProtectedReadError,
   summarizeToolCall,
   toArtifactType,
   toEventArtifactInfo,
@@ -120,6 +124,7 @@ describe("buildAgentResponseFromEvents", () => {
         },
       ],
       mediaArtifacts: [],
+      fileArtifacts: [],
       success: true,
       error: undefined,
     });
@@ -296,6 +301,181 @@ describe("buildAgentResponseFromEvents", () => {
 });
 
 describe("extractAgentResponse", () => {
+  it.each([undefined, "slack-post"] as const)(
+    "signs channel and optional purpose on all reads: %s",
+    async (readPurpose) => {
+      const requests: { url: URL; headers: Headers }[] = [];
+      const fetcher: ControlPlaneFetcher = {
+        async fetch(input, init) {
+          const url = new URL(String(input));
+          requests.push({ url, headers: new Headers(init?.headers) });
+          if (url.pathname.endsWith("/events")) {
+            return Response.json({
+              events: [],
+              hasMore: !url.searchParams.has("cursor"),
+              cursor: "next",
+            });
+          }
+          return Response.json({ artifacts: [] });
+        },
+      };
+      await extractAgentResponse(
+        { fetcher, auth: { service: "slack-bot", secret: "test-secret" }, readPurpose },
+        "s1",
+        "m1",
+        "trace",
+        "slack:C123"
+      );
+      expect(requests.map(({ url }) => url.pathname)).toEqual([
+        "/sessions/s1/events",
+        "/sessions/s1/events",
+        "/sessions/s1/artifacts",
+      ]);
+      expect(requests[1]?.url.searchParams.get("cursor")).toBe("next");
+      for (const { url, headers } of requests) {
+        expect(
+          await verifyServiceSignature({
+            signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
+            service: "slack-bot",
+            secret: "test-secret",
+            method: "GET",
+            url: url.toString(),
+            bodySha256Hex: await sha256Hex(""),
+            actor: "",
+          })
+        ).toMatchObject({ ok: true });
+        expect(url.searchParams.get("channel")).toBe("slack:C123");
+        expect(url.searchParams.get("purpose")).toBe(readPurpose ?? null);
+      }
+    }
+  );
+
+  it.each([
+    ["events", "403", false],
+    ["events", "404", false],
+    ["events", "503", false],
+    ["events", "malformed", false],
+    ["events", "network", false],
+    ["events", "invalid-JSON", false],
+    ["events", "403", true],
+    ["events", "404", true],
+    ["events", "503", true],
+    ["events", "missing-cursor", false],
+    ["artifacts", "403", false],
+    ["artifacts", "404", false],
+    ["artifacts", "503", false],
+    ["artifacts", "malformed", false],
+    ["artifacts", "network", false],
+    ["artifacts", "invalid-JSON", false],
+  ] as const)(
+    "rejects protected %s %s failures (later page: %s) without returning collected content",
+    async (endpoint, failure, laterPage) => {
+      const urls: URL[] = [];
+      const fetcher: ControlPlaneFetcher = {
+        async fetch(input) {
+          const url = new URL(String(input));
+          urls.push(url);
+          if (
+            url.pathname.endsWith(`/${endpoint}`) &&
+            (!laterPage || url.searchParams.has("cursor"))
+          ) {
+            if (failure === "network") throw new Error("read unavailable");
+            if (failure === "invalid-JSON") return new Response("{");
+            if (failure === "missing-cursor") return Response.json({ events: [], hasMore: true });
+            return /^\d+$/.test(failure)
+              ? Response.json({ error: "read failed" }, { status: Number(failure) })
+              : Response.json({ invalid: true });
+          }
+          return Response.json({
+            events: [
+              {
+                id: "secret",
+                type: "token",
+                data: { content: "SECRET CONTENT" },
+                messageId: "m1",
+                createdAt: 1,
+              },
+            ],
+            hasMore: laterPage,
+            cursor: "next",
+          });
+        },
+      };
+      const extraction = extractAgentResponse(
+        {
+          fetcher,
+          auth: { service: "slack-bot", secret: "test-secret" },
+          readPurpose: "slack-post",
+        },
+        "s1",
+        "m1",
+        undefined,
+        "slack:C1"
+      );
+      await expect(extraction).rejects.toBeInstanceOf(ProtectedReadError);
+      await expect(extraction).rejects.toMatchObject({
+        kind: failure === "403" || failure === "404" ? "denied" : "unavailable",
+        ...(failure === "missing-cursor" ? { message: "Invalid events response" } : {}),
+      });
+      expect(urls).toHaveLength(laterPage || endpoint === "artifacts" ? 2 : 1);
+      expect(urls.at(-1)?.pathname).toBe(`/sessions/s1/${endpoint}`);
+      expect(urls.at(-1)?.searchParams.get("cursor")).toBe(laterPage ? "next" : null);
+    }
+  );
+
+  it.each(["403", "network", "malformed", "invalid-JSON"])(
+    "keeps Linear's unprotected artifact fallback unchanged for %s",
+    async (failure) => {
+      const fetcher: ControlPlaneFetcher = {
+        async fetch(input) {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/artifacts")) {
+            if (failure === "network") throw new Error("read unavailable");
+            if (failure === "invalid-JSON") return new Response("{");
+            return /^\d+$/.test(failure)
+              ? Response.json({}, { status: Number(failure) })
+              : Response.json({ invalid: true });
+          }
+          return Response.json({
+            events: [
+              {
+                id: "text",
+                type: "token",
+                data: { content: "Legacy response" },
+                messageId: "m1",
+                createdAt: 1,
+              },
+              {
+                id: "branch",
+                type: "artifact",
+                data: {
+                  artifactType: "branch",
+                  url: "https://example.com/tree/legacy",
+                  metadata: { name: "legacy" },
+                },
+                messageId: "m1",
+                createdAt: 2,
+              },
+            ],
+            hasMore: false,
+          });
+        },
+      };
+      expect(
+        await extractAgentResponse(
+          { fetcher, auth: { service: "linear-bot", secret: "test-secret" } },
+          "s1",
+          "m1"
+        )
+      ).toMatchObject({
+        textContent: "Legacy response",
+        artifacts: [
+          { type: "branch", url: "https://example.com/tree/legacy", label: "Branch: legacy" },
+        ],
+      });
+    }
+  );
+
   it("returns a failed response when the events response is malformed", async () => {
     const fetcher: ControlPlaneFetcher = {
       async fetch() {
@@ -314,6 +494,7 @@ describe("extractAgentResponse", () => {
       toolCalls: [],
       artifacts: [],
       mediaArtifacts: [],
+      fileArtifacts: [],
       success: false,
     });
   });
@@ -415,5 +596,176 @@ describe("extractAgentResponse", () => {
     );
 
     expect(response).toMatchObject({ success: true, artifacts: [] });
+  });
+});
+
+describe("generated file completion extraction", () => {
+  const metadata = {
+    objectKey: "sessions/s1/files/f1",
+    filename: "report.csv",
+    mimeType: "text/csv",
+    sizeBytes: 12,
+    messageId: "m1",
+    caption: "Requested report",
+  };
+  function fileEvent(overrides: Partial<EventResponse> = {}): EventResponse {
+    return {
+      id: "event:f1",
+      type: "artifact",
+      data: { artifactType: "file", artifactId: "f1", url: metadata.objectKey, metadata },
+      messageId: "m1",
+      createdAt: 20,
+      ...overrides,
+    };
+  }
+
+  it("orders a deduplicated mixed batch and derives the legacy media projection", () => {
+    const image: EventResponse = {
+      id: "event:image",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 10,
+      data: {
+        artifactType: "screenshot",
+        artifactId: "image",
+        metadata: { mimeType: "image/png" },
+      },
+    };
+    const video: EventResponse = {
+      id: "event:video",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 30,
+      data: { artifactType: "video", artifactId: "video" },
+    };
+    const response = buildAgentResponseFromEvents([
+      video,
+      fileEvent({ id: "duplicate", createdAt: 40 }),
+      fileEvent(),
+      image,
+    ]);
+    expect(response.fileArtifacts).toEqual([
+      { id: "image", type: "screenshot", mimeType: "image/png" },
+      { id: "f1", type: "file", available: true, metadata },
+      { id: "video", type: "video" },
+    ]);
+    expect(response.mediaArtifacts).toEqual([
+      { id: "image", type: "screenshot", mimeType: "image/png" },
+      { id: "video", type: "video" },
+    ]);
+    expect(getResponseFileArtifacts(response)).toHaveLength(3);
+    expect(response.artifacts).toEqual([]);
+  });
+
+  it("recovers a later validated file without changing its original chronological position", () => {
+    const invalid = fileEvent({ id: "invalid", createdAt: 10 });
+    invalid.data.metadata = null;
+    const valid = fileEvent({ id: "valid", createdAt: 30 });
+    const laterInvalid = fileEvent({ id: "later-invalid", createdAt: 40 });
+    laterInvalid.data.metadata = null;
+    const media: EventResponse = {
+      id: "media",
+      type: "artifact",
+      messageId: "m1",
+      createdAt: 20,
+      data: { artifactType: "screenshot", artifactId: "image" },
+    };
+    const response = buildAgentResponseFromEvents([laterInvalid, valid, media, invalid]);
+    expect(response.fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: true, metadata },
+      { id: "image", type: "screenshot" },
+    ]);
+    expect(response.mediaArtifacts).toEqual([{ id: "image", type: "screenshot" }]);
+  });
+
+  it.each([
+    null,
+    { ...metadata, sizeBytes: 0 },
+    { ...metadata, filename: "../report.csv" },
+    { ...metadata, mimeType: "image/png" },
+    { ...metadata, messageId: "older-message" },
+    { ...metadata, objectKey: "sessions/s1/files/other-file" },
+  ])("retains an unavailable file when metadata is invalid or mismatched: %j", (badMetadata) => {
+    const event = fileEvent();
+    event.data.metadata = badMetadata;
+    const response = buildAgentResponseFromEvents([event]);
+    expect(response.fileArtifacts).toEqual([{ id: "f1", type: "file", available: false }]);
+    expect(response.artifacts).toEqual([]);
+    expect(response.mediaArtifacts).toEqual([]);
+  });
+
+  it("does not accept a different object URL or unattributed file event", () => {
+    const event = fileEvent();
+    event.data.url = "sessions/s2/files/f1";
+    expect(buildAgentResponseFromEvents([event]).fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: false },
+    ]);
+    expect(buildAgentResponseFromEvents([fileEvent({ messageId: null })]).fileArtifacts).toEqual([
+      { id: "f1", type: "file", available: false },
+    ]);
+  });
+
+  it("excludes stored outputs from event and direct-list fallback links", () => {
+    expect(toArtifactType("file")).toBe("file");
+    expect(toArtifactType("unknown")).toBeNull();
+    expect(toEventArtifactInfo(fileEvent().data)).toBeNull();
+    const response = buildAgentResponseFromEvents(
+      [],
+      [
+        { type: "file", url: metadata.objectKey, label: "file" },
+        { type: "screenshot", url: "sessions/s1/media/image", label: "screenshot" },
+        { type: "video", url: "sessions/s1/media/video", label: "video" },
+        { type: "pr", url: "https://github.com/acme/repo/pull/1", label: "PR #1" },
+      ]
+    );
+    expect(response.artifacts).toEqual([
+      { type: "pr", url: "https://github.com/acme/repo/pull/1", label: "PR #1" },
+    ]);
+    expect(response.fileArtifacts).toEqual([]);
+  });
+
+  it("selects only the requested message's events, never session-wide files", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/events")) {
+          expect(url.searchParams.get("message_id")).toBe("m1");
+          return Response.json({ events: [fileEvent()], hasMore: false });
+        }
+        return Response.json({
+          artifacts: [
+            { id: "f1", type: "file", url: metadata.objectKey, metadata, createdAt: 20 },
+            {
+              id: "older-file",
+              type: "file",
+              url: "sessions/s1/files/older-file",
+              metadata: null,
+              createdAt: 20,
+            },
+            {
+              id: "pr",
+              type: "pr",
+              url: "https://github.com/acme/repo/pull/1",
+              metadata: { number: 1 },
+              createdAt: 20,
+            },
+          ],
+        });
+      },
+    };
+    const response = await extractAgentResponse(
+      { fetcher, auth: { service: "slack-bot", secret: "secret" }, readPurpose: "slack-post" },
+      "s1",
+      "m1"
+    );
+    expect(response.fileArtifacts).toEqual([{ id: "f1", type: "file", available: true, metadata }]);
+    expect(response.artifacts).toEqual([
+      {
+        type: "pr",
+        url: "https://github.com/acme/repo/pull/1",
+        label: "PR #1",
+        metadata: { number: 1 },
+      },
+    ]);
   });
 });

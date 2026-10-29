@@ -47,6 +47,15 @@ describe("TemplateGallery", () => {
     );
   });
 
+  it("links the Review new PRs replacement template to the existing create form", () => {
+    render(<TemplateGallery />);
+
+    expect(screen.getByRole("link", { name: "Add Review new PRs" })).toHaveAttribute(
+      "href",
+      "/automations/new?template=review-new-prs"
+    );
+  });
+
   it("shows a setup note for templates that need extra setup", () => {
     render(<TemplateGallery />);
     fireEvent.click(screen.getByTestId("category-security"));

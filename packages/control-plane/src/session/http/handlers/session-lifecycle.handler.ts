@@ -162,8 +162,12 @@ export class SessionLifecycleHandler {
       });
     }
 
-    await this.statusService.transition("archived");
-    await this.sandboxLifecycle.preserveForArchive();
+    // Commit archived before starting preservation, but do not await its index
+    // projection: reconnects must see draining in the same turn.
+    await Promise.all([
+      this.statusService.beginTransition("archived"),
+      this.sandboxLifecycle.preserveForArchive(),
+    ]);
     try {
       await this.statusService.confirmIndexStatus("archived");
     } catch {

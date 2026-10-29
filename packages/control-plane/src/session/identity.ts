@@ -64,8 +64,10 @@ const betterAuthAccessTokenSchema = z.object({
 });
 
 const betterAuthGitHubAccountInfoSchema = z.object({
-  user: z.object({
+  account: z.object({
     id: z.string().min(1),
+    providerId: z.string().min(1),
+    accountId: z.string().min(1),
   }),
   data: z.object({
     provider: z.literal("github"),
@@ -99,9 +101,18 @@ function expiresWithinGitHubSafetyWindow(token: { accessTokenExpiresAt?: Date })
   );
 }
 
-function parseBetterAuthGitHubProfile(response: unknown, expectedScmUserId: string) {
+function parseBetterAuthGitHubProfile(
+  response: unknown,
+  expectedScmUserId: string,
+  selection: ProviderAccountSelection
+) {
   const profile = betterAuthGitHubAccountInfoSchema.parse(response);
-  if (profile.user.id !== expectedScmUserId || profile.data.subject !== expectedScmUserId) {
+  if (
+    profile.account.id !== selection.accountId ||
+    profile.account.providerId !== "github" ||
+    profile.account.accountId !== expectedScmUserId ||
+    profile.data.subject !== expectedScmUserId
+  ) {
     throw new Error("Better Auth returned a mismatched GitHub account");
   }
   return profile.data;
@@ -114,18 +125,14 @@ export async function resolveCurrentGitHubAccessToken(
   canonicalUserId: string,
   expectedScmUserId: string | null
 ): Promise<string | null> {
-  const enrichment = await resolveGitHubEnrichment(userStore, canonicalUserId);
-  if (!enrichment) return null;
+  const account = await resolveCanonicalGitHubAccount(userStore, canonicalUserId);
+  if (!account) return null;
+  const { enrichment, selection } = account;
   // Browser joins may lack a cached SCM subject; the canonical identity is authoritative.
   if (expectedScmUserId !== null && enrichment.scmUserId !== expectedScmUserId) {
     throw new Error("Session GitHub account no longer matches the canonical user");
   }
 
-  const selection: ProviderAccountSelection = {
-    providerId: "github",
-    accountId: enrichment.scmUserId,
-    userId: canonicalUserId,
-  };
   const accountClient = getAccountClient();
   let tokenResponse: unknown;
   try {
@@ -152,7 +159,8 @@ export async function resolveCurrentGitHubAccessToken(
 
   parseBetterAuthGitHubProfile(
     await accountClient.accountInfo({ query: selection }),
-    enrichment.scmUserId
+    enrichment.scmUserId,
+    selection
   );
   return token.accessToken;
 }
@@ -177,6 +185,13 @@ export async function resolveGitHubEnrichment(
   userStore: UserStore,
   userId: string
 ): Promise<GitHubEnrichment | null> {
+  return (await resolveCanonicalGitHubAccount(userStore, userId))?.enrichment ?? null;
+}
+
+async function resolveCanonicalGitHubAccount(
+  userStore: UserStore,
+  userId: string
+): Promise<{ enrichment: GitHubEnrichment; selection: ProviderAccountSelection } | null> {
   const identities = await userStore.getIdentitiesForUser(userId);
   const githubIdentities = identities.filter((identity) => identity.provider === "github");
   if (githubIdentities.length > 1) {
@@ -196,10 +211,13 @@ export async function resolveGitHubEnrichment(
   });
 
   return {
-    scmUserId: githubIdentity.providerUserId,
-    scmLogin: githubIdentity.providerLogin ?? undefined,
-    displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
-    email: authorIdentity?.email ?? undefined,
+    selection: { accountId: githubIdentity.id, userId },
+    enrichment: {
+      scmUserId: githubIdentity.providerUserId,
+      scmLogin: githubIdentity.providerLogin ?? undefined,
+      displayName: user?.displayName ?? githubIdentity.providerLogin ?? undefined,
+      email: authorIdentity?.email ?? undefined,
+    },
   };
 }
 
@@ -229,7 +247,10 @@ export async function resolveGitHubEnrichmentForRequest(
 
   const profileResponse = await authority.githubAccount.resolveProfile();
   if (profileResponse === null) return enrichment;
-  return enrichFromVerifiedGitHubProfile(enrichment, profileResponse);
+  return enrichFromVerifiedGitHubProfile(enrichment, profileResponse, {
+    accountId: authority.githubAccount.id,
+    userId,
+  });
 }
 
 /** Attribute unattended turns to the one linked account of the admitted canonical user. */
@@ -238,21 +259,22 @@ export async function resolveGitHubEnrichmentForCanonicalUser(
   userId: string,
   getAccountClient: () => ProviderAccountClient
 ): Promise<GitHubEnrichment | null> {
-  const enrichment = await resolveGitHubEnrichment(userStore, userId);
-  if (!enrichment || enrichment.scmLogin) return enrichment;
-  const response = await resolveGitHubAccountProfile(getAccountClient(), {
-    providerId: "github",
-    accountId: enrichment.scmUserId,
-    userId,
-  });
-  return response === null ? enrichment : enrichFromVerifiedGitHubProfile(enrichment, response);
+  const account = await resolveCanonicalGitHubAccount(userStore, userId);
+  if (!account) return null;
+  const { enrichment, selection } = account;
+  if (enrichment.scmLogin) return enrichment;
+  const response = await resolveGitHubAccountProfile(getAccountClient(), selection);
+  return response === null
+    ? enrichment
+    : enrichFromVerifiedGitHubProfile(enrichment, response, selection);
 }
 
 function enrichFromVerifiedGitHubProfile(
   enrichment: GitHubEnrichment,
-  profileResponse: unknown
+  profileResponse: unknown,
+  selection: ProviderAccountSelection
 ): GitHubEnrichment {
-  const profile = parseBetterAuthGitHubProfile(profileResponse, enrichment.scmUserId);
+  const profile = parseBetterAuthGitHubProfile(profileResponse, enrichment.scmUserId, selection);
   const displayName = enrichment.displayName ?? profile.displayName ?? profile.login;
   const authorIdentity = resolveGitAuthorIdentity({
     scmProvider: "github",

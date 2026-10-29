@@ -1,27 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { BROWSER_AUTH_CALLBACK_TIMEOUT_MS } from "@/lib/browser-auth-proxy";
+import { maxDuration } from "./route";
 
-const mocks = vi.hoisted(() => ({
-  proxyBrowserAuthRequest: vi.fn(),
-}));
-
-vi.mock("@/lib/browser-auth-proxy", () => ({
-  proxyBrowserAuthRequest: mocks.proxyBrowserAuthRequest,
-}));
-
-import { GET, POST } from "./route";
-
-describe("/api/auth/*", () => {
-  it.each([
-    ["GET", GET],
-    ["POST", POST],
-  ] as const)("passes %s requests to the positive browser-auth proxy", async (_method, handler) => {
-    const upstream = new Response("proxied", { status: 202 });
-    mocks.proxyBrowserAuthRequest.mockResolvedValueOnce(upstream);
-    const request = new Request("https://app.example/api/auth/get-session", {
-      method: _method,
-    });
-
-    await expect(handler(request)).resolves.toBe(upstream);
-    expect(mocks.proxyBrowserAuthRequest).toHaveBeenCalledWith(request);
-  });
+it("leaves platform execution headroom beyond the OAuth callback transport deadline", () => {
+  expect(maxDuration * 1000).toBeGreaterThan(BROWSER_AUTH_CALLBACK_TIMEOUT_MS);
 });

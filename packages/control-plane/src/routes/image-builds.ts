@@ -18,10 +18,16 @@ import {
   repositoryShaEntrySchema,
 } from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
+import { checkEnvironmentAccess } from "@open-inspect/shared";
+import {
+  admittedEnvironment,
+  evaluateEnvironmentAdmission,
+  ownedResourceAdmissionResponse,
+} from "../authorization/owned-resource-admission";
+import { resourceViewer } from "../authorization/resource-viewer";
+import { EnvironmentStore } from "../db/environments";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
-import { EnvironmentStore } from "../db/environments";
-import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
@@ -38,6 +44,7 @@ import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
   listEnabledScopeUnits,
+  type EnvironmentRowFilter,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "../image-builds/scope";
@@ -48,7 +55,6 @@ import type {
   ImageBuildWorkflowContext,
 } from "../image-builds/types";
 import type { Env } from "../types";
-import type { SqlDatabase } from "../db/sql-database";
 import {
   type RequestContext,
   GITHUB_USER_OR_SERVICE_ROUTE,
@@ -58,6 +64,9 @@ import {
   NO_AUTHORIZATION,
   requirePermission,
   resolveRepoOrError,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import { parseQuery } from "./query";
 import {
@@ -291,22 +300,12 @@ async function handleTriggerEnvironmentBuild(
   if (providerError) return providerError;
 
   const environmentId = params.id;
-  const store = new EnvironmentStore(ctx.db);
-  const environment = await store.getById(environmentId);
-  if (!environment) return error("Environment not found", 404);
+  // Admission already loaded the environment and required manage access to it.
+  const { environment } = admittedEnvironment(ctx);
   if (environment.owner_team_id !== null) {
-    const authorization = ctx.authorization;
-    if (!authorization) {
-      return json({ error: "Authorization unavailable", code: "authorization_unavailable" }, 503);
-    }
-    const roleKey = authorization.role.key;
-    if (roleKey !== "owner" && roleKey !== "administrator") {
-      const memberships = await new TeamMembershipStore(ctx.db).listForUser(authorization.userId);
-      if (!memberships.has(environment.owner_team_id)) {
-        return json({ error: "Forbidden", code: "not_member", reason_code: "not_member" }, 403);
-      }
-    }
-    const repositories = await store.getRepositoriesForEnvironment(environmentId);
+    const repositories = await new EnvironmentStore(ctx.db).getRepositoriesForEnvironment(
+      environmentId
+    );
     const resolved = await Promise.all(
       repositories.map(async (repository) => {
         const access = await resolveRepoOrError(
@@ -457,12 +456,24 @@ function parseScopeParams(request: Request): ImageBuildScope | null | Response {
 }
 
 async function readStatusRows(
-  db: SqlDatabase,
+  ctx: RequestContext,
   scope: ImageBuildScope | null
 ): Promise<ImageBuildStatusResponse["images"]> {
-  const store = new ImageBuildStore(db);
+  const store = new ImageBuildStore(ctx.db);
   if (scope) return store.getStatus(scope);
-  return store.getStatusForEnabledScopes(await listEnabledScopes(db));
+  return store.getStatusForEnabledScopes(
+    await listEnabledScopes(ctx.db, await readableEnvironmentFilter(ctx))
+  );
+}
+
+/**
+ * Mixed-scope feeds omit environments the feature-permitted viewer cannot read, before any
+ * per-environment work is done.
+ */
+async function readableEnvironmentFilter(ctx: RequestContext): Promise<EnvironmentRowFilter> {
+  const viewer = await resourceViewer(ctx);
+  return (row) =>
+    checkEnvironmentAccess(viewer, { ownerTeamId: row.owner_team_id }, "read").allowed;
 }
 
 /**
@@ -485,9 +496,13 @@ async function handleGetStatus(
 
   const scope = parseScopeParams(request);
   if (scope instanceof Response) return scope;
+  if (scope?.kind === "environment") {
+    const admission = await evaluateEnvironmentAdmission(ctx, scope.id, "read");
+    if (admission.kind !== "allowed") return ownedResourceAdmissionResponse(admission);
+  }
 
   try {
-    const body = { images: await readStatusRows(ctx.db, scope) } satisfies ImageBuildStatusResponse;
+    const body = { images: await readStatusRows(ctx, scope) } satisfies ImageBuildStatusResponse;
     return json(body);
   } catch (e) {
     logger.error("image_build.status_error", {
@@ -514,7 +529,7 @@ async function handleGetEnabledUnits(
   if (providerError) return providerError;
 
   try {
-    const units = await listEnabledScopeUnits(env, ctx.db);
+    const units = await listEnabledScopeUnits(env, ctx.db, await readableEnvironmentFilter(ctx));
     const admission = resolveImageBuildAdmission(env);
     return json({
       units: units.map((unit) => ({
@@ -592,7 +607,10 @@ imageBuildRoutes.post(
   "/image-builds/trigger/environment/:id",
   admit({
     ...GITHUB_USER_OR_SERVICE_ROUTE,
-    authorization: requirePermission("environments.images.manage"),
+    authorization: requireAll(
+      permissionRequirement("environments.images.manage"),
+      environmentRequirement("manage")
+    ),
   }),
   (c) => dispatch(c, handleTriggerEnvironmentBuild)
 );

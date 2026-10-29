@@ -2,6 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "./control-plane";
 import { SETTINGS_PROXY_MAX_BODY_BYTES, settingsProxy } from "./settings-proxy";
+import { GET as getChannelBindings } from "@/app/api/teams/[id]/channel-bindings/route";
+import { GET as getSlackChannels } from "@/app/api/teams/[id]/slack-channels/route";
+import {
+  DELETE as deleteChannelBinding,
+  PUT as putChannelBinding,
+} from "@/app/api/teams/[id]/channel-bindings/slack/[channelId]/route";
+import {
+  DELETE as deleteLinearBinding,
+  PUT as putLinearBinding,
+} from "@/app/api/teams/[id]/channel-bindings/linear/[linearTeamId]/route";
 
 vi.mock("./control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -157,5 +167,92 @@ describe("settingsProxy", () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Failed to fetch settings" });
+  });
+
+  it.each(["GET", "PUT", "DELETE", "channels"] as const)(
+    "exports the channel-binding %s proxy with encoded identifiers",
+    async (operation) => {
+      const method = operation === "channels" ? "GET" : operation;
+      const body = JSON.stringify({ kind: "source" });
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
+      const handler = {
+        GET: getChannelBindings,
+        PUT: putChannelBinding,
+        DELETE: deleteChannelBinding,
+        channels: getSlackChannels,
+      }[operation];
+      await handler(
+        new NextRequest("http://localhost/api/teams/id/channel-bindings", {
+          method,
+          headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
+          ...(method === "PUT" ? { body } : {}),
+        }),
+        { params: Promise.resolve({ id: "team/id", channelId: "C/1" }) }
+      );
+      expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+        `/teams/team%2Fid/${operation === "channels" ? "slack-channels" : `channel-bindings${method === "GET" ? "" : "/slack/C%2F1"}`}`,
+        method === "GET" ? undefined : method === "PUT" ? { method, body } : { method }
+      );
+    }
+  );
+
+  it.each(["PUT", "DELETE"] as const)(
+    "proxies Linear binding %s with encoded IDs and server refusal codes",
+    async (method) => {
+      const body = JSON.stringify({ kind: "source" });
+      const refusal = { error: "Already bound", code: "channel_already_bound" };
+      vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json(refusal, { status: 409 }));
+      const response = await (method === "PUT" ? putLinearBinding : deleteLinearBinding)(
+        new NextRequest("http://localhost/api/teams/id/channel-bindings/linear/linear-team", {
+          method,
+          headers: {
+            Cookie: "__Secure-openinspect.session_token=session.signature",
+            Authorization: "Bearer untrusted-browser-token",
+            "If-Match": 'W/"revision-2"',
+          },
+          ...(method === "PUT" ? { body } : {}),
+        }),
+        { params: Promise.resolve({ id: "team/id", linearTeamId: "linear/team" }) }
+      );
+      expect(controlPlaneUserFetch).toHaveBeenCalledExactlyOnceWith(
+        "/teams/team%2Fid/channel-bindings/linear/linear%2Fteam",
+        {
+          method,
+          headers: { "If-Match": 'W/"revision-2"' },
+          ...(method === "PUT" ? { body } : {}),
+        }
+      );
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual(refusal);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    }
+  );
+
+  it("rejects Linear PUT without a browser session before forwarding the request", async () => {
+    const response = await putLinearBinding(
+      new NextRequest("http://localhost/api/teams/id/channel-bindings/linear/linear-team", {
+        method: "PUT",
+        body: JSON.stringify({ kind: "primary" }),
+      }),
+      { params: Promise.resolve({ id: "team", linearTeamId: "linear-team" }) }
+    );
+    expect(response.status).toBe(401);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("relays a successful Linear unbind without inventing a JSON response body", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(new Response(null, { status: 204 }));
+    const response = await deleteLinearBinding(
+      new NextRequest("http://localhost/api/teams/id/channel-bindings/linear/linear-team", {
+        method: "DELETE",
+      }),
+      { params: Promise.resolve({ id: "team", linearTeamId: "linear-team" }) }
+    );
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/teams/team/channel-bindings/linear/linear-team",
+      { method: "DELETE" }
+    );
+    expect(response.status).toBe(204);
+    await expect(response.text()).resolves.toBe("");
   });
 });

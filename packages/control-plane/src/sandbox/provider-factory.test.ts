@@ -67,6 +67,40 @@ describe("createSandboxProviderFromEnv", () => {
     ).toThrow("DAYTONA_API_URL and DAYTONA_API_KEY are required");
   });
 
+  it("requires Boat credentials and a base snapshot", () => {
+    expect(() =>
+      createSandboxProviderFromEnv(createEnv({ BOAT_API_KEY: "boat_key" }), "boat")
+    ).toThrow("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required");
+    expect(() =>
+      createSandboxProviderFromEnv(createEnv({ BOAT_BASE_SNAPSHOT: "open-inspect-abc" }), "boat")
+    ).toThrow("BOAT_API_KEY and BOAT_BASE_SNAPSHOT are required");
+  });
+
+  it("rejects an unknown Boat machine type", () => {
+    const env = createEnv({
+      BOAT_API_KEY: "boat_key",
+      BOAT_BASE_SNAPSHOT: "open-inspect-abc",
+      BOAT_SANDBOX_TYPE: "huge",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "boat")).toThrow(
+      "BOAT_SANDBOX_TYPE must be one of small, default, large, xlarge"
+    );
+  });
+
+  it("builds the Boat provider from its environment", () => {
+    const provider = createSandboxProviderFromEnv(
+      createEnv({ BOAT_API_KEY: "boat_key", BOAT_BASE_SNAPSHOT: "open-inspect-abc" }),
+      "boat"
+    );
+    expect(provider.name).toBe("boat");
+    expect(provider.capabilities).toMatchObject({
+      supportsPersistentResume: true,
+      supportsExplicitStop: true,
+      supportsSnapshots: false,
+    });
+  });
+
   it("rejects malformed E2B auto-pause configuration", () => {
     const env = createEnv({
       E2B_API_KEY: "e2b-key",
@@ -77,21 +111,5 @@ describe("createSandboxProviderFromEnv", () => {
     expect(() => createSandboxProviderFromEnv(env, "e2b")).toThrow(
       "E2B_AUTO_PAUSE must be a valid boolean"
     );
-  });
-
-  it("requires an OpenComputer template for starts but not existing-session cleanup", () => {
-    const env = createEnv({
-      OPENCOMPUTER_API_URL: "https://opencomputer.test",
-      OPENCOMPUTER_API_KEY: "opencomputer-key",
-    });
-
-    expect(() => createSandboxProviderFromEnv(env, "opencomputer")).toThrow(
-      "OPENCOMPUTER_TEMPLATE"
-    );
-    expect(() =>
-      createSandboxProviderFromEnv(env, "opencomputer", {
-        requireOpenComputerTemplate: false,
-      })
-    ).not.toThrow();
   });
 });

@@ -46,6 +46,16 @@ describe("stripBroadcastMentions", () => {
     expect(stripBroadcastMentions("<!subteam^S123>")).toBe("");
   });
 
+  it("removes the labelled forms Slack also accepts", () => {
+    expect(stripBroadcastMentions("<!here|here> <!channel|x> <!everyone|all>")).toBe("  ");
+  });
+
+  it("removes broadcasts that only appear once an inner one is removed", () => {
+    expect(stripBroadcastMentions("<!<!here>here>")).toBe("");
+    expect(stripBroadcastMentions("<!<!here>channel> hi")).toBe(" hi");
+    expect(stripBroadcastMentions("<!<!<!here>here>channel>")).toBe("");
+  });
+
   it("removes multiple broadcasts in one input", () => {
     expect(stripBroadcastMentions("<!channel> hi <!here> <!subteam^S123|@team>")).toBe(" hi  ");
   });
@@ -245,5 +255,69 @@ describe("sanitizeAgentText", () => {
     });
     expect(result.truncated).toBe(true);
     expect(result.text.length).toBeLessThanOrEqual(50);
+  });
+
+  it("strips a broadcast rebuilt by removing a user mention", () => {
+    const result = sanitizeAgentText("<!<@U123>here> hi", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe(" hi");
+    expect(result.strippedBroadcasts).toBe(true);
+    expect(result.mentionsModified).toBe(true);
+  });
+
+  it("strips a labelled broadcast rebuilt by removing a labelled user mention", () => {
+    const result = sanitizeAgentText("<!<@U123|bob>channel|x> hi", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe(" hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
+  it("strips a broadcast rebuilt by unwrapping a link", () => {
+    // URLs may contain `<!`, so unwrapping can join the URL tail with trailing text.
+    const result = sanitizeAgentText("<https://a.co/<!|x>here> hi", {
+      mentionsPolicy: "allow",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("https://a.co/ hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
+  it.each([
+    ["strip", " hi"],
+    ["escape", "@U123 hi"],
+  ] as const)(
+    "applies the %s policy to a mention rebuilt by stripping a broadcast",
+    (policy, expected) => {
+      const result = sanitizeAgentText("<@<!here>U123> hi", {
+        mentionsPolicy: policy,
+        maxLength: 1000,
+      });
+      expect(result.text).toBe(expected);
+      expect(result.strippedBroadcasts).toBe(true);
+      expect(result.mentionsModified).toBe(true);
+    }
+  );
+
+  it("unwraps a link rebuilt by stripping a broadcast", () => {
+    const result = sanitizeAgentText("<ht<!here>tps://evil.example|trusted.example> hi", {
+      mentionsPolicy: "allow",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("https://evil.example hi");
+    expect(result.strippedBroadcasts).toBe(true);
+  });
+
+  it("does not report stripped broadcasts when mentions and links are removed", () => {
+    const result = sanitizeAgentText("hi <@U123> see <https://a.co|docs>", {
+      mentionsPolicy: "strip",
+      maxLength: 1000,
+    });
+    expect(result.text).toBe("hi  see https://a.co");
+    expect(result.strippedBroadcasts).toBe(false);
+    expect(result.mentionsModified).toBe(true);
   });
 });

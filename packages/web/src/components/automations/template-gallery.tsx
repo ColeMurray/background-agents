@@ -10,6 +10,7 @@ import {
   type TemplateCategory,
 } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
+import { automationNavigation } from "@/lib/automation-navigation";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   ClockIcon,
@@ -56,7 +57,7 @@ function OutputIcon({ output }: { output: AutomationTemplate["primaryOutput"] })
   );
 }
 
-function TemplateCard({ template }: { template: AutomationTemplate }) {
+function TemplateCard({ template, teamId }: { template: AutomationTemplate; teamId?: string }) {
   const triggerLabel = TRIGGER_LABELS[template.prefill.triggerType] ?? "Schedule";
   const outputLabel = OUTPUT_LABELS[template.primaryOutput];
 
@@ -92,7 +93,7 @@ function TemplateCard({ template }: { template: AutomationTemplate }) {
       <div className="mt-3">
         <Button variant="outline" size="sm" asChild>
           <Link
-            href={`/automations/new?template=${template.id}`}
+            href={automationNavigation(teamId).new(template.id)}
             aria-label={`Add ${template.title}`}
           >
             Add
@@ -103,7 +104,7 @@ function TemplateCard({ template }: { template: AutomationTemplate }) {
   );
 }
 
-export function TemplateGallery() {
+export function TemplateGallery({ teamId }: { teamId?: string } = {}) {
   const categories = TEMPLATE_CATEGORIES.filter((candidate) =>
     automationTemplates.some((template) => template.categories.includes(candidate.id))
   );
@@ -138,7 +139,7 @@ export function TemplateGallery() {
 
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {templates.map((template) => (
-          <TemplateCard key={template.id} template={template} />
+          <TemplateCard key={template.id} template={template} teamId={teamId} />
         ))}
       </div>
     </div>

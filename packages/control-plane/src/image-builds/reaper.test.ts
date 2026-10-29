@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS, ImageBuildReaper } from "./reaper";
+import { createModalClient } from "../sandbox/client";
+import { ModalSandboxProvider } from "../sandbox/providers/modal-provider";
+import { ModalImageBuildAdapter } from "./modal-adapter";
 
 const ctx = { trace_id: "t", request_id: "r" };
+
+afterEach(() => vi.unstubAllGlobals());
 
 function createStore() {
   return {
@@ -64,6 +69,47 @@ function reapableRow(id: string, providerImageId: string | null) {
 
 describe("ImageBuildReaper", () => {
   describe("cleanupImages", () => {
+    for (const provider of ["modal", "modal-vm"] as const) {
+      it.each(["failed", "superseded"] as const)(
+        `retains %s ${provider} artifacts while deletion is deferred`,
+        async (status) => {
+          const fetch = vi.fn().mockRejectedValue(new Error("Unexpected provider request"));
+          vi.stubGlobal("fetch", fetch);
+          const modalAdapter = new ModalImageBuildAdapter(
+            new ModalSandboxProvider(createModalClient("secret", "workspace"), provider, "github")
+          );
+          const store = createStore();
+          const row = { ...reapableRow("deferred", "im-retained"), provider };
+          const select =
+            status === "failed" ? store.getFailedImagesWithArtifacts : store.getSupersededImages;
+          select.mockResolvedValue([row]);
+          const adapter = createAdapter();
+          adapter.deleteImage.mockImplementation((input) => modalAdapter.deleteImage(input));
+          const { reaper } = createReaper({ store, adapter });
+
+          for (let tick = 0; tick < 2; tick += 1) {
+            await expect(reaper.cleanupImages(86_400_000, ctx)).resolves.toEqual({
+              deletedFailed: 0,
+              reapedFailed: 0,
+              reapedSuperseded: 0,
+            });
+          }
+          expect(adapter.deleteImage).toHaveBeenCalledTimes(2);
+
+          if (status === "superseded") {
+            await reaper.deleteReplacedImages(
+              provider,
+              [{ imageBuildId: row.id, image: { providerImageId: "im-retained" } }],
+              ctx
+            );
+          }
+          expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
+          expect(store.deleteSupersededImage).not.toHaveBeenCalled();
+          expect(fetch).not.toHaveBeenCalled();
+        }
+      );
+    }
+
     it("deletes old failed rows and reaps superseded artifacts", async () => {
       const store = createStore();
       store.deleteOldFailedBuilds.mockResolvedValue(3);
@@ -272,11 +318,16 @@ describe("ImageBuildReaper unbound source recovery", () => {
 });
 
 describe("ImageBuildReaper orphan operation reconciliation", () => {
-  const operation = (id: string, createdAt: number = conclusivelyAbsentAt) => ({
+  const operation = (
+    id: string,
+    createdAt: number = conclusivelyAbsentAt,
+    deadlineAt: number | null = null
+  ) => ({
     id,
     provider: "daytona" as const,
     provider_session_id: "sandbox-7",
     provider_operation_ref: `oi-image-${id}`,
+    provider_operation_deadline_at: deadlineAt,
     created_at: createdAt,
   });
 
@@ -297,7 +348,11 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
 
   it("settles an absent operation only once a capture can no longer be running", async () => {
     const store = createStore();
-    store.listUnresolvedOperations.mockResolvedValue([operation("b-1")]);
+    // No deadline recorded — every row written before the reservation column
+    // existed — so the registration-anchored estimate is the only bound.
+    store.listUnresolvedOperations.mockResolvedValue([
+      operation("b-1", conclusivelyAbsentAt, null),
+    ]);
     const adapter = createRecoverableAdapter();
     adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
     const { reaper } = createReaper({ store, adapter });
@@ -322,6 +377,39 @@ describe("ImageBuildReaper orphan operation reconciliation", () => {
     // nothing on the row naming it.
     expect(result).toEqual({ reconciled: 0, retained: 1 });
     expect(store.clearProviderOperation).not.toHaveBeenCalled();
+  });
+
+  it("keeps an absent operation whose recorded deadline has not passed", async () => {
+    const store = createStore();
+    // The registration-anchored estimate has lapsed, but the capture was
+    // reserved late enough that its own deadline is still live: the source it
+    // reads is still there to publish a snapshot nothing else would name.
+    store.listUnresolvedOperations.mockResolvedValue([
+      operation("b-1", conclusivelyAbsentAt, now + 1),
+    ]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    expect(result).toEqual({ reconciled: 0, retained: 1 });
+    expect(store.clearProviderOperation).not.toHaveBeenCalled();
+  });
+
+  it("settles an absent operation once its recorded deadline has passed", async () => {
+    const store = createStore();
+    // Exhausted at the deadline, not after it, exactly as the attempt that
+    // reserved it gives up.
+    store.listUnresolvedOperations.mockResolvedValue([operation("b-1", conclusivelyAbsentAt, now)]);
+    const adapter = createRecoverableAdapter();
+    adapter.reconcileOrphanOperation.mockResolvedValue({ type: "absent" });
+    const { reaper } = createReaper({ store, adapter });
+
+    const result = await reaper.reconcileUnresolvedOperations(ctx, now);
+
+    expect(result).toEqual({ reconciled: 1, retained: 0 });
+    expect(store.clearProviderOperation).toHaveBeenCalledWith("b-1", "oi-image-b-1");
   });
 
   it("keeps an operation that has not settled", async () => {

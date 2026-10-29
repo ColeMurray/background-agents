@@ -11,7 +11,7 @@
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
-import type { CacheStore } from "@open-inspect/shared/cache-store";
+import { CACHE_STORE_MIN_TTL_MS, type CacheStore } from "@open-inspect/shared/cache-store";
 import { sha256Hex } from "@open-inspect/shared/service-auth";
 import { z } from "zod";
 import {
@@ -32,9 +32,6 @@ export const INSTALLATION_TOKEN_MIN_REMAINING_MS = 5 * 60 * 1000;
 
 /** Maximum distinct token scopes retained in the process cache. */
 export const INSTALLATION_TOKEN_MEMORY_CACHE_MAX_ENTRIES = 128;
-
-/** Upper bound for KV cache TTL (seconds). */
-const INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS = 3600;
 
 const INSTALLATION_TOKEN_CACHE_KEY_PREFIX = "github:installation-token:v2";
 
@@ -371,20 +368,16 @@ async function writeInstallationTokenToCache(
     return;
   }
 
-  const nowEpochMs = Date.now();
-  const remainingLifetimeMs = cached.expiresAtEpochMs - nowEpochMs;
-  if (remainingLifetimeMs <= 0) {
+  const remainingLifetimeMs = cached.expiresAtEpochMs - Date.now();
+  const ttlMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
+  // Under the store's shortest TTL. Such a token is already inside
+  // INSTALLATION_TOKEN_MIN_REMAINING_MS, so no cache read would serve it.
+  if (ttlMs < CACHE_STORE_MIN_TTL_MS) {
     return;
   }
 
-  const cacheBoundLifetimeMs = Math.min(remainingLifetimeMs, INSTALLATION_TOKEN_CACHE_MAX_AGE_MS);
-  const ttlSeconds = Math.max(
-    1,
-    Math.min(INSTALLATION_TOKEN_CACHE_MAX_TTL_SECONDS, Math.floor(cacheBoundLifetimeMs / 1000))
-  );
-
   try {
-    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { expirationTtl: ttlSeconds });
+    await env.cacheStore.put(cacheKey, JSON.stringify(cached), { ttlMs });
   } catch {
     // Cache failures are non-fatal.
   }
@@ -705,13 +698,13 @@ export async function listRepositoryBranches(
   env?: InstallationTokenCacheBindings
 ): Promise<{ name: string }[]> {
   const token = await getCachedInstallationToken(config, env, { scope: { kind: "all" } });
-  const branches: { name: string }[] = [];
-  let page = 1;
+  const perPage = 100;
+  const maxBranches = 500;
+  const maxPages = maxBranches / perPage;
 
-  // Paginate through branches (100 per page, cap at 500)
-  while (branches.length < 500) {
+  const fetchPage = async (page: number) => {
     const response = await fetchWithTimeout(
-      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
+      `https://api.github.com/repos/${owner}/${repo}/branches?per_page=${perPage}&page=${page}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -732,14 +725,48 @@ export async function listRepositoryBranches(
     if (!parsed.success) {
       throw new Error("Failed to list branches: invalid response");
     }
-    const data = parsed.data;
-    branches.push(...data.map((b) => ({ name: b.name })));
+    return { data: parsed.data, link: response.headers.get("Link") };
+  };
 
-    if (data.length < 100) break;
-    page++;
+  const first = await fetchPage(1);
+  const branches = [...first.data];
+  let lastPage: number | undefined;
+
+  for (const link of first.link?.split(",") ?? []) {
+    const match = link.match(/^\s*<([^>]+)>(.*)$/);
+    if (!match || !/;\s*rel\s*=\s*"last"\s*(?:;|$)/i.test(match[2])) continue;
+
+    try {
+      const value = new URL(match[1]).searchParams.get("page");
+      if (!value || !/^\d+$/.test(value)) continue;
+      const page = Number(value);
+      if (Number.isSafeInteger(page) && page >= 1) {
+        lastPage = Math.min(page, maxPages);
+        break;
+      }
+    } catch {
+      // Ignore malformed pagination links and retain sequential pagination.
+    }
   }
 
-  return branches;
+  if (lastPage !== undefined) {
+    // Use only the page number from Link, never its URL or other query parameters.
+    const pages = Array.from({ length: lastPage - 1 }, (_, index) => index + 2);
+    const results = await Promise.all(pages.map(fetchPage));
+    for (const result of results) branches.push(...result.data);
+  } else {
+    let data = first.data;
+    for (
+      let page = 2;
+      data.length >= perPage && page <= maxPages && branches.length < maxBranches;
+      page++
+    ) {
+      data = (await fetchPage(page)).data;
+      branches.push(...data);
+    }
+  }
+
+  return branches.slice(0, maxBranches);
 }
 
 /**

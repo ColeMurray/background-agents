@@ -2,6 +2,7 @@ import { messageSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import {
   BLANK_PROMPT_MESSAGE,
+  clientRequestIdSchema,
   isBlankPrompt,
   promptContentSchema,
 } from "@open-inspect/shared/types/prompts";
@@ -12,11 +13,17 @@ export const enqueuePromptRequestSchema = z
     content: promptContentSchema,
     authorId: z.string(),
     canonicalUserId: z.string().nullable().optional(),
+    /**
+     * The account the prompt counts as when it isn't the author participant's: a prompt one session
+     * relays to its child carries the account the parent's prompt was queued under, null included.
+     */
+    promptAccountUserId: z.string().nullable().optional(),
     source: messageSourceSchema,
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: sessionAttachmentReferencesSchema.optional(),
     callbackContext: z.record(z.string(), z.unknown()).optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
     // Authoritative SCM snapshot resolved by the router at prompt time.
     // Explicit null fields clear stored attribution; absence leaves it unchanged.
     scmEnrichment: z

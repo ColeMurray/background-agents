@@ -107,17 +107,20 @@ export function DataControlsSettings() {
       <div>
         <h3 className="text-base font-medium text-foreground mb-1">Archived chats</h3>
         <p className="text-sm text-muted-foreground mb-4">
-          {loading
-            ? "Loading..."
-            : sessionCount === 0
-              ? "No archived sessions"
-              : `${sessionCount}${hasMore ? "+" : ""} archived session${sessionCount !== 1 ? "s" : ""}`}
+          {loading ? (
+            <span
+              className="inline-block h-3.5 w-36 align-middle bg-muted rounded animate-pulse motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          ) : sessionCount === 0 ? (
+            "No archived sessions"
+          ) : (
+            `${sessionCount}${hasMore ? "+" : ""} archived session${sessionCount !== 1 ? "s" : ""}`
+          )}
         </p>
 
         {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-          </div>
+          <ArchivedSessionsSkeleton />
         ) : sessions.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
             No archived sessions. Sessions you archive will appear here.
@@ -147,6 +150,26 @@ export function DataControlsSettings() {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+const SKELETON_ROW_COUNT = 3;
+
+/** Mirrors ArchivedSessionRow: a title line over a timestamp · repo line. */
+function ArchivedSessionsSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading archived sessions"
+      className="border border-border rounded-md divide-y divide-border-muted animate-pulse motion-reduce:animate-none"
+    >
+      {Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => (
+        <div key={index} className="px-4 py-3">
+          <div className="h-4 w-56 max-w-full my-0.5 bg-muted rounded" />
+          <div className="h-3 w-40 max-w-full mt-1.5 mb-0.5 bg-muted rounded" />
+        </div>
+      ))}
     </div>
   );
 }

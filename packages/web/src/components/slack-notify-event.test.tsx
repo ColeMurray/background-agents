@@ -122,6 +122,16 @@ describe("SlackNotifyEvent", () => {
     expect(screen.getByText(/notifications are disabled for this repository/i)).toBeInTheDocument();
   });
 
+  it("renders session_scope_denied without suggesting bot invitations or showing a permalink", () => {
+    renderExpanded(denialEvent("session_scope_denied"));
+    expect(
+      screen.getByText(/not allowed to post to the requested Slack channel/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/visibility or the channel's team binding/i)).toBeInTheDocument();
+    expect(screen.queryByText(/invite the/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /view in slack/i })).not.toBeInTheDocument();
+  });
+
   it("renders rate_limited with retry-window copy", () => {
     renderExpanded(denialEvent("rate_limited"));
     expect(screen.getByText(/rate-limited/i)).toBeInTheDocument();

@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from websockets import State
 
-from sandbox_runtime.bridge import AgentBridge, SessionTerminatedError
+from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
+from sandbox_runtime.reconnect_backoff import ReconnectBackoff
 
 
 class TestIsFatalConnectionError:
@@ -137,7 +138,7 @@ class TestIsFatalConnectionError:
         bridge.git_signing.initialize = AsyncMock()
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = connect_and_run
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.reconnect_backoff = ReconnectBackoff(base=0)
 
         await bridge.run()
 
@@ -164,7 +165,7 @@ class TestIsFatalConnectionError:
         )
         bridge._load_session_id = AsyncMock()
         bridge._connect_and_run = AsyncMock(side_effect=connect_and_run)
-        bridge.RECONNECT_BACKOFF_BASE = 0
+        bridge.reconnect_backoff = ReconnectBackoff(base=0)
 
         await bridge.run()
 
@@ -311,18 +312,3 @@ class TestStalledWriteReconnect:
         assert ws.state is State.CLOSED
         assert bridge.ws is None
         assert bridge.event_forwarder._ws is None
-
-
-class TestSessionTerminatedError:
-    """Tests for SessionTerminatedError exception."""
-
-    def test_can_be_raised_and_caught(self):
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Test message")
-        assert "Test message" in str(exc_info.value)
-
-    def test_exception_chaining(self):
-        original = ValueError("original error")
-        with pytest.raises(SessionTerminatedError) as exc_info:
-            raise SessionTerminatedError("Wrapped") from original
-        assert exc_info.value.__cause__ is original

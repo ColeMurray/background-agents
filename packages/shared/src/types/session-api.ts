@@ -1,7 +1,8 @@
 import { harnessIdSchema } from "../harnesses";
+import { generatedFileDetailsSchema } from "../generated-files";
 import { z } from "zod";
 import { sessionSkillSelectionSchema } from "./skills";
-import type { AgentResponse } from "./artifacts";
+import { artifactTypeSchema, type AgentResponse, type StoredFileArtifactType } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
@@ -61,6 +62,8 @@ const linearCallbackContextBaseSchema = z.strictObject({
   issueId: nonEmptyStringSchema,
   issueIdentifier: nonEmptyStringSchema,
   issueUrl: nonEmptyStringSchema,
+  /** External Linear team used for scoped reads; absent in persisted legacy contexts. */
+  linearTeamId: nonEmptyStringSchema.optional(),
   /** Settings repository when one can be resolved for this Linear message. */
   repoFullName: nonEmptyStringSchema.optional(),
   model: nonEmptyStringSchema,
@@ -143,10 +146,16 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
+/**
+ * Sources a public prompt caller may assert. "automation" decides who opens a
+ * PR, and it and "agent" are minted only on internal paths.
+ */
+export const publicPromptSourceSchema = messageSourceSchema.exclude(["automation", "agent"]);
+
 export const sendPromptRequestSchema = z
   .object({
     content: promptContentSchema,
-    source: messageSourceSchema.optional(),
+    source: publicPromptSourceSchema.optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
@@ -252,6 +261,7 @@ const createSessionRequestBaseSchema = z.object({
   environmentId: z.string().trim().min(1).nullish(),
   /** Managed skills are resolved and pinned when the session is created. */
   skillSelection: sessionSkillSelectionSchema.optional(),
+  includePersonalMemories: z.boolean().optional(),
   /** Explicit account/API-key choices. Omission resolves provider policy. */
   providerSelections: modelProviderSelectionsSchema.optional(),
 });
@@ -284,6 +294,10 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    // Set by the Slack bot for a one-to-one conversation with the actor. Integration-started
+    // sessions use the owner's personal memory only then; the control plane ignores it from
+    // other callers.
+    directMessage: z.boolean().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",
@@ -302,12 +316,18 @@ export type CreateSessionInput = z.infer<typeof createSessionInputSchema>;
 
 export const createMediaArtifactRequestSchema = z.object({
   artifactId: z.string(),
-  artifactType: z.string(),
+  artifactType: artifactTypeSchema.extract(["screenshot", "video"]),
   objectKey: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
+
+/** Successful durable registration, not confirmation of Slack publication. */
+export const generatedFileUploadResponseSchema = generatedFileDetailsSchema.safeExtend({
+  artifactId: z.string().min(1),
+});
+export type GeneratedFileUploadResponse = z.infer<typeof generatedFileUploadResponseSchema>;
 
 export const createSessionResponseSchema = z.object({
   sessionId: z.string().min(1),
@@ -319,6 +339,8 @@ export type CreateSessionResponse = z.infer<typeof createSessionResponseSchema>;
 export const sendPromptResponseSchema = z.object({
   messageId: z.string().min(1),
   status: z.literal("queued").optional(),
+  /** True when the request's clientRequestId named a prompt the session had already queued. */
+  deduplicated: z.boolean().optional(),
 });
 
 export type SendPromptResponse = z.infer<typeof sendPromptResponseSchema>;
@@ -360,6 +382,15 @@ export interface ChildSessionTrajectory {
   limit: number;
 }
 
+/** Discovery only: no object keys, URLs, or download authorization. */
+export interface ChildStoredFileSummary {
+  id: string;
+  type: StoredFileArtifactType;
+  filename?: string;
+  caption?: string;
+  available?: boolean;
+}
+
 export interface ChildSessionDetail {
   session: {
     id: string;
@@ -374,6 +405,7 @@ export interface ChildSessionDetail {
   };
   sandbox: { status: SandboxStatus } | null;
   hasUnfinishedPrompt?: boolean;
+  fileArtifacts?: ChildStoredFileSummary[];
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
   finalResponse?: ChildSessionFinalResponse | null;

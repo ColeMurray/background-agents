@@ -128,6 +128,39 @@ describe("installation token scopes", () => {
   });
 });
 
+describe("installation token persistent cache writes", () => {
+  it("writes a fresh token with a TTL bounded by the cache max age", async () => {
+    const cacheStore = new FakeCacheStore();
+    const put = vi.spyOn(cacheStore, "put");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => mintResponse());
+    await auth.getCachedInstallationToken(config(), { cacheStore }, { scope: { kind: "all" } });
+
+    expect(put).toHaveBeenCalledOnce();
+    expect(put).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      ttlMs: auth.INSTALLATION_TOKEN_CACHE_MAX_AGE_MS,
+    });
+  });
+
+  it("skips the store for a token with less than the store's minimum TTL left", async () => {
+    const cacheStore = new FakeCacheStore();
+    const put = vi.spyOn(cacheStore, "put");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        token: "short-lived-token",
+        expires_at: new Date(Date.now() + 30 * 1000).toISOString(),
+      })
+    );
+    const token = await auth.getCachedInstallationToken(
+      config(),
+      { cacheStore },
+      { scope: { kind: "all" } }
+    );
+
+    expect(token).toBe("short-lived-token");
+    expect(put).not.toHaveBeenCalled();
+  });
+});
+
 describe("installation token memory cache", () => {
   it("evicts the least recently used scope at the memory bound", async () => {
     const cacheStore = new FakeCacheStore();

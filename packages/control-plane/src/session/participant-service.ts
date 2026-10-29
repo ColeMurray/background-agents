@@ -7,6 +7,7 @@
  * - Resolving auth context for PR creation
  */
 
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { SourceControlAuthContext, SourceControlProviderName } from "../source-control";
 import type { Logger } from "../logger";
 import { BetterAuthGitHubTokenUnavailableError } from "./identity";
@@ -18,7 +19,7 @@ import type { ParticipantRepository } from "./participant-repository";
  */
 export interface ParticipantServiceDeps {
   repository: ParticipantRepository;
-  getProcessingMessageAuthor: () => { author_id: string } | null;
+  getProcessingMessageAuthor: () => { author_id: string; source: MessageSource } | null;
   log: Logger;
   generateId: () => string;
   resolveCurrentGitHubAccessToken?: (
@@ -28,8 +29,7 @@ export interface ParticipantServiceDeps {
 }
 
 export type PromptingAuthResolution =
-  | { auth: SourceControlAuthContext | null }
-  | { error: string; status: number };
+  { auth: SourceControlAuthContext | null } | { error: string; status: number };
 
 /**
  * Build avatar URL from SCM login.
@@ -49,7 +49,7 @@ export class ParticipantService {
   private readonly log: Logger;
   private readonly generateId: () => string;
   private readonly resolveCurrentGitHubAccessToken?: ParticipantServiceDeps["resolveCurrentGitHubAccessToken"];
-  private readonly getProcessingMessageAuthor: () => { author_id: string } | null;
+  private readonly getProcessingMessageAuthor: ParticipantServiceDeps["getProcessingMessageAuthor"];
 
   constructor(deps: ParticipantServiceDeps) {
     this.repository = deps.repository;
@@ -110,12 +110,17 @@ export class ParticipantService {
   }
 
   /**
-   * Find the participant who authored the currently-processing message.
-   * Used for PR creation to determine whose OAuth token to use.
+   * Find the participant who authored the currently-processing message, and
+   * how to resolve the credential that opens its PR.
    */
   async getPromptingParticipantForPR(): Promise<
-    | { participant: ParticipantRow; error?: never; status?: never }
-    | { participant?: never; error: string; status: number }
+    | {
+        participant: ParticipantRow;
+        resolveAuth: () => Promise<PromptingAuthResolution>;
+        error?: never;
+        status?: never;
+      }
+    | { participant?: never; resolveAuth?: never; error: string; status: number }
   > {
     const processingMessage = this.getProcessingMessageAuthor();
 
@@ -136,7 +141,16 @@ export class ParticipantService {
       return { error: "User not found. Please re-authenticate.", status: 401 };
     }
 
-    return { participant };
+    const resolveAuth =
+      pullRequestAuthorFor(processingMessage.source) === "app"
+        ? async (): Promise<PromptingAuthResolution> => {
+            this.log.info("PR creation: automation prompt, using app auth", {
+              user_id: participant.user_id,
+            });
+            return { auth: null };
+          }
+        : () => this.resolveAuthForPR(participant);
+    return { participant, resolveAuth };
   }
 
   /**
@@ -147,7 +161,7 @@ export class ParticipantService {
    * - `{ auth: null }` when user has no usable OAuth token (caller falls back to app token)
    * - `{ error, status }` on unexpected failure
    */
-  async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
+  private async resolveAuthForPR(participant: ParticipantRow): Promise<PromptingAuthResolution> {
     if (this.resolveCurrentGitHubAccessToken && participant.canonical_user_id) {
       try {
         const accessToken = await this.resolveCurrentGitHubAccessToken(
@@ -181,4 +195,15 @@ export class ParticipantService {
     });
     return { auth: null };
   }
+}
+
+/**
+ * Whose credential opens the PR for the prompt being processed. An automation
+ * prompt carries its owner's identity for commit attribution, but the PR it
+ * opens is the app's: the owner's OAuth would present unattended work as the
+ * owner's own. A child session spawned by an automation run is prompted with
+ * source "agent", so its PRs still use the owner's OAuth.
+ */
+export function pullRequestAuthorFor(source: MessageSource): "prompting-user" | "app" {
+  return source === "automation" ? "app" : "prompting-user";
 }

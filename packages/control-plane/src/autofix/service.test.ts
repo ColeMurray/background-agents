@@ -48,6 +48,26 @@ function openInspectReview(
   };
 }
 
+type ReviewComment = ReviewFeedback["comments"][number];
+
+function inlineComment(overrides: Partial<ReviewComment> = {}): ReviewComment {
+  return {
+    id: "9003",
+    inReplyToId: null,
+    body: "Non-blocking: add an exhaustiveness check.",
+    url: "https://github.com/acme/widgets/pull/42#discussion_r9003",
+    path: "src/input.ts",
+    line: 12,
+    startLine: null,
+    originalLine: 12,
+    originalStartLine: null,
+    side: "RIGHT",
+    startSide: null,
+    diffHunk: "@@ -10,3 +10,3 @@",
+    ...overrides,
+  };
+}
+
 function buildService() {
   const received: {
     feedbackKey: string;
@@ -99,15 +119,13 @@ function buildService() {
       repoOwner: "acme",
       repoName: "widgets",
     })),
-    getPullRequestFeedback: vi.fn(
-      async (): Promise<GitHubPullRequestFeedback> => ({
-        kind: "pr_comment",
-        id: "1234",
-        body: "Please handle the null case.",
-        url: "https://github.com/acme/widgets/pull/42#issuecomment-1234",
-        author: { id: "7", login: "alice", type: "User" },
-      })
-    ),
+    getPullRequestFeedback: vi.fn(async (): Promise<GitHubPullRequestFeedback> => ({
+      kind: "pr_comment",
+      id: "1234",
+      body: "Please handle the null case.",
+      url: "https://github.com/acme/widgets/pull/42#issuecomment-1234",
+      author: { id: "7", login: "alice", type: "User" },
+    })),
     hasPullRequestWritePermission: vi.fn(async () => true),
   };
   const sessions = {
@@ -189,6 +207,28 @@ describe("AutofixService", () => {
       2_000
     );
   });
+
+  it.each(["enqueued", "duplicate"] as const)(
+    "records %s session admission as queued",
+    async (kind) => {
+      const h = buildService();
+      h.sessions.fetch.mockResolvedValueOnce(Response.json({ kind, messageId: "message-1" }));
+
+      await expect(h.service.process(PR_COMMENT_ENVELOPE)).resolves.toEqual({
+        kind: "completed",
+        decision: "queued",
+        reason: kind,
+        messageId: "message-1",
+      });
+      expect(h.feedbackStore.markQueued).toHaveBeenCalledWith(
+        "github:pr_comment:1234",
+        "message-1",
+        kind,
+        2_000
+      );
+      expect(h.feedbackStore.markSkipped).not.toHaveBeenCalled();
+    }
+  );
 
   it("recovers an admitted message when the dispatch response is lost", async () => {
     const h = buildService();
@@ -744,12 +784,56 @@ describe("AutofixService", () => {
 
     expect(result).toMatchObject({ decision: "queued", messageId: "message-1" });
     expect(h.sessions.fetch).toHaveBeenCalledOnce();
+    // Reply comments are not valid REST reply targets, so the prompt routes by review thread.
+    const dispatch = h.sessions.fetch.mock.calls[0] as unknown as [string, string, RequestInit];
+    const { prompt } = JSON.parse(dispatch[2].body as string) as { prompt: string };
+    expect(prompt).toContain("#discussion_r9002");
+    expect(prompt).toContain("`reviewThreads`");
+    expect(prompt).toContain("`addPullRequestReviewThreadReply`");
+    expect(prompt).toContain("`resolveReviewThread`");
+    expect(prompt).not.toContain("/replies");
   });
 
-  it("does not dispatch an approved Open Inspect App review", async () => {
+  it("does not dispatch an approved Open Inspect App review with only a summary", async () => {
     const h = buildService();
     h.github.getPullRequestFeedback.mockResolvedValueOnce(
       openInspectReview({ body: "Looks good.", state: "APPROVED" })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({
+      decision: "skipped",
+      reason: "review_state_not_actionable",
+    });
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an approved review that opens an inline comment thread", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({ body: "Looks good.", state: "APPROVED", comments: [inlineComment()] })
+    );
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({ decision: "queued", messageId: "message-1" });
+    expect(h.sessions.fetch).toHaveBeenCalledWith(
+      "session-1",
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.stringContaining("Non-blocking: add an exhaustiveness check."),
+      })
+    );
+  });
+
+  it.each([
+    ["only thread replies", inlineComment({ inReplyToId: "8001", body: "Fixed in 49716d0." })],
+    ["only a blank inline comment", inlineComment({ body: "  " })],
+  ])("does not dispatch an approved review with %s", async (_shape, comment) => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce(
+      openInspectReview({ body: "Looks good.", state: "APPROVED", comments: [comment] })
     );
 
     const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);

@@ -10,30 +10,31 @@
     "start:node": "node dist/node/main.js",
     "build:vercel-base-snapshot": "esbuild scripts/build-vercel-base-snapshot.ts --bundle --format=esm --platform=node --target=node24 --outfile=dist/vercel-base-snapshot.js",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p test/integration",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.984.0",
+    "@aws-sdk/client-s3": "^3.1155.0",
     "@cloudflare/workers-types": "^4.20241230.0",
-    "@hono/node-server": "^2.1.1",
+    "@hono/node-server": "^2.1.4",
     "@open-inspect/shared": "file:../shared",
-    "better-auth": "1.6.25",
-    "hono": "^4.13.12",
-    "ws": "^8.21.3",
+    "better-auth": "1.7.14",
+    "hono": "^4.13.13",
+    "ws": "^8.22.0",
     "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.18",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@types/ws": "^8.18.1",
-    "@vitest/coverage-v8": "^4.1.11",
-    "esbuild": "^0.28.1",
+    "@vitest/coverage-istanbul": "^4.1.12",
+    "@vitest/coverage-v8": "^4.1.12",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.11",
-    "wrangler": "^4.103.0"
+    "vitest": "^4.1.12",
+    "wrangler": "^4.151.3"
   }
 }

@@ -23,7 +23,9 @@ import {
   json,
   error,
   resolveRepoOrError,
-  requirePermission,
+  requireAll,
+  permissionRequirement,
+  environmentRequirement,
 } from "./shared";
 import {
   environmentSecretsImportBodySchema,
@@ -320,13 +322,24 @@ async function handleImportEnvironmentSecrets(
 
 const ENVIRONMENT_SECRETS_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("environments.secrets.manage"),
+  authorization: requireAll(
+    permissionRequirement("environments.secrets.manage"),
+    environmentRequirement("manage")
+  ),
 });
 
 export const environmentSecretsRoutes = new Hono<ControlPlaneHonoEnv>();
 
-environmentSecretsRoutes.get("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
-  dispatch(c, handleListEnvironmentSecrets)
+environmentSecretsRoutes.get(
+  "/environments/:id/secrets",
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAll(
+      permissionRequirement("environments.secrets.manage"),
+      environmentRequirement("read")
+    ),
+  }),
+  (c) => dispatch(c, handleListEnvironmentSecrets)
 );
 environmentSecretsRoutes.put("/environments/:id/secrets", ENVIRONMENT_SECRETS_MANAGE, (c) =>
   dispatch(c, handleSetEnvironmentSecrets)

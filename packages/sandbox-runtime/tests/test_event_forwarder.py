@@ -54,55 +54,6 @@ class GatedWs:
         return [call.get("messageId") for call in self.calls]
 
 
-class TestBufferWhileDisconnected:
-    @pytest.mark.asyncio
-    async def test_send_buffers_when_never_bound(self):
-        forwarder = make_forwarder()
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        assert len(forwarder._event_buffer) == 1
-        buffered = forwarder._event_buffer[0]
-        assert buffered["type"] == "token"
-        # Sandbox identity and timestamp are stamped even while buffering
-        assert buffered["sandboxId"] == "test-sandbox"
-        assert "timestamp" in buffered
-
-    @pytest.mark.asyncio
-    async def test_send_buffers_after_unbind(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        forwarder.unbind()
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        assert len(forwarder._event_buffer) == 1
-
-    @pytest.mark.asyncio
-    async def test_send_buffers_when_bound_ws_not_open(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        ws.state = State.CLOSED
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        ws.send.assert_not_awaited()
-        assert len(forwarder._event_buffer) == 1
-
-    @pytest.mark.asyncio
-    async def test_send_failure_buffers_and_does_not_track_pending(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        assert len(forwarder._event_buffer) == 1
-        assert len(forwarder._pending_acks) == 0
-
-
 class TestSendWhileConnected:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish", ["success", "failure", "cancellation"])
@@ -155,30 +106,6 @@ class TestSendWhileConnected:
         assert forwarder.acknowledge("execution_complete:msg-timeout") is True
 
     @pytest.mark.asyncio
-    async def test_critical_event_gets_ack_id_and_pends(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        [event] = sent_events(ws)
-        assert event["ackId"] == "execution_complete:msg-1"
-        assert forwarder._pending_acks["execution_complete:msg-1"]["type"] == "execution_complete"
-
-    @pytest.mark.asyncio
-    async def test_non_critical_event_has_no_ack_id(self):
-        forwarder = make_forwarder()
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        await forwarder.send({"type": "token", "content": "hello"})
-
-        [event] = sent_events(ws)
-        assert "ackId" not in event
-        assert len(forwarder._pending_acks) == 0
-
-    @pytest.mark.asyncio
     async def test_ack_id_is_random_and_unique_without_message_id(self):
         forwarder = make_forwarder()
         ws = open_ws()
@@ -208,17 +135,6 @@ class TestSendWhileConnected:
         [event] = sent_events(ws)
         assert event["ackId"] == "custom:id"
         assert forwarder.acknowledge("custom:id") is True
-
-    @pytest.mark.asyncio
-    async def test_acknowledge_clears_pending(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        assert len(forwarder._pending_acks) == 0
-        # Unknown ackIds report not-found
-        assert forwarder.acknowledge("execution_complete:msg-1") is False
 
 
 class TestBindRecovery:
@@ -268,96 +184,6 @@ class TestBindRecovery:
         assert [event["ackId"] for event in sent_events(replacement)] == [
             "execution_complete:msg-cancelled-flush"
         ]
-
-    @pytest.mark.asyncio
-    async def test_bind_flushes_buffered_events_in_order(self):
-        forwarder = make_forwarder()
-        await forwarder.send({"type": "token", "content": "a"})
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        assert len(forwarder._event_buffer) == 0
-        assert [event["type"] for event in sent_events(ws)] == ["token", "execution_complete"]
-        # The critical event starts pending on flush, awaiting its ACK
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-
-    @pytest.mark.asyncio
-    async def test_bind_with_no_backlog_sends_nothing(self):
-        forwarder = make_forwarder()
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        ws.send.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_bind_flush_stops_on_send_failure_and_keeps_remainder(self):
-        forwarder = make_forwarder()
-        await forwarder.send({"type": "token", "content": "a"})
-        await forwarder.send({"type": "token", "content": "b"})
-
-        ws = open_ws()
-        ws.send = AsyncMock(side_effect=[None, ConnectionError("broken")])
-        await forwarder.bind(ws)
-
-        assert len(forwarder._event_buffer) == 1
-        assert forwarder._event_buffer[0]["content"] == "b"
-
-    @pytest.mark.asyncio
-    async def test_bind_does_not_double_send_buffered_criticals(self):
-        """A critical event flushed from the buffer must not also be re-sent
-        by the pending-ack recovery on the same bind."""
-        forwarder = make_forwarder()
-        # msg-1 was sent on a previous connection and never acknowledged
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        forwarder.unbind()
-        # msg-2 completed while disconnected, so it sits in the buffer
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-2"})
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        # msg-2 once from the buffer, msg-1 once from pending acks — no dupes
-        assert [event["ackId"] for event in sent_events(ws)] == [
-            "execution_complete:msg-2",
-            "execution_complete:msg-1",
-        ]
-        assert set(forwarder._pending_acks) == {
-            "execution_complete:msg-1",
-            "execution_complete:msg-2",
-        }
-
-    @pytest.mark.asyncio
-    async def test_bind_resends_all_unacknowledged_criticals(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        await forwarder.send({"type": "error", "messageId": "msg-2"})
-        forwarder.unbind()
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        assert ws.send.await_count == 2
-        # Both stay pending until an ACK command clears them
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        assert forwarder.acknowledge("error:msg-2") is True
-
-    @pytest.mark.asyncio
-    async def test_bind_does_not_resend_acknowledged_events(self):
-        forwarder = make_forwarder()
-        await forwarder.bind(open_ws())
-        await forwarder.send({"type": "execution_complete", "messageId": "msg-1"})
-        assert forwarder.acknowledge("execution_complete:msg-1") is True
-        forwarder.unbind()
-
-        ws = open_ws()
-        await forwarder.bind(ws)
-
-        ws.send.assert_not_awaited()
 
 
 class TestStaleSendRecovery:

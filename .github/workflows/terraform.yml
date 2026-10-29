@@ -12,8 +12,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
-      - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -32,8 +32,8 @@ on:
       - "packages/linear-bot/**"
       - "packages/modal-infra/**"
       - "packages/daytona-infra/**"
-      - "packages/opencomputer-infra/**"
       - "packages/e2b-infra/**"
+      - "packages/boat-infra/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
       - "packages/vercel-infra/**"
@@ -45,8 +45,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
 
 concurrency:
   group: terraform-${{ github.ref }}
@@ -90,9 +88,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [check-secrets]
+    outputs:
+      fmt: ${{ steps.fmt.outcome }}
+      init: ${{ steps.init.outcome }}
+      validate: ${{ steps.validate.outcome }}
+      test: ${{ steps.test.outcome }}
+      modal-test: ${{ steps.modal_test.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
@@ -129,56 +133,20 @@ jobs:
           terraform test
         working-directory: terraform/modules/modal-app
 
-      - name: Post Validation Results
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const hasSecrets = '${{ needs.check-secrets.outputs.has-secrets }}' === 'true';
-            const planNote = hasSecrets
-              ? ''
-              : '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
-
-            const output = `### Terraform Validation Results
-
-            | Step | Status |
-            |------|--------|
-            | Format | ${{ steps.fmt.outcome == 'success' && '✅' || '⚠️' }} |
-            | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
-            | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
-            | Tests | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
-            | Modal module tests | ${{ steps.modal_test.outcome == 'success' && '✅' || '❌' }} |
-            ${planNote}
-
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-
-            try {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: output
-              });
-            } catch (error) {
-              if (error.status === 403) {
-                core.notice('Could not post PR comment — GITHUB_TOKEN has read-only access (expected for fork PRs).');
-              } else {
-                throw error;
-              }
-            }
-
   plan:
     name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [validate, check-secrets]
     if: github.event_name == 'pull_request' && needs.check-secrets.outputs.has-secrets == 'true'
+    outputs:
+      outcome: ${{ steps.plan.outcome }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -198,6 +166,8 @@ jobs:
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          # Capture output as a file, not the wrapper's multiline step outputs.
+          terraform_wrapper: false
 
       - name: Terraform Init
         env:
@@ -225,11 +195,14 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        shell: bash
         run: |
+          set -euo pipefail
+          # Plan text must not be interpreted as runner workflow commands either.
+          command_token="$(openssl rand -hex 32)"
+          echo "::stop-commands::$command_token"
+          trap 'printf "\n::%s::\n" "$command_token"' EXIT
           terraform plan -no-color -out=tfplan 2>&1 | tee plan_output.txt
-          echo "plan<<EOF" >> $GITHUB_OUTPUT
-          cat plan_output.txt | head -c 60000 >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
         working-directory: ${{ env.TF_WORKING_DIR }}
         continue-on-error: true
         env:
@@ -261,7 +234,9 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
+          TF_VAR_classification_bedrock_api_key: ${{ secrets.CLASSIFICATION_BEDROCK_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
           TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
@@ -286,10 +261,13 @@ jobs:
           TF_VAR_linear_api_key: ${{ secrets.LINEAR_API_KEY }}
           TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
           TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
+          TF_VAR_web_serverless_region: "${{ vars.WEB_SERVERLESS_REGION || 'iad1' }}"
           TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
+          TF_VAR_session_do_location_hint: "${{ vars.SESSION_DO_LOCATION_HINT || '' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
+          TF_VAR_sandbox_unattended_inactivity_timeout_ms: "${{ vars.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || '120000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
@@ -306,13 +284,6 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
-          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
-          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
-          TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
-          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
-          TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
-          TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
-          TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
           TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
           TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
           TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
@@ -320,46 +291,137 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
           TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
 
-      - name: Post Plan Results
-        uses: actions/github-script@v8
+      - name: Prepare Plan Comment
+        id: prepare_comment
+        if: always() && (steps.plan.outcome == 'success' || steps.plan.outcome == 'failure')
+        env:
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        run: node "$GITHUB_WORKSPACE/scripts/terraform-plan-comment.mjs" plan_output.txt plan_comment.txt "$PLAN_OUTCOME"
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Upload Plan Comment
+        if: steps.prepare_comment.conclusion == 'success'
+        uses: actions/upload-artifact@v7
         with:
-          script: |
-            const planOutcome = '${{ steps.plan.outcome }}';
-            const plan = `${{ steps.plan.outputs.plan }}`;
-
-            const truncatedPlan = plan.length > 60000
-              ? plan.substring(0, 60000) + '\n... (truncated)'
-              : plan;
-
-            const output = `### Terraform Plan Results
-
-            **Status:** ${planOutcome === 'success' ? '✅ Success' : '❌ Failed'}
-
-            <details><summary>Show Plan</summary>
-
-            \`\`\`terraform
-            ${truncatedPlan}
-            \`\`\`
-
-            </details>
-
-            *Pushed by: @${{ github.actor }}*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
+          name: terraform-plan-comment
+          path: ${{ env.TF_WORKING_DIR }}/plan_comment.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Plan Status
-        if: steps.plan.outcome == 'failure'
+        if: always() && steps.plan.outcome == 'failure'
         run: exit 1
+
+  comment:
+    name: Comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [validate, check-secrets, plan]
+    if: always() && !cancelled() && github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+    # No checkout or execution of PR code. Artifacts are read only as comment data.
+    steps:
+      - name: Post Validation Results
+        uses: actions/github-script@v9
+        env:
+          HAS_SECRETS: ${{ needs.check-secrets.outputs.has-secrets }}
+          CHECK_SECRETS_RESULT: ${{ needs.check-secrets.result }}
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+          FORMAT_OUTCOME: ${{ needs.validate.outputs.fmt }}
+          INIT_OUTCOME: ${{ needs.validate.outputs.init }}
+          VALIDATE_OUTCOME: ${{ needs.validate.outputs.validate }}
+          TEST_OUTCOME: ${{ needs.validate.outputs.test }}
+          MODAL_TEST_OUTCOME: ${{ needs.validate.outputs.modal-test }}
+        with:
+          script: |
+            const validationResult = process.env.VALIDATION_RESULT;
+            const checkSecretsResult = process.env.CHECK_SECRETS_RESULT;
+            const statuses = {
+              Format: process.env.FORMAT_OUTCOME,
+              Init: process.env.INIT_OUTCOME,
+              Validate: process.env.VALIDATE_OUTCOME,
+              Tests: process.env.TEST_OUTCOME,
+              'Modal module tests': process.env.MODAL_TEST_OUTCOME
+            };
+            const rows = Object.entries(statuses).map(([step, outcome]) =>
+              `| ${step} | ${outcome === 'success' ? 'Success' : outcome || (validationResult === 'skipped' ? 'skipped' : 'Not reported')} |`
+            ).join('\n');
+            let planNote = '';
+            if (checkSecretsResult !== 'success') {
+              planNote = '\n\n> **Warning:** Secret availability is unknown because the Check Secrets job did not succeed.';
+            } else if (process.env.HAS_SECRETS === 'false') {
+              planNote = '\n\n> **Note:** Terraform plan was skipped because secrets are not configured. This is expected for external contributors. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for setup instructions.';
+            } else if (process.env.HAS_SECRETS !== 'true') {
+              planNote = '\n\n> **Warning:** Check Secrets completed without a valid secret-availability result.';
+            }
+            const output = `### Terraform Validation Results
+
+            **Validation job:** ${validationResult || 'unknown'}
+            **Check Secrets job:** ${checkSecretsResult || 'unknown'}
+
+            | Step | Status |
+            |------|--------|
+            ${rows}
+            ${planNote}
+
+            *Pushed by: @${context.actor}, Action: \`${context.eventName}\`*`;
+
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.notice('Could not post PR comment: GITHUB_TOKEN has read-only access (expected for fork PRs).');
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Download Plan Comment
+        if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          name: terraform-plan-comment
+          path: ${{ runner.temp }}/terraform-plan-comment
+
+      - name: Post Plan Results
+        if: needs.plan.outputs.outcome == 'success' || needs.plan.outputs.outcome == 'failure'
+        uses: actions/github-script@v9
+        env:
+          PLAN_COMMENT_PATH: ${{ runner.temp }}/terraform-plan-comment/plan_comment.txt
+        with:
+          script: |
+            const fs = require('node:fs');
+            const body = fs.readFileSync(process.env.PLAN_COMMENT_PATH, 'utf8');
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.notice('Could not post PR comment: GITHUB_TOKEN has read-only access (expected for fork PRs).');
+              } else {
+                throw error;
+              }
+            }
 
   apply:
     name: Apply
@@ -370,10 +432,10 @@ jobs:
     environment: production
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: "npm"
@@ -390,7 +452,7 @@ jobs:
           npm run build -w @open-inspect/linear-bot
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v7
 
       - name: Install Modal and Python dependencies
         run: uv sync --frozen
@@ -457,7 +519,9 @@ jobs:
           TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           TF_VAR_classification_anthropic_api_key: ${{ secrets.CLASSIFICATION_ANTHROPIC_API_KEY }}
           TF_VAR_classification_openai_api_key: ${{ secrets.CLASSIFICATION_OPENAI_API_KEY }}
+          TF_VAR_classification_bedrock_api_key: ${{ secrets.CLASSIFICATION_BEDROCK_API_KEY }}
           TF_VAR_classification_model: "${{ vars.CLASSIFICATION_MODEL || 'claude-haiku-4-5' }}"
+          TF_VAR_classification_reasoning_effort: "${{ vars.CLASSIFICATION_REASONING_EFFORT }}"
           TF_VAR_token_encryption_key: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TF_VAR_repo_secrets_encryption_key: ${{ secrets.REPO_SECRETS_ENCRYPTION_KEY }}
           TF_VAR_provider_accounts_encryption_key: ${{ secrets.PROVIDER_ACCOUNTS_ENCRYPTION_KEY }}
@@ -482,10 +546,13 @@ jobs:
           TF_VAR_linear_api_key: ${{ secrets.LINEAR_API_KEY }}
           TF_VAR_linear_bot_default_model: "${{ vars.LINEAR_BOT_DEFAULT_MODEL || secrets.LINEAR_BOT_DEFAULT_MODEL || 'claude-sonnet-4-6' }}"
           TF_VAR_web_platform: "${{ vars.WEB_PLATFORM || secrets.WEB_PLATFORM || 'vercel' }}"
+          TF_VAR_web_serverless_region: "${{ vars.WEB_SERVERLESS_REGION || 'iad1' }}"
           TF_VAR_enable_durable_object_bindings: "${{ vars.ENABLE_DURABLE_OBJECT_BINDINGS || secrets.ENABLE_DURABLE_OBJECT_BINDINGS || 'true' }}"
           TF_VAR_enable_service_bindings: "${{ vars.ENABLE_SERVICE_BINDINGS || secrets.ENABLE_SERVICE_BINDINGS || 'true' }}"
           TF_VAR_sandbox_provider: "${{ vars.SANDBOX_PROVIDER || secrets.SANDBOX_PROVIDER || 'modal' }}"
+          TF_VAR_session_do_location_hint: "${{ vars.SESSION_DO_LOCATION_HINT || '' }}"
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
+          TF_VAR_sandbox_unattended_inactivity_timeout_ms: "${{ vars.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || '120000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
@@ -502,13 +569,6 @@ jobs:
           TF_VAR_vercel_base_snapshot_id: ${{ vars.VERCEL_BASE_SNAPSHOT_ID || secrets.VERCEL_BASE_SNAPSHOT_ID }}
           TF_VAR_vercel_sandbox_runtime: "${{ vars.VERCEL_SANDBOX_RUNTIME || secrets.VERCEL_SANDBOX_RUNTIME || 'node24' }}"
           TF_VAR_vercel_snapshot_expiration_ms: "${{ vars.VERCEL_SNAPSHOT_EXPIRATION_MS || secrets.VERCEL_SNAPSHOT_EXPIRATION_MS || '0' }}"
-          # Sandbox provider: OpenComputer. Inert while sandbox_provider defaults to "modal";
-          # when set to "opencomputer", Terraform builds the managed base snapshot during apply.
-          TF_VAR_opencomputer_api_url: ${{ vars.OPENCOMPUTER_API_URL || secrets.OPENCOMPUTER_API_URL }}
-          TF_VAR_opencomputer_api_key: ${{ secrets.OPENCOMPUTER_API_KEY }}
-          TF_VAR_opencomputer_template: ${{ vars.OPENCOMPUTER_TEMPLATE || secrets.OPENCOMPUTER_TEMPLATE }}
-          TF_VAR_opencomputer_project_id: ${{ vars.OPENCOMPUTER_PROJECT_ID || secrets.OPENCOMPUTER_PROJECT_ID }}
-          TF_VAR_opencomputer_target: ${{ vars.OPENCOMPUTER_TARGET || secrets.OPENCOMPUTER_TARGET }}
           TF_VAR_e2b_api_key: ${{ secrets.E2B_API_KEY }}
           TF_VAR_e2b_template_id: ${{ vars.E2B_TEMPLATE_ID || secrets.E2B_TEMPLATE_ID }}
           TF_VAR_e2b_api_url: "${{ vars.E2B_API_URL || secrets.E2B_API_URL || 'https://api.e2b.app' }}"
@@ -516,6 +576,11 @@ jobs:
           TF_VAR_e2b_auto_pause: "${{ vars.E2B_AUTO_PAUSE || secrets.E2B_AUTO_PAUSE || 'true' }}"
           TF_VAR_e2b_template_cpu: "${{ vars.E2B_TEMPLATE_CPU || secrets.E2B_TEMPLATE_CPU || '2' }}"
           TF_VAR_e2b_template_memory_mb: "${{ vars.E2B_TEMPLATE_MEMORY_MB || secrets.E2B_TEMPLATE_MEMORY_MB || '4096' }}"
+          TF_VAR_boat_api_key: ${{ secrets.BOAT_API_KEY }}
+          TF_VAR_boat_api_url: "${{ vars.BOAT_API_URL || secrets.BOAT_API_URL || 'https://boat.dev/api/v1' }}"
+          TF_VAR_boat_base_snapshot: ${{ vars.BOAT_BASE_SNAPSHOT || secrets.BOAT_BASE_SNAPSHOT }}
+          TF_VAR_boat_org: ${{ vars.BOAT_ORG || secrets.BOAT_ORG }}
+          TF_VAR_boat_sandbox_type: "${{ vars.BOAT_SANDBOX_TYPE || secrets.BOAT_SANDBOX_TYPE || 'default' }}"
           # Documentation site (packages/docs). Leaving DOCS_SITE_ENABLED unset
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"

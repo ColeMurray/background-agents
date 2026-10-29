@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { Logger } from "../../../logger";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import { getValidHarnessOrDefault, harnessIdSchema } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
+import { isValidModel } from "@open-inspect/shared/models";
+import { HarnessAdmissionError, resolveHarnessInitialization } from "../../../harness-admission";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { normalizeSandboxSettings } from "../../../sandbox/settings";
 import { DEFAULT_BASE_BRANCH } from "../../../repos/default-branch";
@@ -132,7 +133,16 @@ export class SessionInitHandler {
       return Response.json({ sessionId, status: "created" });
     }
 
-    const model = getValidModelOrDefault(body.model);
+    const harness = getValidHarnessOrDefault(body.harness);
+    let selection;
+    try {
+      selection = resolveHarnessInitialization(harness, body);
+    } catch (cause) {
+      if (cause instanceof HarnessAdmissionError)
+        return Response.json({ error: cause.message }, { status: cause.status });
+      throw cause;
+    }
+    const { model } = selection;
     if (body.model && !isValidModel(body.model)) {
       log.warn("Invalid model name, using default", {
         requested_model: body.model,
@@ -140,7 +150,7 @@ export class SessionInitHandler {
       });
     }
 
-    const reasoningEffort = validateReasoningEffort(model, body.reasoningEffort ?? undefined, log);
+    const reasoningEffort = validateReasoningEffort(model, selection.reasoningEffort, log, harness);
     const baseBranch = hasRepoOwner
       ? body.branch || body.defaultBranch || DEFAULT_BASE_BRANCH
       : null;
@@ -182,7 +192,7 @@ export class SessionInitHandler {
         repoName,
         repoId: hasRepoOwner ? body.repoId : null,
         baseBranch,
-        harness: getValidHarnessOrDefault(body.harness),
+        harness,
         model,
         reasoningEffort,
         status: "created",

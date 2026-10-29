@@ -6,36 +6,70 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
+import { parseSessionListTeamIds } from "@open-inspect/shared/session-list-query";
+import { resolveWorkspaceTeamAccess } from "@open-inspect/shared/types/team-access";
 import { useAuthSession } from "@/lib/auth-session";
-import { isRetryableTeamError, useMeTeams } from "./use-teams";
+import type { SessionInboxFilters } from "@/lib/session-inbox-api";
 import { useCurrentUserAuthorization } from "./use-current-user-authorization";
+import { isRetryableTeamError, useMeTeams } from "./use-teams";
 
 const ACTIVE_TEAM_STORAGE_KEY = "open-inspect-active-team";
 
+export function provisionalInboxFilters(
+  selection: string | null,
+  canListAllTeams: boolean
+): SessionInboxFilters {
+  if (!selection || selection === "all-my-teams") return {};
+  if (selection === "workspace") return { scope: "workspace" };
+  if (selection === "all-teams") return canListAllTeams ? { scope: "all" } : {};
+  const teamIds = parseSessionListTeamIds(new URLSearchParams({ "teamIds[]": selection }));
+  return teamIds ? { teamIds } : {};
+}
+
 function useActiveTeamState() {
   const { data: session } = useAuthSession();
+  const { authorization } = useCurrentUserAuthorization();
   const memberships = useMeTeams();
-  const {
-    authorization,
-    loading: authorizationLoading,
-    error: authorizationError,
-  } = useCurrentUserAuthorization();
   const [selection, setSelection] = useState<string | null>(null);
   const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
+  const [denial, setDenial] = useState<{ userId: string | null; error: unknown } | null>(null);
   const userId = session?.user.id ?? null;
+  // Retryable errors cannot restore a denied grant from SWR's retained membership data.
+  const currentDenial =
+    memberships.error && !isRetryableTeamError(memberships.error)
+      ? { userId, error: memberships.error }
+      : denial?.userId === userId && (memberships.error || !memberships.hasData)
+        ? denial
+        : null;
+  if (denial?.userId !== currentDenial?.userId || denial?.error !== currentDenial?.error) {
+    setDenial(currentDenial);
+  }
   // Only the sidebar tolerates transient refresh failures with a successful snapshot.
-  const membershipsError =
-    memberships.hasData && isRetryableTeamError(memberships.error) ? undefined : memberships.error;
-  const teams = membershipsError
-    ? []
-    : memberships.teams.filter((team) => team.archivedAt === null);
-  const loading = memberships.loading || authorizationLoading || hydratedUserId !== userId;
-  const error = membershipsError ?? (authorization ? undefined : authorizationError);
-  const canListAllTeams =
-    authorization?.role.key === "owner" || authorization?.role.key === "administrator";
+  const error =
+    currentDenial?.error ??
+    (memberships.hasData && isRetryableTeamError(memberships.error)
+      ? undefined
+      : memberships.error);
+  const teams = error ? [] : memberships.teams.filter((team) => team.archivedAt === null);
+  const canListAllTeams = error ? false : memberships.canListAllTeams;
+  const loading = memberships.loading || hydratedUserId !== userId;
+  const provisionalFilters = useMemo(
+    () =>
+      memberships.loading && hydratedUserId === userId && authorization !== null
+        ? provisionalInboxFilters(
+            selection,
+            resolveWorkspaceTeamAccess({
+              roleKey: authorization.role.key,
+              suspended: authorization.suspendedAt !== null,
+            }).canListAllTeams
+          )
+        : null,
+    [memberships.loading, hydratedUserId, userId, authorization, selection]
+  );
 
   useEffect(() => {
     let stored = "all-my-teams";
@@ -48,24 +82,24 @@ function useActiveTeamState() {
     setHydratedUserId(userId);
   }, [userId]);
 
+  // Without an active team, lists stay unfiltered and the switcher is hidden, so aggregate
+  // scopes reconcile to All my teams instead of staying stored.
   const activeSelection =
     !loading &&
     !error &&
-    (selection === "workspace" ||
-      selection === "all-my-teams" ||
-      (selection === "all-teams" && canListAllTeams) ||
+    (selection === "all-my-teams" ||
+      (teams.length > 0 &&
+        (selection === "workspace" || (selection === "all-teams" && canListAllTeams))) ||
       teams.some((team) => team.id === selection))
       ? selection
       : "all-my-teams";
   const activeTeamId = teams.some((team) => team.id === activeSelection) ? activeSelection : null;
   const scope =
-    teams.length === 0
-      ? undefined
-      : activeSelection === "workspace"
-        ? ("workspace" as const)
-        : activeSelection === "all-teams"
-          ? ("all" as const)
-          : undefined;
+    activeSelection === "workspace"
+      ? ("workspace" as const)
+      : activeSelection === "all-teams"
+        ? ("all" as const)
+        : undefined;
 
   useEffect(() => {
     if (loading || error) return;
@@ -87,7 +121,9 @@ function useActiveTeamState() {
     setActiveTeam,
     teams,
     scope,
-    requireTeamOnCreate: membershipsError ? false : memberships.requireTeamOnCreate,
+    provisionalFilters,
+    canListAllTeams,
+    requireTeamOnCreate: error ? false : memberships.requireTeamOnCreate,
     loading,
     error,
   };

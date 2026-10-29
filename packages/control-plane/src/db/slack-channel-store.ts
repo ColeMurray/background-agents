@@ -16,6 +16,7 @@
 
 import { withValidatedOwnerTeam, type AutomationRow } from "./automation-store";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { TeamChannelBindingStore } from "./team-channel-bindings";
 
 export class SlackChannelStore {
   constructor(private readonly db: SqlDatabase) {}
@@ -26,12 +27,23 @@ export class SlackChannelStore {
       .prepare(
         `SELECT a.* FROM automations a
          JOIN automation_slack_channels c ON c.automation_id = a.id
+         LEFT JOIN team_channel_bindings b ON b.provider = 'slack' AND b.external_id = c.channel_id
          WHERE c.channel_id = ? AND a.enabled = 1 AND a.deleted_at IS NULL
-           AND a.trigger_type = 'slack_event'`
+            AND a.trigger_type = 'slack_event'
+            AND (a.owner_team_id = b.team_id OR (a.owner_team_id IS NULL AND b.team_id IS NULL))`
       )
       .bind(channelId)
       .all<AutomationRow>();
     return (result.results || []).map(withValidatedOwnerTeam);
+  }
+
+  /** Workspace automations retain unbound channels; team automations require matching bindings. */
+  async hasCompatibleBindings(channelIds: string[], ownerTeamId: string | null): Promise<boolean> {
+    const bindings = new TeamChannelBindingStore(this.db);
+    for (const channelId of channelIds) {
+      if (((await bindings.get("slack", channelId))?.teamId ?? null) !== ownerTeamId) return false;
+    }
+    return true;
   }
 
   /** Distinct channel IDs watched by any enabled slack_event automation. */

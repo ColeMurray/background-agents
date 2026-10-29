@@ -1,33 +1,43 @@
-import { describe, expect, it } from "vitest";
-import type { TeamCapabilities } from "@open-inspect/shared/types/team-access";
-import { permissionRequirement, requireAll, requireTeam } from "./shared";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
+import { requireAll, requireTeam } from "./shared";
 
-describe("team audit defaults", () => {
-  it.each<keyof TeamCapabilities | "read" | "member">([
-    "read",
-    "member",
-    "canEditMetadata",
-    "canManageMembers",
-  ])("classifies %s identically standalone and in a composition", (need) => {
-    const expected = need !== "read" && need !== "member";
-    expect(requireTeam(need).auditAllowed).toBe(expected);
-    expect(
-      requireAll({ kind: "team", teamIdParam: "id", need }, permissionRequirement("sessions.read"))
-        .auditAllowed
-    ).toBe(expected);
+describe("team admission requirements", () => {
+  it("excludes presentation capabilities from requireTeam", () => {
+    expectTypeOf<Parameters<typeof requireTeam>[0]>().toEqualTypeOf<
+      Exclude<TeamAdmissionNeed, "removeMember">
+    >();
+
+    // @ts-expect-error Presentation grants are not route authorization needs.
+    requireTeam("canReadTeamSessions");
+    // @ts-expect-error Presentation grants are not route authorization needs.
+    requireTeam("canReadTeamRepositories");
+    // @ts-expect-error Presentation grants are not route authorization needs.
+    requireTeam("canReadTeamEnvironments");
+    // @ts-expect-error Presentation grants are not route authorization needs.
+    requireTeam("canReadAutomations");
   });
 
-  it("still audits a composition with a write permission", () => {
-    expect(
-      requireAll(
-        { kind: "team", teamIdParam: "id", need: "member" },
-        permissionRequirement("sessions.create")
-      ).auditAllowed
-    ).toBe(true);
+  it("requires a target path parameter when removing a member", () => {
+    const requirement = {
+      kind: "team",
+      teamIdParam: "id",
+      need: "removeMember",
+      targetUserIdParam: "userId",
+    } as const satisfies TeamAdmissionRequirement;
+    expect(requireAll(requirement).allOf).toEqual([requirement]);
+
+    // @ts-expect-error requireTeam cannot express the required target path parameter.
+    requireTeam("removeMember");
+    // @ts-expect-error Removing a member must name the target path parameter.
+    requireAll({ kind: "team", teamIdParam: "id", need: "removeMember" });
   });
 
-  it("preserves explicit audit overrides", () => {
-    expect(requireTeam("member", { auditAllowed: true }).auditAllowed).toBe(true);
-    expect(requireTeam("canManageRepositories", { auditAllowed: false }).auditAllowed).toBe(false);
+  it("keeps read admission quiet and mutation admission audited", () => {
+    expect(requireTeam("read").auditAllowed).toBe(false);
+    expect(requireTeam("member").auditAllowed).toBe(false);
+    expect(requireTeam("canManageMembers").auditAllowed).toBe(true);
+    expect(requireTeam("canJoin").auditAllowed).toBe(true);
+    expect(requireTeam("canArchive", { auditAllowed: false }).auditAllowed).toBe(false);
   });
 });

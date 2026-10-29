@@ -17,6 +17,8 @@ export type {
   GitPushSpec,
   RepositoryInfo,
   GetRepositoryConfig,
+  ListBranchesResult,
+  ListBranchesContext,
   CreatePullRequestConfig,
   CreatePullRequestResult,
   PullRequestSnapshot,

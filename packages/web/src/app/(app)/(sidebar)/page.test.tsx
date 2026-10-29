@@ -2,11 +2,12 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { DEFAULT_KEYBOARD_SHORTCUTS } from "@open-inspect/shared/types/keyboard-shortcuts";
 import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { readStoredPromptDraft, writeStoredPromptDraft } from "@/lib/prompt-drafts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { environment, mocks, repo, sessionCreateBody } from "./page.test-fixture";
 import Home from "./page";
@@ -33,6 +34,20 @@ function activeOpenAiAccount(id: string): (typeof mocks.providerAccountsValue)[n
 }
 
 describe("Home", () => {
+  it("creates sessions using the saved personal-memory preference without a composer override", async () => {
+    render(<Home />);
+    expect(
+      screen.queryByRole("checkbox", { name: "Include my personal memories" })
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Do some work" },
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+    expect(sessionCreateBody()).not.toHaveProperty("includePersonalMemories");
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+  });
+
   it("shows the first prompt's server denial reason in a toast without navigating", async () => {
     vi.mocked(fetch).mockImplementation(async (input) =>
       String(input).endsWith("/prompt")
@@ -389,30 +404,6 @@ describe("Home", () => {
     expect(localStorage.getItem("open-inspect-last-provider-selections")).toBeNull();
   });
 
-  it("continues hydrating when legacy provider selection migration fails", async () => {
-    const accountId = "a".repeat(32);
-    mocks.providerAccountsValue = [activeOpenAiAccount(accountId)];
-    const selection = JSON.stringify({ openai: { mode: "provider_account", accountId } });
-    localStorage.setItem("open-inspect-last-provider-selections", selection);
-    const setItem = localStorage.setItem.bind(localStorage);
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation((key, value) => {
-      if (key === "open-inspect-last-provider-selections:v1") throw new Error("Quota exceeded");
-      setItem(key, value);
-    });
-    const user = userEvent.setup();
-    render(<Home />);
-
-    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
-    expect(sessionCreateBody()).toMatchObject({
-      providerSelections: { openai: { mode: "provider_account", accountId } },
-    });
-    expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBeNull();
-    expect(localStorage.getItem("open-inspect-last-provider-selections")).toBe(selection);
-  });
-
   it("waits for provider accounts and removes a stale stored selection", async () => {
     const staleAccountId = "b".repeat(32);
     localStorage.setItem(
@@ -504,6 +495,26 @@ describe("Home", () => {
     await screen.findByRole("button", { name: /docs/i });
   });
 
+  it("requests the skill preview for the stored target before showing its count", async () => {
+    localStorage.setItem("open-inspect-last-selected-repo", "open-inspect/background-agents");
+    mocks.reposValue = [];
+    mocks.loadingReposValue = true;
+    const { rerender } = render(<Home />);
+
+    expect(mocks.skillResolutionPreview).toHaveBeenLastCalledWith(
+      { repoOwner: "open-inspect", repoName: "background-agents" },
+      { mode: "all" }
+    );
+    expect(screen.getByRole("button", { name: /all skills/i })).not.toHaveTextContent("(1)");
+
+    mocks.reposValue = [repo];
+    mocks.loadingReposValue = false;
+    rerender(<Home />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /all skills/i })).toHaveTextContent("(1)")
+    );
+  });
+
   it("surfaces the error and stays put when the initial prompt fails", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
@@ -527,6 +538,165 @@ describe("Home", () => {
 
     expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
     expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Investigate logs"
+    );
+  });
+
+  it("restores an unsent prompt draft after a reload", async () => {
+    const { unmount } = render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "A long prompt that should survive a refresh" },
+    });
+    unmount();
+
+    render(<Home />);
+
+    expect(await screen.findByPlaceholderText("What do you want to build?")).toHaveValue(
+      "A long prompt that should survive a refresh"
+    );
+  });
+
+  it("clears the stored prompt draft once the session starts", async () => {
+    render(<Home />);
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Ship it"
+    );
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/sessions", expect.anything()));
+
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(sessionStorage.getItem("open-inspect-prompt-draft:user-1:new-session")).toBeNull();
+  });
+
+  it("sends once and preserves a newer stored draft when delivery finishes", async () => {
+    let resolvePrompt!: (response: Response) => void;
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) =>
+      String(input).endsWith("/prompt")
+        ? new Promise<Response>((resolve) => {
+            resolvePrompt = resolve;
+          })
+        : originalFetch(input, init)
+    );
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "  Ship it  " } });
+    await waitFor(() => expect(sessionCreateBody()).toBeDefined());
+    const form = input.closest("form")!;
+    act(() => {
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+    });
+    await waitFor(() => expect(resolvePrompt).toBeDefined());
+    writeStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session", {
+      prompt: "A newer draft",
+      pendingRequest: null,
+    });
+    let draftAtNavigation: string | undefined;
+    mocks.routerPush.mockImplementation(() => {
+      draftAtNavigation = readStoredPromptDraft(
+        "open-inspect-prompt-draft:user-1:new-session"
+      )?.prompt;
+    });
+    await act(async () => resolvePrompt(Response.json({ ok: true })));
+    expect(mocks.routerPush).toHaveBeenCalledExactlyOnceWith("/session/session-1");
+    expect(draftAtNavigation).toBe("A newer draft");
+    expect(mocks.mutateMock.mock.calls).toEqual([
+      [isUnarchivedSessionListKey],
+      [isSessionInboxKey],
+    ]);
+    expect(mocks.mutateMock.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.routerPush.mock.invocationCallOrder[0]
+    );
+    const sent = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/prompt"));
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(String(sent[0][1]?.body))).toMatchObject({ content: "Ship it" });
+    view.unmount();
+    expect(fetch).not.toHaveBeenCalledWith("/api/sessions/session-1/archive", expect.anything());
+  });
+
+  it("does not send to a session whose acquisition was superseded during submission", async () => {
+    let resolveCreate!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation((input) =>
+      String(input) === "/api/sessions"
+        ? new Promise<Response>((resolve) => {
+            resolveCreate = resolve;
+          })
+        : Promise.resolve(Response.json({ ok: true }))
+    );
+    const view = render(<Home />);
+    const input = screen.getByPlaceholderText("What do you want to build?");
+    fireEvent.change(input, { target: { value: "Ship it" } });
+    await waitFor(() => expect(resolveCreate).toBeDefined());
+    fireEvent.submit(input.closest("form")!);
+    // Losing creation permission makes the warm request unusable, even while sending.
+    mocks.canCreateSession = false;
+    view.rerender(<Home />);
+    await act(async () => resolveCreate(Response.json({ sessionId: "stale", status: "created" })));
+    expect(fetch).toHaveBeenCalledWith("/api/sessions/stale/archive", expect.anything());
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(
+      false
+    );
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(readStoredPromptDraft("open-inspect-prompt-draft:user-1:new-session")?.prompt).toBe(
+      "Ship it"
+    );
+  });
+
+  it("retries an attachment-only prompt without recreating or reuploading, then clears before navigation", async () => {
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = () => "blob:preview";
+        static revokeObjectURL = revoke;
+      }
+    );
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let rejectPrompt = true;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input).endsWith("/attachments")) {
+        return Promise.resolve(
+          Response.json({ attachmentId: "a".repeat(32), mimeType: "image/png" })
+        );
+      }
+      if (String(input).endsWith("/prompt") && rejectPrompt) {
+        rejectPrompt = false;
+        return Promise.resolve(Response.json({ error: "Please retry" }, { status: 500 }));
+      }
+      return originalFetch(input, init);
+    });
+    const view = render(<Home />);
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["image"], "design.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Please retry");
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalled();
+    expect(screen.getByRole("img", { name: "design.png" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(revoke).toHaveBeenCalledWith("blob:preview");
+    expect(revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.routerPush.mock.invocationCallOrder[0]
+    );
+    const sent = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/prompt"));
+    expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({
+      content: "See the attached files.",
+      attachments: [{ attachmentId: "a".repeat(32), name: "design.png" }],
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/sessions")
+    ).toHaveLength(1);
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/attachments"))
+    ).toHaveLength(1);
   });
 
   it("sends the default harness with a model it can run", async () => {
@@ -544,6 +714,25 @@ describe("Home", () => {
 
     await waitFor(() =>
       expect(sessionCreateBody()).toMatchObject({ harness: "opencode", model: openAiModel })
+    );
+  });
+
+  it("uses the Codex default effort when changing the model", async () => {
+    mocks.enabledModelsValue = ["openai/gpt-5.6-sol", "openai/gpt-6.1-sol"];
+    localStorage.setItem("open-inspect-last-selected-harness", "codex");
+    localStorage.setItem("open-inspect-last-selected-model", "openai/gpt-5.6-sol");
+    render(<Home />);
+    await screen.findByRole("button", { name: "Agent, model and effort: codex" });
+    fireEvent.click(screen.getByRole("button", { name: "Switch model to GPT-6.1" }));
+    fireEvent.change(screen.getByPlaceholderText("What do you want to build?"), {
+      target: { value: "Ship it" },
+    });
+    await waitFor(() =>
+      expect(sessionCreateBody()).toMatchObject({
+        harness: "codex",
+        model: "openai/gpt-6.1-sol",
+        reasoningEffort: "low",
+      })
     );
   });
 

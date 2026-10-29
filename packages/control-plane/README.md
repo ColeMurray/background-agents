@@ -63,6 +63,41 @@ not pass through Hono.
 | --------- | ------ | ------------ |
 | `/health` | GET    | Health check |
 
+### Actors
+
+| Endpoint     | Method | Description                                                       |
+| ------------ | ------ | ----------------------------------------------------------------- |
+| `/actors/me` | POST   | Enroll the signed bot actor with its attested name, email, avatar |
+
+A new bot actor links to an existing user only by the email it presents when it is enrolled, and a
+known actor is never relinked. The first request that enrolls an actor must include its attested
+email. Slack sends `POST /actors/me` before any other request that carries the actor; Linear
+includes profile claims during session creation and enrolls follow-up and stop authors explicitly.
+
+A new Slack or Linear actor is enrolled only with an attested email: any request that would enroll
+one without it, including a claim-less read, is refused with 403 `actor_email_required` and writes
+nothing. A known actor is admitted with or without one. This keeps an email-less enrollment from
+giving someone a second account with the default role and none of their existing account's
+restrictions. Known limitation: new Slack users whose profile email the bot cannot read, typically
+external Slack Connect users, cannot start using the bot; Slack users it already knows keep working.
+Linear's catalog reads are actorless and session creation carries its actor's email. Follow-up
+authors try enrollment without profile claims first; only `actor_email_required` triggers a profile
+lookup and retry. Stops go directly to the control plane and use the same fallback when needed.
+
+Before creating a new canonical user, bot enrollment applies the same deployment admission policy as
+web sign-in. An attested Slack or Linear email must match `ALLOWED_EMAILS` or
+`ALLOWED_EMAIL_DOMAINS`; otherwise the response is 403 `actor_admission_denied`, with no user,
+identity, or default role written. `UNSAFE_ALLOW_ALL_USERS` permits new users only when all
+allowlists are empty, as on the web. GitHub bot profile emails are not attested and cannot admit a
+new user. Bots cannot prove GitHub username or organization admission: on deployments using only
+`ALLOWED_USERS` or `ALLOWED_GITHUB_ORGS`, people must sign in on the web first, then use the bot
+with that account's email (or its GitHub identity).
+
+Existing actors and new actors linking by attested email to an existing account do not repeat
+admission. Their existing role and suspension still apply. Newly admitted users retain the Member
+default. These rules do not identify two different emails as one person: if both pass admission,
+separate accounts remain possible and require an administrator to merge them.
+
 ### Sessions
 
 | Endpoint                        | Method    | Description                          |
@@ -217,8 +252,28 @@ history. See [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.
 decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
-any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
-`failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
+any child starting/running → `starting`/`running`; otherwise any child waiting to relaunch →
+`retrying`; all terminal → `completed` (none failed), `failed` (none completed), `partial_failed` (a
+mix), or `skipped` (all skipped).
+
+A scheduled automation's `maxRetries` (0–5, default 0) lets a run whose launch fails before its
+prompt is sent wait as `retrying` and relaunch in place, with exponential backoff; manual and event
+runs are never retried.
+
+#### Webhook triggers
+
+Webhook automations are called with their API key (`Authorization: Bearer <key>`) instead of a user
+session:
+
+| Endpoint                                             | Method | Description                                                                            |
+| ---------------------------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `/webhooks/automation/:id`                           | POST   | Fire with a JSON body → `{ok, triggered, skipped, steered, invocationId}`              |
+| `/webhooks/automation/:id/invocations/:invocationId` | GET    | Status of a webhook firing → `{invocationId, status, runs: [{id, status, sessionId}]}` |
+
+`invocationId` is `null` when nothing was recorded (conditions did not match, the automation is
+paused, or execution was denied before admission). A retry with the same `idempotencyKey` returns
+the original firing's ID, even while it is still running. The status endpoint serves only
+invocations this webhook caused, and never exposes session content.
 
 ### Audit Events
 
@@ -367,11 +422,12 @@ Automations:
   unique per `(automation_id, environment_id)`).
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
-- `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event
-  dedup, UNIQUE per automation) and `concurrency_key`, `skip_reason` for childless skips, and the
-  `failure_counted_at` compare-and-set stamp that makes auto-pause accounting exactly-once. Status
-  is **not** stored; it is derived from child runs (`DERIVED_INVOCATION_STATUS_SQL` in
-  `src/db/automation-store.ts` is the single definition).
+- `automation_invocations`: one thin row per firing — source, `actor_kind` (who authored the
+  triggering action: `person`, `bot`, `system` or `unknown`; the Slack bot-message limit counts
+  `bot`), firing-scoped `trigger_key` (event dedup, UNIQUE per automation) and `concurrency_key`,
+  `skip_reason` for childless skips, and the `failure_counted_at` compare-and-set stamp that makes
+  auto-pause accounting exactly-once. Status is **not** stored; it is derived from child runs
+  (`DERIVED_INVOCATION_STATUS_SQL` in `src/db/automation-store.ts` is the single definition).
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
@@ -398,6 +454,37 @@ unsafe allow-all), while GitHub may also use username or organization admission.
 runtime constructs Better Auth and the immutable provider list from the same configuration.
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
+
+### Better Auth 1.7 Upgrade
+
+The upgrade from 1.6.25 to 1.7.14 follows the upstream
+[1.7 upgrade guide](https://www.better-auth.com/docs/guides/1-7-upgrade-guide) and
+[release changelog](https://github.com/better-auth/better-auth/blob/v1.7.14/packages/better-auth/CHANGELOG.md).
+
+- Provider profile `user` contains only mutable attributes. Our provider-profile plugin keeps the
+  built-in GitHub/Google OAuth transports. Both resolvers return `VerifiedProviderIdentity` as
+  profile data; the SDK account-subject resolver and canonical email claims read the same typed
+  `data.subject`.
+- `getAccessToken`, `refreshToken`, and `accountInfo` select the local `user_identities.id` through
+  `accountId`, plus the canonical `userId` for trusted server calls. They no longer accept
+  `providerId` or a provider subject as the selector. Profile integrity checks read
+  `account.accountId`, not `user.id`.
+- No database migration or issuer backfill is needed for this integration. The account schema is
+  unchanged from 1.6 in 1.7.3 and later; the existing unique `(provider, provider_user_id)` index
+  already prevents ambiguous account keys. Keep our application-owned `provider_issuer` column and
+  indexes. The mandatory issuer schema in 1.7.0 through 1.7.2 was reverted.
+- The custom adapter retains native atomic `consumeOne`. `incrementOne` is optional in 1.7.14;
+  Better Auth supplies guarded conditional-update fallbacks. We use memory rate limiting, not a
+  custom rate-limit or secondary-storage implementation.
+
+**Deployment cutover:** upgrade all control-plane instances sharing verification storage together.
+The [1.7.7 security change](https://github.com/better-auth/better-auth/pull/11494) namespaces
+database-backed OAuth state with `auth-state:` before hashing, so sign-ins started before the
+upgrade must restart. Do not add a legacy-state fallback or run mixed old/new auth nodes against the
+same storage. Existing browser sessions and encrypted OAuth credentials remain usable with the same
+`BROWSER_AUTH_SECRET`; do not rotate it as part of this upgrade. A rollback also requires restarting
+pending sign-ins. The web BFF does not install a Better Auth SDK and needs no matching package
+upgrade.
 
 ## Credential Encryption
 
@@ -442,6 +529,21 @@ Existing sessions remain pinned to their stored authentication mode.
 
 > **Single-Tenant Only**: This control plane is designed for single-tenant deployment where all
 > users are trusted members of the same organization.
+
+Slack-bot `POST /sessions/:id/prompt` and `POST /sessions/:id/attachments` requests require exactly
+one `channel=slack:<channelId>` query coordinate covered by the service signature. Before actor
+enrollment or session writes, admission compares the live channel binding with the session's
+persisted owning team in every `TEAMS_ENFORCEMENT` mode. Matching workspace/unbound scopes remain
+valid; this check does not replace the user's collaboration or membership authorization. Scope
+refusals return `slack_channel_scope_denied`, which closes the bot's thread mapping rather than
+treating the refusal as a per-user denial or retrying with cached ownership.
+
+Slack channel catalogs use signed `GET /repos?channel=slack:<channelId>` and
+`GET /environments?channel=slack:<channelId>` requests with the requesting user's actor assertion.
+The control plane derives the team from its current binding, checks user access, and filters current
+repository grants; a bot-supplied `teamId` cannot override that scope. Unbound channel scopes
+include only workspace-owned environments, even for multi-team users and administrators. The bot
+does not cache channel-catalog responses or fall back to workspace/team data on failed scoped reads.
 
 Bulk archiving uses `POST /sessions/batch-archive` with an explicit selection:
 
@@ -493,34 +595,25 @@ The former `/operator/sessions/archive` and `/internal/operator-archive` proposa
 
 ### GitHub App Token Flow
 
-The system uses two types of GitHub tokens:
+The sandbox helper calls `/sessions/:id/scm-credentials` with its sandbox auth token. The control
+plane resolves the persisted session repositories, intersects current owning-team grants only for
+team-owned sessions, and passes that scope to the provider. GitHub mints a short-lived installation
+token for that scope; GitLab returns its deployment-wide PAT without narrowing it. Installation-wide
+metadata/catalog credentials are separate from GitHub session credentials.
 
-| Token            | Used For           | Delivery                      | Access Scope                     |
-| ---------------- | ------------------ | ----------------------------- | -------------------------------- |
-| GitHub App Token | Clone, fetch, push | Brokered to credential helper | All repos where App is installed |
-| User OAuth Token | Create PRs         | Server-only                   | User's accessible repos          |
-
-Session sandboxes, including snapshot restores, do not receive `GITHUB_TOKEN`, `GITHUB_APP_TOKEN`,
-or `VCS_CLONE_TOKEN` for normal git operations. Git invokes the sandbox credential helper, which
-calls `/sessions/:id/scm-credentials` with the sandbox auth token and receives short-lived
-credentials on demand. The helper preserves the existing installation-wide model by serving
-credentials for HTTPS git requests to the configured SCM host, including setup/start hooks that
-clone auxiliary private repos. This avoids stale embedded credentials in long-running sessions and
-persistent resumes. One-shot image builds still receive `VCS_CLONE_TOKEN` because they have no
-session to broker through.
-
-If a `create-pr` request is triggered by a participant without a user OAuth token (for example,
-Slack-created or Google-login sessions), the sandbox can still push the branch with brokered GitHub
-App credentials and the control plane returns a manual GitHub `pull/new` URL instead of failing the
-request.
+The helper caches the returned password on disk; Modal filesystem snapshots can retain that cache.
+Grant changes constrain subsequent credential resolution, not already-issued tokens. Image builds
+receive `VCS_CLONE_TOKEN` because they have no session broker. For the authoritative delivery,
+provider, user-identity, and snapshot boundaries, see
+[Repository and Credential Boundaries](../../docs/AUTH.md#repository-and-credential-boundaries).
 
 ### Why This Matters
 
-- **No per-user repo access validation**: When a session is created, the system does not verify that
-  the user has access to the requested repository
+- **No personal GitHub access comparison**: Session creation checks Open-Inspect permissions and
+  resource access, not the user's personal GitHub repository permissions
 - **Shared GitHub App installation**: A single `GITHUB_APP_INSTALLATION_ID` is used for all users
-- **Trust boundary is the organization**: All users with access to the web app can work with any
-  repository the GitHub App is installed on
+- **Trust boundary is the organization**: Teams and session visibility add internal access controls,
+  not multi-tenant isolation. See [Authentication and Authorization](../../docs/AUTH.md).
 
 ### Configuration
 

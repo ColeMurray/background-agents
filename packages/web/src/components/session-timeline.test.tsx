@@ -20,6 +20,8 @@ afterEach(() => {
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
   vi.stubGlobal(
     "IntersectionObserver",
     class {
@@ -885,15 +887,12 @@ describe("timeline virtualization", () => {
     };
     const events: SandboxEvent[] = [
       task,
-      ...Array.from(
-        { length: 500 },
-        (_, index): SandboxEvent => ({
-          type: "user_message",
-          content: `Message ${index}`,
-          messageId: `message-${index}`,
-          timestamp: index + 2,
-        })
-      ),
+      ...Array.from({ length: 500 }, (_, index): SandboxEvent => ({
+        type: "user_message",
+        content: `Message ${index}`,
+        messageId: `message-${index}`,
+        timestamp: index + 2,
+      })),
     ];
     const { container } = render(<SessionTimeline {...baseTimelineProps} events={events} />);
     const taskButton = screen.getByRole("button", { name: /Task Inspect the timeline/ });

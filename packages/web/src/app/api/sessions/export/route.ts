@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const EXPORT_PARAMETERS = new Set([
@@ -13,9 +12,6 @@ const EXPORT_PARAMETERS = new Set([
 ]);
 
 export async function GET(request: Request): Promise<Response> {
-  const session = await getServerAuthSession();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const searchParams = new URLSearchParams();
   for (const [key, value] of new URL(request.url).searchParams) {
     if (EXPORT_PARAMETERS.has(key)) searchParams.append(key, value);

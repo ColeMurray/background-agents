@@ -120,7 +120,10 @@ export function AutomationTargetPickerMenu({
             {environments.map((environment) => {
               const selected = selectedEnvironmentIds.includes(environment.id);
               const disabled =
-                multipleSelectionEnabled && !selected && targetCount >= MAX_AUTOMATION_REPOSITORIES;
+                environment.capabilities?.canUse !== true ||
+                (multipleSelectionEnabled &&
+                  !selected &&
+                  targetCount >= MAX_AUTOMATION_REPOSITORIES);
 
               return (
                 <TargetOption

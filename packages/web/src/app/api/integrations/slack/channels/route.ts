@@ -1,21 +1,18 @@
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { controlPlaneSlackChannelsResponseSchema } from "@open-inspect/shared/slack";
 
 /**
  * List Slack channels for the automation channel picker. Proxies to the control
- * plane (which holds the bot token) and always responds 200 with a `channels`
- * array so the picker degrades to manual channel-ID entry on any failure.
+ * plane (which holds the bot token). Authentication failures stay 401; other
+ * failures return a `channels` array so the picker degrades to manual ID entry.
  */
 export async function GET() {
-  const session = await getServerAuthSession();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const response = await controlPlaneUserFetch("/integration-settings/slack/channels");
+    if (response.status === 401) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (!response.ok) {
       const error = await response.text();
       console.error("Control plane slack channels error:", error);

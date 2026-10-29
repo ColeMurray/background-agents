@@ -1,4 +1,7 @@
-import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import {
+  sandboxIngressEventSchema,
+  type SandboxIngressEvent,
+} from "@open-inspect/shared/types/sandbox-events";
 import { clientRequestIdSchema, promptValidationError } from "@open-inspect/shared/types/prompts";
 import type { ZodError } from "zod";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
@@ -31,8 +34,7 @@ type BoundarySchema<T> = {
 
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
 type ParsedMessage<T> =
-  | { valid: true; data: T }
-  | { valid: false; raw?: unknown; error?: ZodError };
+  { valid: true; data: T } | { valid: false; raw?: unknown; error?: ZodError };
 
 export interface SessionClientCommands<Connection, Client extends ConnectedClient> {
   subscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;
@@ -57,7 +59,7 @@ export interface SessionMessageRouterDeps<Connection, Client extends ConnectedCl
   log: Logger;
   sockets: SocketRegistry<Connection, Client>;
   clientCommands: SessionClientCommands<Connection, Client>;
-  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
+  processSandboxEvent: (event: SandboxIngressEvent) => Promise<void>;
   clock: Clock;
 }
 
@@ -89,7 +91,7 @@ export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
   }
 
   private async handleSandboxMessage(message: string): Promise<void> {
-    const parsed = this.parseMessage(message, "sandbox", sandboxEventSchema);
+    const parsed = this.parseMessage(message, "sandbox", sandboxIngressEventSchema);
     if (!parsed.valid) return;
 
     try {

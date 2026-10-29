@@ -41,6 +41,7 @@ vi.mock("@/hooks/use-active-team", () => ({
     setActiveTeam: mocks.setActiveTeam,
     teams: [],
     scope: mocks.scope,
+    canListAllTeams: false,
     requireTeamOnCreate: false,
     loading: mocks.teamLoading,
     error: mocks.teamError,

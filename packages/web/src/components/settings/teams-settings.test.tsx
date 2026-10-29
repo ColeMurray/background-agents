@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   setMember: vi.fn(),
   hasPermission: false,
+  viewerId: "user_viewer",
   candidates: [] as Array<{
     userId: string;
     displayName: string | null;
@@ -46,6 +47,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
     hasPermission: () => mocks.hasPermission,
+  }),
+}));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({
+    data: { user: { id: mocks.viewerId } },
+    status: "authenticated",
   }),
 }));
 vi.mock("@/hooks/use-teams", () => ({
@@ -83,6 +90,7 @@ const capabilities = {
   canManageRepositories: false,
   canManageBindings: false,
   canManageAutomations: false,
+  canManageEnvironments: false,
   canManageSecrets: false,
   canArchive: true,
 };
@@ -110,6 +118,7 @@ beforeEach(() => {
   mocks.hasPermission = true;
   mocks.candidates = [];
   mocks.teams = [];
+  mocks.viewerId = "user_viewer";
   vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ requireTeamOnCreate: false }));
 });
 afterEach(() => {
@@ -252,6 +261,35 @@ describe("Teams settings", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Archive team" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Join policy" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Default visibility" })).toBeDisabled();
+  });
+
+  it("PATCHes join policy and default visibility chosen from the dropdowns", async () => {
+    mocks.update.mockResolvedValue({
+      ...team,
+      joinPolicy: "open",
+      defaultVisibility: "team",
+      capabilities,
+    });
+    render(<TeamDetail team={{ ...team, capabilities }} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Join policy" }));
+    await user.click(await screen.findByRole("option", { name: "Open" }));
+    await user.click(screen.getByRole("combobox", { name: "Default visibility" }));
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Workspace",
+      "Team",
+    ]);
+    expect(screen.queryByRole("option", { name: "Private" })).toBeNull();
+    await user.click(screen.getByRole("option", { name: "Team" }));
+    expect(screen.getByRole("combobox", { name: "Join policy" })).toHaveTextContent("Open");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith({
+        joinPolicy: "open",
+        defaultVisibility: "team",
+      })
+    );
   });
 
   it("enables metadata and lifecycle controls with capabilities", () => {
@@ -334,9 +372,9 @@ describe("Teams settings", () => {
         members={[{ ...member, role: "member" }]}
       />
     );
-    fireEvent.change(screen.getByRole("combobox", { name: "Role for Ada" }), {
-      target: { value: "lead" },
-    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Role for Ada" }));
+    await user.click(await screen.findByRole("option", { name: "Lead" }));
     await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_one", "lead"));
   });
 
@@ -356,5 +394,49 @@ describe("Teams settings", () => {
     await user.click(await screen.findByRole("option", { name: /Grace/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() => expect(mocks.setMember).toHaveBeenCalledWith("user_two", "member"));
+  });
+
+  it("lets a member without manage capability leave but not remove others", async () => {
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.viewerId = "user_two";
+    const grace: TeamMember = {
+      ...member,
+      userId: "user_two",
+      role: "member",
+      displayName: "Grace",
+      email: "grace@example.com",
+    };
+    render(
+      <TeamMembersTable
+        team={{
+          ...team,
+          capabilities: { ...capabilities, canManageMembers: false, canLeave: true },
+        }}
+        members={[member, grace]}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Role for Grace" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Grace" }));
+    await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith("user_two"));
+  });
+
+  it("keeps a managing sole lead from removing themselves", () => {
+    mocks.viewerId = "user_one";
+    const grace: TeamMember = {
+      ...member,
+      userId: "user_two",
+      role: "member",
+      displayName: "Grace",
+      email: "grace@example.com",
+    };
+    render(
+      <TeamMembersTable
+        team={{ ...team, capabilities: { ...capabilities, canLeave: false } }}
+        members={[member, grace]}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Remove Ada" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove Grace" })).toBeEnabled();
   });
 });

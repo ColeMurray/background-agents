@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 
 interface ArchiveSessionDialogProps {
   open: boolean;
@@ -19,20 +10,13 @@ interface ArchiveSessionDialogProps {
 
 export function ArchiveSessionDialog({ open, onOpenChange, onConfirm }: ArchiveSessionDialogProps) {
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Archive session</AlertDialogTitle>
-          <AlertDialogDescription>
-            Archive this session? You can restore archived sessions from Settings &gt; Data
-            Controls.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>Archive</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <ConfirmationDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Archive session"
+      description="Archive this session? You can restore archived sessions from Settings > Data Controls."
+      actionLabel="Archive"
+      onConfirm={onConfirm}
+    />
   );
 }

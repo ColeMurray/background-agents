@@ -5,6 +5,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "./types";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import {
   linearCompletionCallbackSchema,
   linearToolCallCallbackSchema,
@@ -15,6 +16,9 @@ import {
   emitAgentActivity,
   postIssueComment,
   updateAgentSession,
+  fetchIssueDetails,
+  fetchIssueTeamIdWithApiKey,
+  type LinearApiClient,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -22,6 +26,7 @@ import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
 import { rejectInvalidCallback } from "./callbacks/reject-invalid-callback";
+import { lookupIssueSession } from "./kv-store";
 
 const log = createLogger("callback");
 const EVENT_SIZE_ERROR =
@@ -226,6 +231,48 @@ callbacksRouter.post("/tool_call", async (c) => {
 
 // ─── Completion Callback ─────────────────────────────────────────────────────
 
+const COMPLETION_WITHHELD_MESSAGE =
+  "The coding session finished, but its results cannot be shared on this issue. Open the session in Open-Inspect to review them.";
+
+type DeliveryTeam = { linearTeamId: string } | { withheldReason: string };
+
+/**
+ * Admit completion content only for the issue's current Linear team. A signed launch team
+ * is evidence of where the session started, not of where the issue lives now; legacy
+ * callbacks without one fall back to the current team, whose scoped read fails closed.
+ */
+async function resolveDeliveryTeam(
+  env: Env,
+  sessionId: string,
+  context: LinearCompletionCallback["context"],
+  client: LinearApiClient | null
+): Promise<DeliveryTeam> {
+  let currentTeamId: string | null = null;
+  try {
+    if (client) {
+      const issue = await fetchIssueDetails(client, context.issueId);
+      currentTeamId = issue?.id === context.issueId ? issue.team.id.trim() || null : null;
+    } else if (env.LINEAR_API_KEY) {
+      currentTeamId = await fetchIssueTeamIdWithApiKey(env.LINEAR_API_KEY, context.issueId);
+    }
+  } catch {
+    currentTeamId = null;
+  }
+  if (!currentTeamId) return { withheldReason: "issue_team_unverified" };
+
+  let launchTeamId = context.linearTeamId?.trim();
+  if (!launchTeamId) {
+    const mapping = await lookupIssueSession(env, context.issueId);
+    if (mapping?.sessionId === sessionId && mapping.issueId === context.issueId) {
+      launchTeamId = mapping.linearTeamId?.trim();
+    }
+  }
+  if (launchTeamId && launchTeamId !== currentTeamId) {
+    return { withheldReason: "issue_team_changed" };
+  }
+  return { linearTeamId: currentTeamId };
+}
+
 async function handleCompletionCallback(
   payload: LinearCompletionCallback,
   env: Env,
@@ -235,13 +282,44 @@ async function handleCompletionCallback(
   const { sessionId, context } = payload;
 
   try {
-    // Extract rich agent response from events
-    const agentResponse = await extractAgentResponse(env, sessionId, payload.messageId, traceId);
+    const client =
+      context.organizationId && context.appUserId
+        ? await getLinearClient(env, context.organizationId, context.appUserId)
+        : null;
+    const deliveryTeam = await resolveDeliveryTeam(env, sessionId, context, client);
+    let agentResponse: AgentResponse | null = null;
+    let withheldReason = "withheldReason" in deliveryTeam ? deliveryTeam.withheldReason : null;
+    if ("linearTeamId" in deliveryTeam) {
+      try {
+        agentResponse = await extractAgentResponse(
+          env,
+          sessionId,
+          payload.messageId,
+          deliveryTeam.linearTeamId,
+          traceId
+        );
+      } catch {
+        withheldReason = "session_read_failed";
+      }
+    }
+    if (withheldReason) {
+      log.warn("callback.complete", {
+        trace_id: traceId,
+        session_id: sessionId,
+        issue_id: context.issueId,
+        outcome: "withheld",
+        skip_reason: withheldReason,
+        duration_ms: Date.now() - startTime,
+      });
+    }
 
     let message: string;
     let activityType: "response" | "error";
 
-    if (payload.success) {
+    if (!agentResponse) {
+      activityType = "error";
+      message = COMPLETION_WITHHELD_MESSAGE;
+    } else if (payload.success) {
       activityType = "response";
       message = formatAgentResponse(agentResponse);
     } else {
@@ -263,7 +341,6 @@ async function handleCompletionCallback(
 
     // Emit via Agent API if we have session context
     if (context.agentSessionId && context.organizationId && context.appUserId) {
-      const client = await getLinearClient(env, context.organizationId, context.appUserId);
       if (client) {
         const activityDelivered = await emitAgentActivity(client, context.agentSessionId, {
           type: activityType,
@@ -287,11 +364,11 @@ async function handleCompletionCallback(
 
         // Update plan to completed/failed
         await updateAgentSession(client, context.agentSessionId, {
-          plan: makePlan(payload.success ? "completed" : "failed"),
+          plan: makePlan(payload.success && agentResponse ? "completed" : "failed"),
         });
 
         // Update externalUrls with PR link if available
-        const prArtifact = agentResponse.artifacts.find((a) => a.type === "pr" && a.url);
+        const prArtifact = agentResponse?.artifacts.find((a) => a.type === "pr" && a.url);
         if (prArtifact) {
           const urls = [
             { label: "View Session", url: `${env.WEB_APP_URL}/session/${sessionId}` },
@@ -307,10 +384,10 @@ async function handleCompletionCallback(
           issue_identifier: context.issueIdentifier,
           agent_session_id: context.agentSessionId,
           outcome: payload.success ? "success" : "failed",
-          has_pr: agentResponse.artifacts.some((a) => a.type === "pr" && a.url),
+          has_pr: Boolean(prArtifact),
           agent_success: payload.success,
-          tool_call_count: agentResponse.toolCalls.length,
-          artifact_count: agentResponse.artifacts.length,
+          tool_call_count: agentResponse?.toolCalls.length ?? 0,
+          artifact_count: agentResponse?.artifacts.length ?? 0,
           delivery: "agent_activity",
           delivery_outcome: "success",
           duration_ms: Date.now() - startTime,

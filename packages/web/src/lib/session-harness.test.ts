@@ -56,3 +56,39 @@ describe("resolveHarnessModelSelection", () => {
     expect(selection.options).toEqual([]);
   });
 });
+
+describe("Codex model selection", () => {
+  it("shows only catalog-qualified models from the enabled picker options", () => {
+    const native: ModelCategory = {
+      category: "OpenAI",
+      models: [
+        { id: "openai/gpt-6.1-sol", name: "GPT-6.1 Sol", description: "" },
+        ...options[1].models,
+      ],
+    };
+    expect(filterModelOptionsForHarness("codex", [options[0], native])).toEqual([
+      { ...native, models: [native.models[0]] },
+    ]);
+  });
+  const request = {
+    harness: "codex" as const,
+    preference: { model: "openai/gpt-5.6-sol", reasoningEffort: "max" },
+    enabledModels: ["openai/gpt-5.6-sol"],
+    enabledModelOptions: [],
+    loading: false,
+  };
+  it("keeps the native max selection", () => {
+    expect(resolveHarnessModelSelection(request)).toMatchObject({
+      availability: { status: "available" },
+      reasoningEffort: "max",
+    });
+  });
+  it("never substitutes an unsupported enabled model", () => {
+    expect(
+      resolveHarnessModelSelection({
+        ...request,
+        enabledModels: ["openai/gpt-5.4"],
+      }).availability.status
+    ).toBe("unavailable");
+  });
+});

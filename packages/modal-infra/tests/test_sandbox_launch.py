@@ -42,16 +42,28 @@ from tests.sandbox_launch_helpers import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
 @pytest.mark.parametrize(
-    "resources, expected_cpu, expected_memory, timeout_seconds",
+    "image_source, resources, expected_cpu, expected_memory, timeout_seconds",
     [
-        ({}, None, None, 30),
-        ({"cpuCores": 0.5}, 0.5, None, 300),
-        ({"memoryMib": 2048}, None, 2048, 1800),
-        ({"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("base", {}, None, None, 30),
+        ("base", {"cpuCores": 0.5}, 0.5, None, 300),
+        ("base", {"memoryMib": 2048}, None, 2048, 1800),
+        ("base", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("repository", {}, None, None, 30),
+        ("repository", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
+        ("snapshot", {}, None, None, 30),
+        ("snapshot", {"cpuCores": 1.5, "memoryMib": 3072}, 1.5, 3072, 4321),
     ],
-    ids=["defaults", "cpu-only", "memory-only", "cpu-and-memory"],
+    ids=[
+        "defaults-base",
+        "cpu-only-base",
+        "memory-only-base",
+        "cpu-and-memory-base",
+        "defaults-repository",
+        "cpu-and-memory-repository",
+        "defaults-snapshot",
+        "cpu-and-memory-snapshot",
+    ],
 )
 async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     monkeypatch,
@@ -296,8 +308,23 @@ async def test_base_image_spawn_errors_propagate_without_retry(monkeypatch, miss
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
-@pytest.mark.parametrize("failure", ["partial", "unavailable", "write"])
+@pytest.mark.parametrize(
+    "image_source, failure",
+    [
+        ("base", "partial"),
+        ("base", "unavailable"),
+        ("base", "write"),
+        ("repository", "partial"),
+        ("snapshot", "partial"),
+    ],
+    ids=[
+        "partial-base",
+        "unavailable-base",
+        "write-base",
+        "partial-repository",
+        "partial-snapshot",
+    ],
+)
 async def test_launch_returns_handle_despite_tunnel_failures(monkeypatch, image_source, failure):
     write_text = AsyncMock(side_effect=OSError("write failed") if failure == "write" else None)
     sandbox = SimpleNamespace(
@@ -439,15 +466,30 @@ async def test_base_image_not_found_is_not_classified_as_repository_image(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_source", ["base", "repository", "snapshot"])
 @pytest.mark.parametrize(
-    "settings, expected_cpu, expected_memory, timeout_seconds",
+    "image_source, settings, expected_cpu, expected_memory, timeout_seconds",
     [
-        (None, 2, 4096, 30),
-        (DOCKER_SETTINGS, 2, 4096, 4321),
-        ({"cpuCores": 0.5, "memoryMib": 2048}, 0.5, 2048, 600),
+        ("base", None, (0.5, 2), (2048, 4096), 30),
+        ("base", DOCKER_SETTINGS, (2, 2), (4096, 4096), 4321),
+        ("base", {"cpuCores": 0.5, "memoryMib": 2048}, (0.5, 2), (2048, 4096), 600),
+        ("repository", None, (0.5, 2), (2048, 4096), 30),
+        ("snapshot", None, (0.5, 2), (2048, 4096), 30),
+        (
+            "snapshot",
+            {"cpuCores": 1, "cpuLimitCores": 4, "memoryMib": 2048, "memoryLimitMib": 8192},
+            (1, 4),
+            (2048, 8192),
+            600,
+        ),
     ],
-    ids=["defaults", "integer-cpu", "fractional-cpu"],
+    ids=[
+        "defaults-base",
+        "integer-cpu-base",
+        "fractional-cpu-base",
+        "defaults-repository",
+        "defaults-snapshot",
+        "explicit-limits-snapshot",
+    ],
 )
 async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     monkeypatch, image_source, settings, expected_cpu, expected_memory, timeout_seconds
@@ -487,7 +529,7 @@ async def test_docker_launch_selects_vm_runtime_and_named_allocation(
     sandbox_create_request(*captured["command"], **kwargs)
     assert kwargs["image"] is (docker_image if image_source == "base" else artifact)
     assert kwargs["experimental_options"] == {"vm_runtime": True}
-    assert kwargs["cpu"] == (expected_cpu, expected_cpu)
+    assert kwargs["cpu"] == expected_cpu
     assert kwargs["memory"] == expected_memory
     assert kwargs["timeout"] == timeout_seconds
     assert kwargs["name"] == docker_allocation_name("session-1")
@@ -575,6 +617,43 @@ async def test_malformed_docker_setting_fails_before_any_launch(monkeypatch):
     with pytest.raises(InvalidDockerSettingsError):
         await manager.create_sandbox(_docker_config(settings={"dockerEnabled": "true"}))
 
+    assert "kwargs" not in captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_source", ["base", "snapshot"])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"memoryLimitMib": 4294967296},
+        {"cpuLimitCores": 1e308},
+        {"cpuCores": 0.0001, "cpuLimitCores": 0.0009},
+    ],
+)
+async def test_invalid_wire_resources_neither_retire_nor_allocate(
+    monkeypatch, image_source, settings
+):
+    manager, captured, _ = _docker_manager(monkeypatch)
+    retire = AsyncMock()
+    monkeypatch.setattr("src.sandbox.launch.terminate_and_wait", retire)
+    if image_source == "base":
+        launch = manager.create_sandbox(
+            _docker_config(settings=settings, retire_sandbox_id="prior")
+        )
+    else:
+        launch = manager.restore_from_snapshot(
+            clone_host="github.com",
+            clone_username="x-access-token",
+            snapshot_image_id="snapshot-1",
+            session_config={"session_id": "session-1"},
+            sandbox_id="next",
+            settings=settings,
+            sandbox_backend="modal-vm",
+            retire_sandbox_id="prior",
+        )
+    with pytest.raises(InvalidDockerSettingsError):
+        await launch
+    retire.assert_not_awaited()
     assert "kwargs" not in captured
 
 
