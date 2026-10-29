@@ -451,6 +451,35 @@ describe("known service actor profile claims", () => {
     ).resolves.toEqual({ userId: nameless.id });
   });
 
+  it("admits a known actor's request when its route's claims extractor throws", async () => {
+    const known = await enrollNameless("slack", "U-EXTRACT-FAIL");
+    // A known actor's claims are read from a clone of the request.
+    vi.spyOn(Request.prototype, "clone").mockImplementationOnce(() => {
+      throw new Error("claims extractor failure");
+    });
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const created = await createSession("slack-bot", "slack:U-EXTRACT-FAIL", {
+      actorDisplayName: "Extract Failure",
+      actorEmail: "extract@corp.test",
+    });
+
+    expect(created.status).toBe(201);
+    expect(warnings.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+      expect.objectContaining({
+        event: "auth.service_actor_profile_failed",
+        error_message: "claims extractor failure",
+      })
+    );
+    await expect(users.getUserById(known.id)).resolves.toMatchObject({
+      displayName: null,
+      email: null,
+    });
+    await expect(
+      env.DB.prepare("SELECT user_id AS userId FROM sessions").first<{ userId: string }>()
+    ).resolves.toEqual({ userId: known.id });
+  });
+
   it("never claims an email from a provider that does not attest it", async () => {
     const created = await serviceFetch(SESSIONS_URL, {
       service: "github-bot",

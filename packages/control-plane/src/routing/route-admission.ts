@@ -34,6 +34,7 @@ import type {
   RouteAuthentication,
   RouteAuthorizationRequirement,
   RouteParams,
+  ServiceActorClaimsResult,
 } from "../routes/shared";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
@@ -515,9 +516,13 @@ async function completeKnownActorProfile(
   actor: KnownActor
 ): Promise<void> {
   if (!policy.serviceActorClaims) return;
-  const prepared = await policy.serviceActorClaims(request.clone(), ctx);
-  if (prepared.kind === "rejected") return;
-  await claimKnownActorProfile(ctx, actor, prepared.claims);
+  let prepared: ServiceActorClaimsResult;
+  try {
+    prepared = await policy.serviceActorClaims(request.clone(), ctx);
+  } catch (cause) {
+    return warnProfileClaimFailed(ctx, cause);
+  }
+  if (prepared.kind === "claims") await claimKnownActorProfile(ctx, actor, prepared.claims);
 }
 
 async function claimKnownActorProfile(
@@ -532,13 +537,17 @@ async function claimKnownActorProfile(
     );
     await profileClaim.claim(actor, claims);
   } catch (cause) {
-    logger.warn("Failed to complete known service actor profile", {
-      event: "auth.service_actor_profile_failed",
-      error: cause instanceof Error ? cause : String(cause),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
+    warnProfileClaimFailed(ctx, cause);
   }
+}
+
+function warnProfileClaimFailed(ctx: RequestContext, cause: unknown): void {
+  logger.warn("Failed to complete known service actor profile", {
+    event: "auth.service_actor_profile_failed",
+    error: cause instanceof Error ? cause : String(cause),
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
