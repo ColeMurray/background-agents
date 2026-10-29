@@ -62,6 +62,7 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     "v76-child-output-discovery",
     "v77-codex-pinned-binary",
     "v78-tunnel-environment-recovery",
+    "v79-persistent-model-prices",
   ])(
     "rebuilds outdated Modal image %s even when repository SHAs are unchanged",
     (runtimeVersion) => {

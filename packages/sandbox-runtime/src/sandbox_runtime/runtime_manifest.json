@@ -1,9 +1,9 @@
 {
-  "runtimeVersion": "v79-persistent-model-prices",
-  "generation": 79,
+  "runtimeVersion": "v80-orphaned-prompt-report",
+  "generation": 80,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 79,
+  "minimumRebuildGeneration": 80,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,
