@@ -620,7 +620,7 @@ Sessions stream events to all connected clients via WebSocket.
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | `sandbox_spawning` | Sandbox is being created                                                                                                        |
 | `sandbox_status`   | Sandbox moved between `pending`, `spawning`, `connecting`, `warming`, `ready`, `snapshotting`, `stale`, `stopped`, and `failed` |
-| `sandbox_event`    | Tool call, token stream, boot phase (`boot_progress`), or other agent event                                                     |
+| `sandbox_event`    | Tool call, token stream, reasoning progress (`reasoning`), boot phase (`boot_progress`), or other agent event                   |
 | `artifact_created` | PR created, screenshot captured                                                                                                 |
 | `presence_update`  | User joined or left the session                                                                                                 |
 | `session_status`   | Session state changed                                                                                                           |

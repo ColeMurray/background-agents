@@ -1,5 +1,6 @@
 import type { SandboxEvent } from "@/types/session";
 import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import { reasoningKey } from "@/lib/reasoning";
 import { isSubtaskRootTool } from "@/lib/tool-formatters";
 
 export type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
@@ -26,6 +27,7 @@ const directTimelineEventEligibility = {
   user_message: (event: SandboxEvent) =>
     event.type === "user_message" && Boolean(event.content || event.attachments?.length),
   token: (event: SandboxEvent) => event.type === "token" && Boolean(event.content),
+  reasoning: (event: SandboxEvent) => event.type === "reasoning" && event.summaryCount > 0,
   tool_result: (event: SandboxEvent) => event.type === "tool_result" && Boolean(event.error),
   git_sync: () => true,
   artifact: (event: SandboxEvent) =>
@@ -113,6 +115,7 @@ function dedupeEvents(events: SandboxEvent[]): SandboxEvent[] {
   const toolIndexes = new Map<string, number>();
   const completionMessageIds = new Set<string>();
   const tokenIndexes = new Map<string, number>();
+  const reasoningIndexes = new Map<string, number>();
 
   for (const event of events) {
     if (event.type === "tool_call" && event.callId) {
@@ -120,6 +123,16 @@ function dedupeEvents(events: SandboxEvent[]): SandboxEvent[] {
       const index = toolIndexes.get(key);
       if (index === undefined) {
         toolIndexes.set(key, result.length);
+        result.push(event);
+      } else {
+        result[index] = event;
+      }
+    } else if (event.type === "reasoning") {
+      // Cumulative per step: the newest state stays where the step began reasoning.
+      const key = reasoningKey(event);
+      const index = reasoningIndexes.get(key);
+      if (index === undefined) {
+        reasoningIndexes.set(key, result.length);
         result.push(event);
       } else {
         result[index] = event;

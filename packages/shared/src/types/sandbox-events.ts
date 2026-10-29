@@ -96,6 +96,13 @@ export const sandboxGenerationSchema = z.object({
   createdAt: z.number().int().positive(),
 });
 
+const reasoningSummarySchema = z.object({
+  /** The provider's display summary of one finished reasoning segment, trimmed by the runtime. */
+  text: z.string(),
+  /** Epoch ms (runtime clock) when the segment finished. */
+  at: z.number(),
+});
+
 const nonArtifactSandboxEventSchemas = [
   sandboxEventBaseSchema.extend({
     type: z.literal("heartbeat"),
@@ -162,6 +169,23 @@ const nonArtifactSandboxEventSchemas = [
     isSubtask: z.boolean().optional(),
     childSessionId: z.string().optional(),
     taskCallId: z.string().optional(),
+  }),
+  // Reasoning progress for one model step. Like `token`, each event carries
+  // the step's whole state so far, so storage keeps one row per step. Only the
+  // provider's display summaries are forwarded, never raw reasoning. Live
+  // ingest drops unknown union entries, so this entry must exist before
+  // runtimes emit it.
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("reasoning"),
+    stepId: z.string().min(1),
+    /** Epoch ms (runtime clock) when the step's first reasoning segment started. */
+    startedAt: z.number(),
+    /** Epoch ms (runtime clock) of the step's latest reasoning segment start or finish. */
+    updatedAt: z.number(),
+    /** The most recent summaries, oldest first, capped by the runtime. */
+    summaries: z.array(reasoningSummarySchema),
+    /** Every summary the step produced, including any the cap dropped. */
+    summaryCount: z.number().int().nonnegative(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_result"),
@@ -307,6 +331,7 @@ export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
 export type EventType = SandboxEvent["type"];
 
 export type BootProgressEvent = Extract<SandboxEvent, { type: "boot_progress" }>;
+export type ReasoningEvent = Extract<SandboxEvent, { type: "reasoning" }>;
 
 /** The boot phase a `boot_progress` event reports: the event without its envelope. */
 export function toSandboxBootPhase(event: BootProgressEvent): SandboxBootPhase {

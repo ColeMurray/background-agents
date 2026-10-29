@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { LiveReasoning, ReasoningRow } from "@/components/reasoning-progress";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { SessionWorkGroup } from "@/components/session-work-group";
@@ -35,7 +36,9 @@ import {
   type TimelineVirtualRow,
 } from "@/lib/timeline-virtual-rows";
 import { toUiArtifactMetadata } from "@/lib/session-socket/artifact-metadata";
+import { reasoningKey, selectLiveReasoning } from "@/lib/reasoning";
 import type { SandboxEvent } from "@/types/session";
+import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
@@ -51,6 +54,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 const EMPTY_PROMPT_QUEUE: PromptQueueItem[] = [];
 const EMPTY_EXPANDED_SECTIONS: ReadonlySet<string> = new Set();
 const NOOP_TOGGLE_SECTION = () => {};
+const NOOP_TOGGLE_REASONING = () => {};
 const MAX_AUTOFIX_RAW_FALLBACK_CHARS = 4_000;
 
 export function SessionTimeline({
@@ -89,18 +93,24 @@ export function SessionTimeline({
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const [expandedTaskSections, setExpandedTaskSections] = useState<Set<string>>(new Set());
+  const [expandedReasoning, setExpandedReasoning] = useState<Set<string>>(new Set());
   const [expandedAutofixSections, setExpandedAutofixSections] = useState<
     Map<string, ReadonlySet<string>>
   >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const liveReasoning = useMemo(
+    () => selectLiveReasoning(events, isProcessing),
+    [events, isProcessing]
+  );
   const virtualRows = useMemo(
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
         isProcessing,
+        liveReasoning,
       }),
-    [isProcessing, timelineItems]
+    [isProcessing, liveReasoning, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,
@@ -190,6 +200,15 @@ export function SessionTimeline({
     });
   }, []);
 
+  const toggleReasoning = useCallback((key: string) => {
+    setExpandedReasoning((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   const toggleAutofixSection = useCallback((messageId: string, key: string) => {
     setExpandedAutofixSections((expanded) => {
       const next = new Map(expanded);
@@ -227,6 +246,10 @@ export function SessionTimeline({
             : EMPTY_EXPANDED_SECTIONS
         }
         onToggleAutofixSection={toggleAutofixSection}
+        isReasoningExpanded={
+          item.event.type === "reasoning" && expandedReasoning.has(reasoningKey(item.event))
+        }
+        onToggleReasoning={toggleReasoning}
         onOpenMedia={onOpenMedia}
       />
     );
@@ -265,7 +288,7 @@ export function SessionTimeline({
   const renderVirtualRow = (row: TimelineVirtualRow): ReactNode => {
     switch (row.type) {
       case "thinking":
-        return <ThinkingIndicator />;
+        return <ThinkingIndicator reasoning={row.reasoning} />;
       case "item":
         return renderTimelineItem(row.item);
     }
@@ -307,7 +330,8 @@ export function SessionTimeline({
   );
 }
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ reasoning }: { reasoning: ReasoningEvent | null }) {
+  if (reasoning) return <LiveReasoning event={reasoning} />;
   return (
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
@@ -345,6 +369,8 @@ type EventRendererProps = {
   onCopyContent: (content: string) => void;
   expandedAutofixSections: ReadonlySet<string>;
   onToggleAutofixSection: (messageId: string, key: string) => void;
+  isReasoningExpanded: boolean;
+  onToggleReasoning: (key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 };
 
@@ -603,6 +629,19 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
   );
 }
 
+function ReasoningEventRow({ event, isReasoningExpanded, onToggleReasoning }: EventRendererProps) {
+  if (event.type !== "reasoning") return null;
+
+  return (
+    <ReasoningRow
+      event={event}
+      time={formatEventTime(event)}
+      isExpanded={isReasoningExpanded}
+      onToggle={() => onToggleReasoning(reasoningKey(event))}
+    />
+  );
+}
+
 function ToolResultEvent({ event }: EventRendererProps) {
   if (event.type !== "tool_result") return null;
 
@@ -703,6 +742,7 @@ function formatEventTime(event: SandboxEvent): string {
 const eventRenderers = {
   user_message: UserMessageEvent,
   token: AssistantMessageEvent,
+  reasoning: ReasoningEventRow,
   tool_result: ToolResultEvent,
   git_sync: GitSyncEvent,
   artifact: ArtifactEvent,
@@ -719,6 +759,8 @@ export const EventItem = memo(function EventItem({
   participantProfiles,
   expandedAutofixSections = EMPTY_EXPANDED_SECTIONS,
   onToggleAutofixSection = NOOP_TOGGLE_SECTION,
+  isReasoningExpanded = false,
+  onToggleReasoning = NOOP_TOGGLE_REASONING,
   onOpenMedia,
 }: {
   event: SandboxEvent;
@@ -727,6 +769,8 @@ export const EventItem = memo(function EventItem({
   participantProfiles: Record<string, SessionParticipantProfile>;
   expandedAutofixSections?: ReadonlySet<string>;
   onToggleAutofixSection?: (messageId: string, key: string) => void;
+  isReasoningExpanded?: boolean;
+  onToggleReasoning?: (key: string) => void;
   onOpenMedia: (artifactId: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -766,6 +810,8 @@ export const EventItem = memo(function EventItem({
     onCopyContent: handleCopyContent,
     expandedAutofixSections,
     onToggleAutofixSection,
+    isReasoningExpanded,
+    onToggleReasoning,
     onOpenMedia,
   });
 });

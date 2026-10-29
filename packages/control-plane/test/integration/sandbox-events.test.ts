@@ -189,6 +189,59 @@ describe("POST /internal/sandbox-event", () => {
     expect(JSON.parse(events[0].data)).toMatchObject({ status: "completed", timestamp: 2000 });
   });
 
+  it("keeps one reasoning row per step at the step's first timeline position", async () => {
+    const { stub } = await initSession();
+    const promptResponse = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Fix the flaky test", authorId: "user-1", source: "web" }),
+    });
+    const { messageId } = await promptResponse.json<{ messageId: string }>();
+
+    const sendReasoning = async (stepId: string, summaries: string[], timestamp: number) => {
+      const response = await stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "reasoning",
+          messageId,
+          sandboxId: "sb-1",
+          timestamp,
+          stepId,
+          startedAt: 1_000_000,
+          updatedAt: 1_000_000 + summaries.length * 20_000,
+          summaries: summaries.map((text, index) => ({
+            text,
+            at: 1_000_000 + (index + 1) * 20_000,
+          })),
+          summaryCount: summaries.length,
+        }),
+      });
+      expect(response.status).toBe(200);
+    };
+
+    await sendReasoning("step-1", [], 1000);
+    const [opened] = await queryDO<{ created_at: number }>(
+      stub,
+      `SELECT created_at FROM events WHERE type = 'reasoning' AND message_id = ?`,
+      messageId
+    );
+    await sendReasoning("step-1", ["**Planning**", "**Checking CI**"], 1040);
+    await sendReasoning("step-2", ["**Running the tests**"], 1100);
+
+    const rows = await queryDO<{ data: string; created_at: number }>(
+      stub,
+      `SELECT data, created_at FROM events
+       WHERE type = 'reasoning' AND message_id = ? ORDER BY timeline_sequence`,
+      messageId
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].created_at).toBe(opened.created_at);
+    expect(JSON.parse(rows[0].data)).toMatchObject({ stepId: "step-1", summaryCount: 2 });
+    expect(JSON.parse(rows[1].data)).toMatchObject({ stepId: "step-2", summaryCount: 1 });
+  });
+
   it("stores artifact events in both artifacts and events tables", async () => {
     const { stub } = await initSession();
 

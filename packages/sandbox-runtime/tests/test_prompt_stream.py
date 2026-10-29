@@ -12,6 +12,8 @@ import pytest
 
 from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
 from sandbox_runtime.harness.opencode_stream import (
+    MAX_REASONING_SUMMARIES,
+    MAX_REASONING_SUMMARY_CHARS,
     OpenCodePromptStream,
     _Disposition,
     _message_created_epoch_ms,
@@ -207,6 +209,156 @@ class TestApplySseEventDispositions:
         )
 
         assert step.events == []
+
+
+class TestReasoningProgress:
+    """Parent reasoning parts become one cumulative `reasoning` event per step.
+
+    The part sequence mirrors what OpenCode 1.18.29 emits: a reasoning part
+    opens with only `time.start`, its summary arrives as one
+    `message.part.delta`, and the part is re-sent with `time.end` and the text.
+    """
+
+    ASSISTANT_ID = oc_message_id(PROMPT_TS_MS + 1_000, 1, "a")
+    T0 = PROMPT_TS_MS + 2_000
+
+    def authorized(self) -> tuple[OpenCodePromptStream, _PromptState]:
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": self.ASSISTANT_ID,
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": PROMPT_MESSAGE_ID,
+                        "time": {"created": PROMPT_TS_MS + 1_000},
+                    }
+                },
+            ),
+        )
+        self.apply(stream, state, {"type": "step-start", "id": "prt_step_1"})
+        return stream, state
+
+    def apply(self, stream: OpenCodePromptStream, state: _PromptState, part: dict) -> list[dict]:
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {"part": {"sessionID": PARENT_SESSION_ID, "messageID": self.ASSISTANT_ID, **part}},
+            ),
+        )
+        return [event for event in step.events if event["type"] == "reasoning"]
+
+    def reasoning(self, part_id: str, start: int, end: int | None = None, text: str = "") -> dict:
+        time = {"start": start} if end is None else {"start": start, "end": end}
+        return {"type": "reasoning", "id": part_id, "time": time, "text": text}
+
+    def test_first_opening_starts_the_clock_and_each_finish_adds_its_summary(self):
+        stream, state = self.authorized()
+
+        opened = self.apply(stream, state, self.reasoning("prt_r1", self.T0))
+        first = self.apply(
+            stream,
+            state,
+            self.reasoning("prt_r1", self.T0, self.T0 + 26_000, "**Reading the failing test**"),
+        )
+        second_opened = self.apply(stream, state, self.reasoning("prt_r2", self.T0 + 26_005))
+        second = self.apply(
+            stream,
+            state,
+            self.reasoning("prt_r2", self.T0 + 26_005, self.T0 + 47_000, "**Planning the fix**"),
+        )
+
+        assert opened == [
+            {
+                "type": "reasoning",
+                "messageId": "cp-msg-1",
+                "stepId": "prt_step_1",
+                "startedAt": self.T0,
+                "updatedAt": self.T0,
+                "summaries": [],
+                "summaryCount": 0,
+            }
+        ]
+        assert first[0]["summaries"] == [
+            {"text": "**Reading the failing test**", "at": self.T0 + 26_000}
+        ]
+        assert second_opened == []
+        assert second[0]["startedAt"] == self.T0
+        assert second[0]["updatedAt"] == self.T0 + 47_000
+        assert [summary["text"] for summary in second[0]["summaries"]] == [
+            "**Reading the failing test**",
+            "**Planning the fix**",
+        ]
+        assert second[0]["summaryCount"] == 2
+
+    def test_replayed_finish_is_ignored_and_empty_summary_only_advances_the_clock(self):
+        stream, state = self.authorized()
+        finished = self.reasoning("prt_r1", self.T0, self.T0 + 20_000, "**Planning**")
+        self.apply(stream, state, finished)
+
+        replayed = self.apply(stream, state, finished)
+        empty = self.apply(
+            stream, state, self.reasoning("prt_r2", self.T0 + 20_001, self.T0 + 41_000)
+        )
+
+        assert replayed == []
+        assert empty[0]["updatedAt"] == self.T0 + 41_000
+        assert empty[0]["summaryCount"] == 1
+
+    def test_each_step_gets_its_own_run(self):
+        stream, state = self.authorized()
+        self.apply(stream, state, self.reasoning("prt_r1", self.T0, self.T0 + 5_000, "**First**"))
+        self.apply(stream, state, {"type": "step-finish", "id": "prt_finish_1"})
+        self.apply(stream, state, {"type": "step-start", "id": "prt_step_2"})
+
+        later = self.apply(
+            stream, state, self.reasoning("prt_r2", self.T0 + 9_000, self.T0 + 12_000, "**Second**")
+        )
+
+        assert later[0]["stepId"] == "prt_step_2"
+        assert later[0]["startedAt"] == self.T0 + 9_000
+        assert [summary["text"] for summary in later[0]["summaries"]] == ["**Second**"]
+
+    def test_summaries_are_trimmed_and_only_the_newest_are_kept(self):
+        stream, state = self.authorized()
+        long_text = "  " + "x" * (MAX_REASONING_SUMMARY_CHARS + 50) + "\n"
+        total = MAX_REASONING_SUMMARIES + 3
+
+        events: list[dict] = []
+        for index in range(total):
+            text = long_text if index == total - 1 else f"**Thought {index}**"
+            start = self.T0 + index * 1_000
+            events = self.apply(
+                stream, state, self.reasoning(f"prt_r{index}", start, start + 500, text)
+            )
+
+        latest = events[0]
+        assert latest["summaryCount"] == total
+        assert len(latest["summaries"]) == MAX_REASONING_SUMMARIES
+        assert latest["summaries"][0]["text"] == "**Thought 3**"
+        assert latest["summaries"][-1]["text"] == "x" * (MAX_REASONING_SUMMARY_CHARS - 1) + "…"
+
+    def test_child_reasoning_is_not_forwarded(self):
+        stream, state = self.authorized()
+
+        events = stream._handle_part(
+            state,
+            {
+                "sessionID": CHILD_SESSION_ID,
+                "messageID": "msg_child",
+                **self.reasoning("prt_child", self.T0, self.T0 + 1_000, "**Child thought**"),
+            },
+            None,
+            is_subtask=True,
+        )
+
+        assert events == []
+        assert "msg_child" not in state.reasoning_runs
 
 
 class TestSessionTitleDedupe:

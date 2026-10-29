@@ -9,9 +9,11 @@ import type { SqlStorage, TransactionSync } from "./sql-storage";
 import { eventRowSchema, SessionStorageIntegrityError, type EventRow } from "./types";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ReasoningEvent = Extract<SandboxEvent, { type: "reasoning" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
-type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
+type UpsertableEventType =
+  TokenEvent["type"] | ReasoningEvent["type"] | ExecutionCompleteEvent["type"];
 
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
@@ -123,6 +125,16 @@ export class EventRepository {
       ? `token-part:${JSON.stringify([messageId, event.partId])}`
       : `token:${messageId}`;
     this.upsertEventByMessageId("token", messageId, event, createdAt, id, Boolean(event.partId));
+  }
+
+  /**
+   * One row per model step: each event carries the step's whole reasoning
+   * progress, and the row keeps its first timestamp so the step stays where
+   * its reasoning began in the timeline.
+   */
+  upsertReasoningEvent(messageId: string, event: ReasoningEvent, createdAt: number): void {
+    const id = `reasoning:${JSON.stringify([messageId, event.stepId])}`;
+    this.upsertEventByMessageId("reasoning", messageId, event, createdAt, id, true);
   }
 
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {

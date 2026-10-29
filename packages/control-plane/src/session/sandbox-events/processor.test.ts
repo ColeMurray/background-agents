@@ -24,6 +24,7 @@ function createProcessor() {
   };
   const streaming = {
     handleToken: vi.fn(),
+    handleReasoning: vi.fn(),
     handleToolCall: vi.fn(),
     recordTimelineEvent: vi.fn(),
   };
@@ -152,6 +153,36 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
     });
     expect(JSON.stringify(h.log.info.mock.calls)).not.toContain("secret-");
     expect(h.streaming.handleToolCall).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({ messageId: "msg-1" })
+    );
+  });
+
+  it("routes reasoning progress and logs its counts without summary text", async () => {
+    const h = createProcessor();
+    const event = {
+      type: "reasoning",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+      messageId: "msg-1",
+      stepId: "step-1",
+      startedAt: 1_000_000,
+      updatedAt: 1_026_000,
+      summaries: [{ text: "**secret-plan**", at: 1_026_000 }],
+      summaryCount: 1,
+    } satisfies SandboxEvent;
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.log.info).toHaveBeenCalledWith("sandbox.event.processed", {
+      event_type: "reasoning",
+      sandbox_id: "sb-1",
+      message_id: "msg-1",
+      step_id: "step-1",
+      summary_count: 1,
+      duration_ms: expect.any(Number),
+    });
+    expect(JSON.stringify(h.log.info.mock.calls)).not.toContain("secret-");
+    expect(h.streaming.handleReasoning).toHaveBeenCalledWith(
       event,
       expect.objectContaining({ messageId: "msg-1" })
     );

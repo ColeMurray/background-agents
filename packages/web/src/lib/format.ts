@@ -24,6 +24,21 @@ export function formatModelNameLower(modelId: string): string {
 }
 
 /**
+ * Format a duration for prose, e.g. 630_000 → "10m 30s".
+ */
+export function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 1) return "less than a second";
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours > 0 ? `${hours}h` : null, minutes > 0 ? `${minutes}m` : null, `${seconds}s`]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
  * Truncate branch name with ellipsis at start
  * e.g., "feature/very-long-branch-name-here" → "...long-branch-name-here"
  */

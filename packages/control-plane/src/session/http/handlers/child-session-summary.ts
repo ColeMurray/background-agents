@@ -27,7 +27,13 @@ export const FINAL_RESPONSE_MAX_EVENTS = 1000;
 const RECENT_EVENT_DISPLAY_LIMIT = 5;
 const DEFAULT_TRAJECTORY_EVENT_LIMIT = 200;
 const MAX_TRAJECTORY_EVENT_LIMIT = 1000;
-const NOISY_RECENT_EVENT_TYPES = new Set(["token", "heartbeat", "step_start", "step_finish"]);
+const NOISY_RECENT_EVENT_TYPES = new Set([
+  "token",
+  "reasoning",
+  "heartbeat",
+  "step_start",
+  "step_finish",
+]);
 const CHILD_SUMMARY_INCLUDE_VALUES = new Set<string>(CHILD_SESSION_DETAIL_INCLUDES);
 
 interface ChildSummaryOptions {

@@ -37,6 +37,20 @@ export class SandboxStreamingEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
   }
 
+  /**
+   * Reasoning progress narrates a step without being output, so it renews
+   * no activity: the bridge heartbeat already does that while a turn runs.
+   */
+  handleReasoning(
+    event: Extract<SandboxEvent, { type: "reasoning" }>,
+    context: SandboxEventContext
+  ): void {
+    if (context.messageId) {
+      this.eventRepository.upsertReasoningEvent(context.messageId, event, context.now);
+    }
+    this.messenger.broadcast({ type: "sandbox_event", event });
+  }
+
   handleContextCompacted(
     event: Extract<SandboxEvent, { type: "context_compacted" }>,
     context: SandboxEventContext

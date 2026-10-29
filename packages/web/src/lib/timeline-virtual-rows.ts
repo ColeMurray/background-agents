@@ -1,7 +1,10 @@
+import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
+import { reasoningKey } from "./reasoning";
 import type { SessionTimelineItem } from "./timeline-items";
 
 export type TimelineVirtualRow =
-  { type: "item"; id: string; item: SessionTimelineItem } | { type: "thinking"; id: string };
+  | { type: "item"; id: string; item: SessionTimelineItem }
+  | { type: "thinking"; id: string; reasoning: ReasoningEvent | null };
 
 export const TIMELINE_ROW_SIZE_ESTIMATES = {
   status: 40,
@@ -26,13 +29,24 @@ export const TIMELINE_VIRTUALIZER_DEFAULTS = {
 export function buildTimelineVirtualRows({
   items,
   isProcessing,
+  liveReasoning = null,
 }: {
   items: SessionTimelineItem[];
   isProcessing: boolean;
+  /** The step reasoning right now; the thinking row narrates it instead of its item. */
+  liveReasoning?: ReasoningEvent | null;
 }): TimelineVirtualRow[] {
   const rows: TimelineVirtualRow[] = [];
-  for (const item of items) rows.push({ type: "item", id: `item:${item.id}`, item });
-  if (isProcessing) rows.push({ type: "thinking", id: "thinking" });
+  const liveKey = liveReasoning ? reasoningKey(liveReasoning) : null;
+  for (const item of items) {
+    const isLiveReasoning =
+      liveKey !== null &&
+      item.type === "single" &&
+      item.event.type === "reasoning" &&
+      reasoningKey(item.event) === liveKey;
+    if (!isLiveReasoning) rows.push({ type: "item", id: `item:${item.id}`, item });
+  }
+  if (isProcessing) rows.push({ type: "thinking", id: "thinking", reasoning: liveReasoning });
   return rows;
 }
 
@@ -47,6 +61,8 @@ export function estimateTimelineRowSize(row: TimelineVirtualRow): number {
       return TIMELINE_ROW_SIZE_ESTIMATES.userMessage;
     case "artifact":
       return TIMELINE_ROW_SIZE_ESTIMATES.artifact;
+    case "reasoning":
+      return TIMELINE_ROW_SIZE_ESTIMATES.status;
     default:
       return TIMELINE_ROW_SIZE_ESTIMATES.default;
   }

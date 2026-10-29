@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 # yet (their message.updated may arrive after their first parts).
 MAX_PENDING_PART_EVENTS: Final = 2000
 CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
+# A step's reasoning event is re-sent whole on every change, so it keeps only
+# the newest summaries, each trimmed to a display line's worth of text.
+MAX_REASONING_SUMMARIES: Final = 50
+MAX_REASONING_SUMMARY_CHARS: Final = 280
 
 OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
@@ -52,6 +56,28 @@ class _PendingPart:
 
     part: dict[str, Any]
     delta: Any
+
+
+@dataclass
+class _ReasoningRun:
+    """Reasoning progress of one model step, reported whole on every change."""
+
+    started_at_ms: int
+    updated_at_ms: int
+    summaries: list[dict[str, Any]] = field(default_factory=list)
+    summary_count: int = 0
+    finished_part_ids: set[str] = field(default_factory=set)
+
+    def to_event(self, message_id: str, step_id: str) -> dict[str, Any]:
+        return {
+            "type": "reasoning",
+            "messageId": message_id,
+            "stepId": step_id,
+            "startedAt": self.started_at_ms,
+            "updatedAt": self.updated_at_ms,
+            "summaries": list(self.summaries),
+            "summaryCount": self.summary_count,
+        }
 
 
 @dataclass
@@ -74,6 +100,8 @@ class _PromptState:
     # OpenCode re-emits with a corrected cost replaces its earlier value.
     step_costs: dict[str, float] = field(default_factory=dict)
     step_ids: StepIdTracker = field(default_factory=StepIdTracker)
+    # Parent reasoning progress keyed by step id.
+    reasoning_runs: dict[str, _ReasoningRun] = field(default_factory=dict)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -114,22 +142,36 @@ class _StreamStep:
     disposition: _Disposition
 
 
-def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
-    """Read `time.created` off an OpenCode message, or None when it is absent.
+def _epoch_ms(value: Any) -> int | None:
+    """Read an OpenCode epoch-ms timestamp, or None when it is unusable.
 
     Non-finite values are treated as absent rather than converted: `int()`
     raises on NaN and infinity, which would tear down the SSE loop over a
     malformed payload.
     """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value):
+        return None
+    return int(value)
+
+
+def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
+    """Read `time.created` off an OpenCode message, or None when it is absent."""
     time_info = info.get("time")
     if not isinstance(time_info, dict):
         return None
-    created = time_info.get("created")
-    if isinstance(created, bool) or not isinstance(created, (int, float)):
-        return None
-    if not math.isfinite(created):
-        return None
-    return int(created)
+    return _epoch_ms(time_info.get("created"))
+
+
+def _reasoning_summary(text: Any) -> str:
+    """The display summary of a finished reasoning part, trimmed for forwarding."""
+    if not isinstance(text, str):
+        return ""
+    summary = text.strip()
+    if len(summary) > MAX_REASONING_SUMMARY_CHARS:
+        summary = summary[: MAX_REASONING_SUMMARY_CHARS - 1].rstrip() + "…"
+    return summary
 
 
 class OpenCodePromptStream:
@@ -140,8 +182,8 @@ class OpenCodePromptStream:
     2. OpenCode creates assistant messages with parentID = our ascending ID
     3. Filter events to only process parts from our assistant messages
     4. Use the control plane's message_id for events sent back
-    5. Track child sessions (sub-tasks) and forward their non-text events
-       with isSubtask=True
+    5. Track child sessions (sub-tasks) and forward their non-text,
+       non-reasoning events with isSubtask=True
 
     The instance is long-lived (one per bridge); the OpenCode session ID is a
     per-call parameter because the bridge can recreate its OpenCode session.
@@ -595,6 +637,49 @@ class OpenCodePromptStream:
             }
         ]
 
+    def _reasoning_event(self, state: _PromptState, part: dict[str, Any]) -> dict[str, Any] | None:
+        """Fold one parent reasoning part into its step's run and report the run.
+
+        OpenCode sends a reasoning part when its segment opens, with no
+        ``time.end``, and again with its summary when the segment finishes;
+        the summary text itself arrives as a ``message.part.delta`` just before
+        that. Only the step's first opening is reported, which starts the
+        step's clock. Each finish is reported once, so a replayed part changes
+        nothing.
+        """
+        time_info = part.get("time")
+        part_id = part.get("id")
+        if not isinstance(time_info, dict) or not isinstance(part_id, str) or not part_id:
+            return None
+        started = _epoch_ms(time_info.get("start"))
+        ended = _epoch_ms(time_info.get("end"))
+        oc_message_id = part.get("messageID") or ""
+        step_id = state.step_ids.active.get(oc_message_id) or oc_message_id
+        if not step_id:
+            return None
+
+        run = state.reasoning_runs.get(step_id)
+        if ended is None:
+            if run is not None or started is None:
+                return None
+            run = _ReasoningRun(started_at_ms=started, updated_at_ms=started)
+            state.reasoning_runs[step_id] = run
+            return run.to_event(state.message_id, step_id)
+
+        if run is None:
+            run = _ReasoningRun(started_at_ms=started or ended, updated_at_ms=ended)
+            state.reasoning_runs[step_id] = run
+        elif part_id in run.finished_part_ids:
+            return None
+        run.finished_part_ids.add(part_id)
+        run.updated_at_ms = max(run.updated_at_ms, ended)
+        summary = _reasoning_summary(part.get("text"))
+        if summary:
+            run.summary_count += 1
+            run.summaries.append({"text": summary, "at": ended})
+            del run.summaries[:-MAX_REASONING_SUMMARIES]
+        return run.to_event(state.message_id, step_id)
+
     def _parent_error_event_once(self, state: _PromptState, error: object) -> dict[str, Any] | None:
         """Build one parent error event across message.updated and session.error."""
         error_msg = self._extract_error_message(error) or "Unknown error"
@@ -691,6 +776,13 @@ class OpenCodePromptStream:
             if cost is not None:
                 finish_event["cost"] = cost
             events.append(finish_event)
+
+        elif part_type == "reasoning":
+            if is_subtask:
+                return events  # Child reasoning stays inside its task, like child text
+            reasoning_event = self._reasoning_event(state, part)
+            if reasoning_event:
+                events.append(reasoning_event)
 
         if is_subtask:
             child_session_id = part.get("sessionID", "")
