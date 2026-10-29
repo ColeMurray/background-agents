@@ -21,6 +21,8 @@ import type { ParticipantRow } from "../../types";
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
   author: activePromptAuthorSchema,
+  /** The account the parent's prompt was queued under; missing counts as none. */
+  promptAccountUserId: z.string().nullable().optional(),
 });
 
 const childSessionUpdateBodySchema = z.object({
@@ -111,6 +113,7 @@ export class ChildSessionsHandler {
         scmName: promptAuthor.scm_name,
         scmEmail: promptAuthor.scm_email,
       },
+      promptAccountUserId: this.messageRepository.getProcessingPromptAccount(),
     };
 
     return Response.json(context);
@@ -124,7 +127,12 @@ export class ChildSessionsHandler {
       this.messageRepository,
       this.participantRepository
     );
-    return author instanceof Response ? author : Response.json(toActivePromptAuthor(author));
+    return author instanceof Response
+      ? author
+      : Response.json({
+          ...toActivePromptAuthor(author),
+          promptAccountUserId: this.messageRepository.getProcessingPromptAccount(),
+        } satisfies ActivePromptAuthor);
   }
 
   async parentPrompt(request: Request): Promise<Response> {
@@ -156,6 +164,8 @@ export class ChildSessionsHandler {
           content: parsed.data.content,
           authorId: parsed.data.author.userId,
           canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
+          // The follow-up counts as the parent's prompt did, whatever account its author has now.
+          promptAccountUserId: parsed.data.promptAccountUserId ?? null,
           source: "agent",
           scmEnrichment: {
             userId: parsed.data.author.scmUserId,

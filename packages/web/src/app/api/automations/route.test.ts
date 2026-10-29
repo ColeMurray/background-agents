@@ -16,6 +16,7 @@ import { GET, POST } from "./route";
 
 function postRequest(body: unknown) {
   return {
+    cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
     json: async () => body,
   } as unknown as NextRequest;
 }

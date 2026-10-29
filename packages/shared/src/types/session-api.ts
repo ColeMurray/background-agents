@@ -288,6 +288,10 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    // Set by the Slack bot for a one-to-one conversation with the actor. Integration-started
+    // sessions use the owner's personal memory only then; the control plane ignores it from
+    // other callers.
+    directMessage: z.boolean().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

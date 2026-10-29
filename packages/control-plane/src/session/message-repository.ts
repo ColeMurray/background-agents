@@ -43,6 +43,9 @@ const messageCompletionStateRowSchema = z.object({
   started_at: z.number().nullable(),
 });
 const messageProcessingAuthorRowSchema = messageRowSchema.pick({ author_id: true });
+const messageProcessingAuthorAccountRowSchema = messageRowSchema.pick({
+  author_canonical_user_id: true,
+});
 const sessionBudgetExhaustedRowSchema = sessionRowSchema.pick({ budget_exhausted: true });
 
 export interface RecordedMessageCompletion {
@@ -74,6 +77,12 @@ function parseMessageStatus(value: unknown): MessageStatus | null {
 export interface CreateMessageData {
   id: string;
   authorId: string;
+  /**
+   * The author's account as it is when the prompt is queued. Personal memory decisions read this
+   * snapshot, so later identity links or merges never reclassify a prompt; without one, the prompt
+   * counts as someone else's.
+   */
+  authorCanonicalUserId?: string | null;
   content: string;
   source: MessageSource;
   model?: string | null;
@@ -367,12 +376,13 @@ export class MessageRepository {
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
       `INSERT INTO messages (
-         id, author_id, content, source, model, reasoning_effort, attachments,
-         callback_context, client_request_id, request_fingerprint, autofix_feedback_key,
-         autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         id, author_id, author_canonical_user_id, content, source, model, reasoning_effort,
+         attachments, callback_context, client_request_id, request_fingerprint,
+         autofix_feedback_key, autofix_pr_key, origin_context, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
+      data.authorCanonicalUserId ?? null,
       data.content,
       data.source,
       data.model ?? null,
@@ -527,6 +537,33 @@ export class MessageRepository {
     );
     const rows = parseStorageRows(result.toArray(), messageProcessingAuthorRowSchema);
     return rows[0] ?? null;
+  }
+
+  /**
+   * The account the processing prompt was queued under: null when nothing is processing, for an
+   * Autofix turn, or for an author without an account.
+   */
+  getProcessingPromptAccount(): string | null {
+    const result = this.sql.exec(
+      `SELECT author_canonical_user_id FROM messages WHERE status = 'processing' LIMIT 1`
+    );
+    const row = parseStorageRows(result.toArray(), messageProcessingAuthorAccountRowSchema)[0];
+    return row?.author_canonical_user_id ?? null;
+  }
+
+  /**
+   * Whether a prompt queued under any account but `canonicalUserId`, or under none, has reached
+   * the agent. Prompts queued before accounts were recorded count as someone else's.
+   */
+  hasDispatchedPromptFromOtherUser(canonicalUserId: string): boolean {
+    const result = this.sql.exec(
+      `SELECT 1 AS present FROM messages
+       WHERE started_at IS NOT NULL
+         AND (author_canonical_user_id IS NULL OR author_canonical_user_id <> ?)
+       LIMIT 1`,
+      canonicalUserId
+    );
+    return result.toArray().length > 0;
   }
 }
 

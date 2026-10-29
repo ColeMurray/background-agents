@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-27"
 relatedCode:
   - docs/integrations/SLACK.md
   - docs/CLAUDE_AGENT.md
@@ -116,11 +116,15 @@ Invite the bot first, then mention it. Name the repository when the request coul
 
 OpenInspect picks a target in this order: a matching [routing rule](#routing-rules), then a channel association, then a classifier that looks at your message, the channel, and recent thread context. The classifier can pick an environment as well as a repository, and it can pick **No repository** when the task does not need a codebase. If the match is unclear, OpenInspect asks you to choose in the thread.
 
+Channel sessions do not use your personal memories, because their replies post where others read them. Repository and environment memories still apply.
+
 ### From a DM
 
 Open a direct message with the bot and send the request. No mention is needed; if you include one, it is stripped before the request reaches the agent.
 
 To continue a DM session, reply in the thread Slack created for that request. A new top-level DM is a new request and may start target selection again.
+
+A DM session uses your personal memories the way a web session does, when your **Use my personal memories in my sessions** setting is on. See [Memories](/configure/memories#including-personal-memories).
 
 ### Model and reasoning flags
 
@@ -327,6 +331,7 @@ An automation can start a session when someone posts a matching message in a wat
 - Slack requests are verified before OpenInspect acts on them.
 - The source-control installation is the outer repository boundary, not a per-Slack-user GitHub permission list. Team bindings, memberships, and repository grants further constrain team work.
 - Invite the bot only into trusted channels. Identity linking does not itself grant team membership.
+- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails, so new ones can't start using the bot yet; people the bot already knows keep working.
 - Bot messages are ignored, so the bot does not respond to itself.
 - Notification text is sanitized and shortened to fit Slack block limits; extremely large raw inputs are rejected.
 
@@ -342,6 +347,16 @@ An automation can start a session when someone posts a matching message in a wat
   <Accordion title="DMs do not start sessions">
     The Slack app needs the direct message event subscription configured by an operator. Once it is,
     send a plain DM; no mention is required.
+
+</Accordion>
+  <Accordion title="The bot couldn't read the email on your Slack profile">
+    OpenInspect links each new Slack user to an account by their Slack profile email, and won't
+    start work for a new user it can't link; people the bot already knows keep working. Try again
+    first, since Slack can briefly fail to return the profile. External users in Slack Connect
+    channels often have hidden emails, so new ones can't use the bot yet. For people in your own
+    workspace, an operator should confirm the app has the `users:read.email` scope and was
+    reinstalled after it was added. If the bot instead says it couldn't verify your account,
+    OpenInspect was briefly unreachable; send the message again.
 
 </Accordion>
   <Accordion title="OpenInspect asks which target to use">

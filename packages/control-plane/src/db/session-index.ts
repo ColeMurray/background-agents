@@ -1,5 +1,5 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionMemorySelection } from "../memory/types";
+import type { SessionMemoryPin } from "../memory/types";
 import {
   type PullRequestSummary,
   type SessionReadAction,
@@ -122,7 +122,7 @@ export interface SessionEntry {
 /** Declarative fields used only when creating a session index row. */
 export interface CreateSessionCommand extends SessionEntry {
   /** Memory selection to pin atomically with the session row. */
-  memory?: Pinned<SessionMemorySelection>;
+  memory?: SessionMemoryPin;
   /** Managed-skill manifest to pin atomically with the session row. */
   managedSkills?: Pinned<SessionSkillManifestInput>;
   /** Complete immutable model-provider authentication snapshot. */

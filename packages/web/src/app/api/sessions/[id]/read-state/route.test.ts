@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
@@ -13,8 +14,9 @@ describe("session read-state BFF", () => {
   });
 
   it("rejects actions outside the shared request contract", async () => {
-    const request = new Request("http://localhost/api/sessions/session-1/read-state", {
+    const request = new NextRequest("http://localhost/api/sessions/session-1/read-state", {
       method: "PATCH",
+      headers: { Cookie: "openinspect.session_token=test-session" },
       body: JSON.stringify({ action: "mark_latest_message_read", userId: "user-2" }),
     });
 
@@ -36,9 +38,12 @@ describe("session read-state BFF", () => {
         version: 0,
       })
     );
-    const request = new Request("http://localhost/api/sessions/session-1/read-state", {
+    const request = new NextRequest("http://localhost/api/sessions/session-1/read-state", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Cookie: "openinspect.session_token=test-session",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ action: "mark_latest_message_read" }),
     });
 
@@ -59,8 +64,9 @@ describe("session read-state BFF", () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Unauthorized" }, { status: 401 })
     );
-    const request = new Request("http://localhost/api/sessions/session-1/read-state", {
+    const request = new NextRequest("http://localhost/api/sessions/session-1/read-state", {
       method: "PATCH",
+      headers: { Cookie: "openinspect.session_token=test-session" },
       body: JSON.stringify({ action: "mark_latest_message_read" }),
     });
 

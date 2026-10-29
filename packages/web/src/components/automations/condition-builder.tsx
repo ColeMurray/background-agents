@@ -389,7 +389,7 @@ function ConditionEditor({
           onOperatorChange={(operator) => onChange({ ...condition, operator })}
           values={condition.value}
           onValuesChange={(value) => onChange({ ...condition, value })}
-          placeholder="Add Slack user ID (e.g. U0123ABCD)..."
+          placeholder="Add Slack user or bot ID (e.g. U0123ABCD, B0123ABCD)..."
         />
       );
     default:

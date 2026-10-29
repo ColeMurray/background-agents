@@ -18,6 +18,14 @@
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
     },
+    "./actor-enrollment": {
+      "import": "./dist/actor-enrollment.js",
+      "types": "./dist/actor-enrollment.d.ts"
+    },
+    "./abortable": {
+      "import": "./dist/abortable.js",
+      "types": "./dist/abortable.d.ts"
+    },
     "./models": {
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
@@ -45,6 +53,10 @@
     "./http-body": {
       "import": "./dist/http-body.js",
       "types": "./dist/http-body.d.ts"
+    },
+    "./admission-settings": {
+      "import": "./dist/admission-settings.js",
+      "types": "./dist/admission-settings.d.ts"
     },
     "./inline-prompt-flags": {
       "import": "./dist/inline-prompt-flags.js",
@@ -109,6 +121,10 @@
     "./sign-in-provider": {
       "import": "./dist/sign-in-provider.js",
       "types": "./dist/sign-in-provider.d.ts"
+    },
+    "./sign-in-failure": {
+      "import": "./dist/sign-in-failure.js",
+      "types": "./dist/sign-in-failure.d.ts"
     },
     "./git": {
       "import": "./dist/git.js",
@@ -225,6 +241,10 @@
     "./types/memories": {
       "import": "./dist/types/memories.js",
       "types": "./dist/types/memories.d.ts"
+    },
+    "./types/actors": {
+      "import": "./dist/types/actors.js",
+      "types": "./dist/types/actors.d.ts"
     },
     "./memory-tools": {
       "import": "./dist/memory-tools.js",

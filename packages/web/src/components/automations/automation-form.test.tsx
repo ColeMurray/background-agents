@@ -140,6 +140,15 @@ beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = vi.fn();
+  // Radix Switch measures itself via ResizeObserver, which jsdom lacks.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
 });
 
 async function chooseTeam(user: ReturnType<typeof userEvent.setup>, name: string) {
@@ -1395,6 +1404,91 @@ describe("slack_event automation", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ triggerConfig: channelOnly });
+  });
+  it("leaves bot messages off by default and omits the option on submit", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Trigger on bot messages" })).not.toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).not.toHaveProperty("slack");
+  });
+
+  const botAllowList = {
+    conditions: [
+      ...validConditions.conditions,
+      { type: "slack_actor" as const, operator: "include" as const, value: ["BALERTS"] },
+    ],
+  };
+
+  it("blocks bot messages until a Slack User include condition exists", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: validConditions }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
+    expect(screen.getByText(/Bot messages are untrusted input/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Add a Slack User condition that includes the bots allowed/)
+    ).toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits includeBotMessages after bot messages are switched on", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{ ...slackBase, triggerConfig: botAllowList }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Trigger on bot messages" }));
+    expect(screen.queryByText(/Add a Slack User condition that includes/)).not.toBeInTheDocument();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig).toEqual({
+      ...botAllowList,
+      slack: { includeBotMessages: true },
+    });
+  });
+
+  it("keeps a stored opt-in when editing", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={onSubmit}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: { ...botAllowList, slack: { includeBotMessages: true } },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("switch", { name: "Trigger on bot messages" })).toBeChecked();
+    fireEvent.submit(container.querySelector("form")!);
+
+    expect(onSubmit.mock.calls[0][0].triggerConfig.slack).toEqual({ includeBotMessages: true });
   });
 });
 

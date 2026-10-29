@@ -68,6 +68,7 @@ describe("MemoriesSection", () => {
           archivedSinceSelection: true,
         }),
       ],
+      hiddenPersonalCount: 0,
     } satisfies SessionMemorySelectionStatus;
     render(<MemoriesSection sessionId="session-1" />);
     await userEvent.setup().click(screen.getByRole("button", { name: "Memories (4)" }));
@@ -89,6 +90,32 @@ describe("MemoriesSection", () => {
     );
   });
 
+  it("counts the owner's personal memories for other viewers without listing them", async () => {
+    memories.diagnostics = {
+      includePersonalMemories: true,
+      directiveChars: 0,
+      catalogChars: 0,
+      estimatedTokens: 300,
+      omittedCount: 0,
+      items: [
+        item({
+          memoryId: "r1",
+          title: "Use pnpm",
+          scope: { type: "repository", repoOwner: "acme", repoName: "web" },
+        }),
+      ],
+      hiddenPersonalCount: 2,
+    } satisfies SessionMemorySelectionStatus;
+    render(<MemoriesSection sessionId="session-1" />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Memories (3)" }));
+
+    expect(screen.getByText("Personal · 2")).toBeInTheDocument();
+    expect(
+      screen.getByText("The session owner's personal memories aren't listed here.")
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["Use pnpm"]);
+  });
+
   it("reveals pinned provenance when a row is reached by keyboard", async () => {
     memories.diagnostics = {
       includePersonalMemories: false,
@@ -105,6 +132,7 @@ describe("MemoriesSection", () => {
           revisionNumber: 3,
         }),
       ],
+      hiddenPersonalCount: 0,
     } satisfies SessionMemorySelectionStatus;
     render(<MemoriesSection sessionId="session-1" />);
     const user = userEvent.setup();

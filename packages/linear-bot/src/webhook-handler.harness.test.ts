@@ -111,6 +111,7 @@ async function delegate(options: {
   const fetchMock = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const path = new URL(String(input)).pathname;
+    if (path === "/actors/me") return new Response(null, { status: 204 });
     if (path.startsWith("/channel-bindings/linear/")) return Response.json({ teamId: null });
     if (path.startsWith("/integration-settings/linear/resolved/")) {
       return Response.json({ config });

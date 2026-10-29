@@ -1705,6 +1705,19 @@ export class SandboxLifecycleManager
         return result;
       }
 
+      case "heartbeat_unconfirmed":
+        // Nothing is marked or stopped yet: a reconnect inside the grace
+        // refreshes the heartbeat and the sandbox carries on.
+        this.log.warn("Heartbeat missed; awaiting reconnect", {
+          event: "sandbox.heartbeat_unconfirmed",
+          last_heartbeat_ms: finding.ageMs,
+          threshold_ms: this.config.heartbeat.timeoutMs,
+          grace_ends_at_ms: finding.graceEndsAtMs,
+          sandbox_status: sandbox.status,
+        });
+        await this.alarmScheduler.schedule(finding.graceEndsAtMs);
+        return "no_action";
+
       case "heartbeat_stale":
         return terminateStaleHeartbeat(
           this.watchdogEffects,

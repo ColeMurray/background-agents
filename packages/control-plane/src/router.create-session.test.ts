@@ -32,7 +32,12 @@ vi.mock("./auth/user/runtime", () => ({
       listUserAccounts: vi.fn(async () => []),
       getAccessToken,
       accountInfo: vi.fn(async () => ({
-        user: { id: "2002" },
+        account: {
+          id: "github-account-2002",
+          providerId: "github",
+          accountId: "2002",
+        },
+        user: { name: "Trusted Ada" },
         data: {
           provider: "github",
           issuer: "https://github.com",

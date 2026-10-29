@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   sessionReadActionSchema,
@@ -7,6 +8,11 @@ import {
 } from "@open-inspect/shared/types/sessions";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const rejection = rejectMissingBrowserSessionCookie(request, {
+    "Cache-Control": "private, no-store",
+  });
+  if (rejection) return rejection;
+
   let body: SessionReadAction | null;
   try {
     const parsedBody = sessionReadActionSchema.safeParse(await request.json());

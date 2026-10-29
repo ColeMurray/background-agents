@@ -53,8 +53,8 @@ class _Agent:
 
     @property
     def pending(self) -> bool:
-        """Announced, but its turn (which spawning always starts) is not reported yet."""
-        return self.args is not None and self.turn_id is None
+        """Announced or refused, but its spawned turn is not reported yet."""
+        return (self.args is not None or self.refused) and self.turn_id is None
 
 
 class CodexSubagents:

@@ -157,6 +157,7 @@ export class WebhookEventHandler {
       const result = await deps.invocations.start({
         automation,
         source: "event",
+        actorKind: "unknown",
         invocationId: webhookClaim?.invocationId,
         webhookFollowUpClaimId: webhookClaim?.claimId,
         triggerKey: event.triggerKey,

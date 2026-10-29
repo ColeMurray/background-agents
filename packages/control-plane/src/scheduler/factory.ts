@@ -43,6 +43,7 @@ import { AutomationEventHandler } from "./event-handler";
 import { SlackContinuationPolicyFactory } from "./slack-continuation-policy";
 import { WebhookContinuationPolicyFactory } from "./webhook-continuation-policy";
 import { SlackEventHandler } from "./slack-event-handler";
+import { SlackBotTriggerPolicy } from "./slack-bot-trigger-policy";
 import { WebhookEventHandler } from "./webhook-event-handler";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { admitGitHubEvent } from "../automation/github-event-admission";
@@ -160,6 +161,7 @@ export function createScheduler(
     invocations,
     continuity,
     policies: new SlackContinuationPolicyFactory({ users, continuity, attribution, scmProvider }),
+    bots: new SlackBotTriggerPolicy({ store }),
     clock: Date,
     log,
   });

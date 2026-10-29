@@ -14,6 +14,11 @@ vi.mock("@/lib/sandbox-provider", async (importOriginal) => ({
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { POST as createAutomation } from "./automations/route";
+import {
+  PUT as updateAutomation,
+  PATCH as updateAutomationExecutor,
+} from "./automations/[id]/route";
 import { GET as listAutomationInvocations } from "./automations/[id]/invocations/route";
 import { POST as pauseAutomation } from "./automations/[id]/pause/route";
 import { POST as regenerateAutomationKey } from "./automations/[id]/regenerate-key/route";
@@ -21,6 +26,7 @@ import { POST as resumeAutomation } from "./automations/[id]/resume/route";
 import { GET as getAutomationRun } from "./automations/[id]/runs/[runId]/route";
 import { POST as triggerAutomation } from "./automations/[id]/trigger/route";
 import { GET as listEnvironments, POST as createEnvironment } from "./environments/route";
+import { PUT as updateEnvironment } from "./environments/[id]/route";
 import { POST as triggerEnvironmentImage } from "./environments/[id]/images/trigger/route";
 import {
   GET as listEnvironmentSecrets,
@@ -49,6 +55,11 @@ import { DELETE as deleteRepoSecret } from "./repos/[owner]/[name]/secrets/[key]
 import { GET as listGlobalSecrets, PUT as updateGlobalSecrets } from "./secrets/route";
 import { DELETE as deleteGlobalSecret } from "./secrets/[key]/route";
 import { POST as archiveSession } from "./sessions/[id]/archive/route";
+import { POST as createSession } from "./sessions/route";
+import { POST as batchArchiveSessions } from "./sessions/batch-archive/route";
+import { POST as sendPrompt } from "./sessions/[id]/prompt/route";
+import { PATCH as updateSessionReadState } from "./sessions/[id]/read-state/route";
+import { POST as updateInboxReadState } from "./sessions/inbox/read-state/route";
 import { PATCH as updateSessionBudget } from "./sessions/[id]/budget/route";
 import { GET as listChildSessions } from "./sessions/[id]/children/route";
 import { POST as refreshPullRequests } from "./sessions/[id]/pull-requests/refresh/route";
@@ -73,6 +84,58 @@ type RouteCase = {
 };
 
 const routes: RouteCase[] = [
+  { method: "POST", path: "/automations", call: createAutomation, body: { name: "Test" } },
+  {
+    method: "PUT",
+    path: "/automations/auto-1",
+    call: (request) => updateAutomation(request, automationParams),
+    body: { name: "Updated" },
+  },
+  {
+    method: "PATCH",
+    path: "/automations/auto-1",
+    call: (request) => updateAutomationExecutor(request, automationParams),
+    body: { userId: "user-1" },
+  },
+  {
+    method: "PUT",
+    path: "/environments/env_1",
+    call: (request) => updateEnvironment(request, environmentParams),
+    body: { name: "Updated" },
+  },
+  {
+    method: "POST",
+    path: "/sessions",
+    call: createSession,
+    body: { repoOwner: "acme", repoName: "web" },
+  },
+  {
+    method: "POST",
+    path: "/sessions/batch-archive",
+    call: batchArchiveSessions,
+    body: { sessionIds: ["session-1"] },
+    headers: { "Cache-Control": "private, no-store" },
+  },
+  {
+    method: "POST",
+    path: "/sessions/session-1/prompt",
+    call: (request) => sendPrompt(request, sessionParams),
+    body: { content: "Investigate" },
+  },
+  {
+    method: "PATCH",
+    path: "/sessions/session-1/read-state",
+    call: (request) => updateSessionReadState(request, sessionParams),
+    body: { action: "mark_latest_message_read" },
+    headers: { "Cache-Control": "private, no-store" },
+  },
+  {
+    method: "POST",
+    path: "/sessions/inbox/read-state",
+    call: updateInboxReadState,
+    body: {},
+    headers: { "Cache-Control": "private, no-store" },
+  },
   {
     method: "GET",
     path: "/automations/auto-1/invocations",
@@ -305,7 +368,11 @@ describe("delegated route authentication", () => {
     async ({ method, path, call, body, error = "Unauthorized", headers }) => {
       const request = new NextRequest(`http://localhost/api${path}`, {
         method,
-        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+        headers: {
+          Cookie: "openinspect.session_token=invalid-session",
+          "Content-Type": "application/json",
+          Origin: "http://localhost",
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
 
@@ -318,6 +385,81 @@ describe("delegated route authentication", () => {
       for (const [name, value] of Object.entries(headers ?? {})) {
         expect(response.headers.get(name)).toBe(value);
       }
+    }
+  );
+
+  describe.each([
+    ["no cookies", ""],
+    [
+      "only unrelated cookies",
+      "theme=dark; openinspect.state=transaction; openinspect.session_token.attacker=lookalike",
+    ],
+  ])("requests with %s", (_description, cookie) => {
+    it.each(
+      routes
+        .filter((route) => route.body !== undefined)
+        .flatMap((route) =>
+          ["{", JSON.stringify(route.body)].map((body) => ({ ...route, rawBody: body }))
+        )
+    )(
+      "$method /api$path rejects before reading $rawBody",
+      async ({ method, path, call, rawBody, headers }) => {
+        const request = new NextRequest(`http://localhost/api${path}`, {
+          method,
+          headers: {
+            ...(cookie ? { Cookie: cookie } : {}),
+            "Content-Type": "application/json",
+            Origin: "http://localhost",
+          },
+          body: rawBody,
+        });
+        const readJson = vi.spyOn(request, "json");
+        const readBody = vi.spyOn(request, "body", "get");
+
+        const response = await call(request);
+
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+        expect(readJson).not.toHaveBeenCalled();
+        expect(readBody).not.toHaveBeenCalled();
+        expect(request.bodyUsed).toBe(false);
+        expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+        expect(getServerAuthSession).not.toHaveBeenCalled();
+        for (const [name, value] of Object.entries(headers ?? {})) {
+          expect(response.headers.get(name)).toBe(value);
+        }
+      }
+    );
+  });
+
+  it.each(
+    routes.filter((route) => route.body !== undefined && !route.path.endsWith("/regenerate-key"))
+  )(
+    "$method /api$path preserves malformed JSON handling with supplied credentials",
+    async ({ method, path, call }) => {
+      const request = new NextRequest(`http://localhost/api${path}`, {
+        method,
+        headers: {
+          Cookie: "__Secure-openinspect.session_token.0=invalid-session",
+          "Content-Type": "application/json",
+          Origin: "http://localhost",
+        },
+        body: "{",
+      });
+
+      const response = await call(request);
+
+      const badRequestPaths = [
+        "/mcp-servers/server-1",
+        "/sessions/session-1/title",
+        "/sessions/session-1/read-state",
+        "/sessions/inbox/read-state",
+        "/sessions/batch-archive",
+      ];
+      expect(response.status).toBe(badRequestPaths.includes(path) ? 400 : 500);
+      expect(request.bodyUsed).toBe(true);
+      expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+      expect(getServerAuthSession).not.toHaveBeenCalled();
     }
   );
 

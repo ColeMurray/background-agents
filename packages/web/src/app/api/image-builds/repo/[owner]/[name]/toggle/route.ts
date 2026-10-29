@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { rejectUnsupportedRepoImages } from "@/lib/repo-images-unsupported";
 
@@ -10,6 +11,9 @@ export async function PUT(
   try {
     const rejection = await rejectUnsupportedRepoImages();
     if (rejection) return rejection;
+
+    const authRejection = rejectMissingBrowserSessionCookie(request);
+    if (authRejection) return authRejection;
 
     const { owner, name } = await params;
     const body = await request.json();

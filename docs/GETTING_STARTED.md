@@ -1026,7 +1026,8 @@ the worker's `/events` and `/interactions` endpoints.
    - `files:write`
    - `reactions:write`
    - `users:read`
-   - `users:read.email`
+   - `users:read.email` (required: the bot links each new Slack user to an account by profile email
+     and won't act for users it can't link)
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
@@ -1394,7 +1395,7 @@ Secrets for credentials:
 | `CLOUDFLARE_ACCOUNT_ID`                    | Your Cloudflare account ID                                                                                                        |
 | `CLOUDFLARE_WORKER_SUBDOMAIN`              | Your workers.dev subdomain                                                                                                        |
 | `R2_MEDIA_LOCATION`                        | R2 location hint for the media bucket (defaults to `ENAM`)                                                                        |
-| `R2_MEDIA_BUCKET_NAME`                     | Optional media bucket name override for a pre-created bucket                                                                      |
+| `R2_MEDIA_BUCKET_NAME`                     | Optional name for the media bucket Terraform creates (import an existing bucket first)                                            |
 | `DEPLOYMENT_NAME`                          | Your deployment name                                                                                                              |
 | `TEAMS_ENFORCEMENT`                        | Session enforcement: `off`, `shadow` (default), or `on`; prefer a repository variable                                             |
 | `R2_ACCESS_KEY_ID`                         | R2 access key ID                                                                                                                  |
@@ -1645,6 +1646,14 @@ URL to match your web app URL:
 - **Cloudflare**:
   `https://open-inspect-web-{deployment_name}.YOUR-SUBDOMAIN.workers.dev/api/auth/callback/github`
 - **Cloudflare with a custom domain**: `https://{your-custom-domain}/api/auth/callback/github`
+
+### GitHub sign-in returns to the login page with an email permission error
+
+GitHub refused the `/user/emails` request, and the control plane logs
+`auth.github_email_lookup_failed` with `status: 403`. Every GitHub sign-in reads verified emails, so
+the GitHub App needs the **Account permissions > Email addresses: Read-only** permission even when
+admission uses only `allowed_users` or `allowed_github_orgs`. Add the permission, save, and sign in
+again; GitHub asks the user to approve the added permission.
 
 ### Modal deployment fails
 

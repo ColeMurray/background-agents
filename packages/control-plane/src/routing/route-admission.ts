@@ -1,7 +1,14 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
+import {
+  ACTOR_ADMISSION_DENIED_CODE,
+  ACTOR_EMAIL_REQUIRED_CODE,
+} from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
+import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
+import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
+import { AdmissionPolicyStore } from "../db/admission-policy-store";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
@@ -15,7 +22,8 @@ import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionIndexStore } from "../db/session-index";
 import { IdentityClaimStore } from "../db/identity-claim-store";
-import { isEmailAttestingProvider, UserStore } from "../db/user-store";
+import { normalizeEmail } from "../db/email";
+import { isEmailAttestingProvider, requiresEnrollmentEmail, UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
 import { createLogger } from "../logger";
@@ -386,7 +394,8 @@ async function enforceSlackWriteScope(
  * Resolve the verified service actor to its canonical user exactly once,
  * before any RBAC lookup, so the subject authorized is the subject attributed.
  * An actor already known still has its route's profile claims applied, since
- * the request that enrolled it may have carried none.
+ * the request that enrolled it may have carried none. An unknown actor from a
+ * provider that requires an enrollment email is refused without one.
  */
 async function finalizeServiceActor(
   policy: RouteAdmissionPolicy,
@@ -419,19 +428,66 @@ async function finalizeServiceActor(
     if (prepared?.kind === "rejected") return { response: prepared.response };
     const claims = prepared?.claims;
     const actor = principal.actor;
-    const user = await new UserStore(ctx.db).resolveOrCreateUser({
-      provider: actor.provider,
-      providerUserId: actor.providerUserId,
-      displayName: claims?.displayName,
-      providerEmail: isEmailAttestingProvider(actor.provider) ? claims?.email : undefined,
-      avatarUrl: claims?.avatarUrl,
-    });
+    const email = isEmailAttestingProvider(actor.provider) ? normalizeEmail(claims?.email) : null;
+    if (requiresEnrollmentEmail(actor.provider) && email === null) {
+      logger.warn("Refused to enroll a service actor without an attested email", {
+        event: "auth.service_actor_email_required",
+        provider: actor.provider,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        response: json(
+          { error: "Actor enrollment requires an attested email", code: ACTOR_EMAIL_REQUIRED_CODE },
+          403
+        ),
+      };
+    }
+    // Resolve existing accounts first so linking preserves role and suspension;
+    // the store checks admission immediately before creating a new user.
+    const user = await new UserStore(ctx.db).resolveOrCreateUser(
+      {
+        provider: actor.provider,
+        providerUserId: actor.providerUserId,
+        displayName: claims?.displayName,
+        providerEmail: email ?? undefined,
+        avatarUrl: claims?.avatarUrl,
+      },
+      async (identity) => {
+        const admissionPolicy = await resolveEffectiveAdmissionPolicy(
+          admissionPolicyConfigFromEnv(env),
+          new AdmissionPolicyStore(ctx.db)
+        );
+        const attestedEmail = isEmailAttestingProvider(identity.provider)
+          ? normalizeEmail(identity.providerEmail)
+          : null;
+        admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
+      }
+    );
     ctx.principal = {
       ...principal,
       actor: { ...actor, canonicalUserId: user.id },
     };
     return null;
   } catch (cause) {
+    if (cause instanceof AdmissionDeniedError) {
+      logger.warn("Refused to enroll a service actor outside workspace admission", {
+        event: "auth.service_actor_admission_denied",
+        provider: principal.actor.provider,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        response: json(
+          {
+            error:
+              "Your account is not authorized to join this workspace. Sign in on the web or ask an administrator to check the admission allowlists.",
+            code: ACTOR_ADMISSION_DENIED_CODE,
+          },
+          403
+        ),
+      };
+    }
     logger.error("Failed to finalize verified service actor", {
       event: "auth.service_actor_resolution_failed",
       error: cause instanceof Error ? cause : String(cause),

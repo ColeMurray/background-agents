@@ -70,6 +70,8 @@ interface LinearFetchHandlers {
   authorizationCode?: (request: LinearFetchRequest) => Response | Promise<Response>;
   clientCredentials?: (request: LinearFetchRequest) => Response | Promise<Response>;
   identity?: (request: LinearFetchRequest) => Response | Promise<Response>;
+  /** Answers the `FetchUser` lookup; without it the lookup falls through to `graphql`. */
+  user?: (request: LinearFetchRequest) => Response | Promise<Response>;
   graphql?: (request: LinearFetchRequest) => Response | Promise<Response>;
 }
 
@@ -103,7 +105,11 @@ export function createLinearFetchMock(handlers: LinearFetchHandlers) {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       const operationName = readGraphQLOperationName(body.query);
       const handler =
-        operationName === "LinearViewerIdentity" ? handlers.identity : handlers.graphql;
+        operationName === "LinearViewerIdentity"
+          ? handlers.identity
+          : operationName === "FetchUser" && handlers.user
+            ? handlers.user
+            : handlers.graphql;
       if (!handler)
         throw new Error(`Unexpected Linear GraphQL operation: ${String(operationName)}`);
       return handler({
@@ -152,6 +158,14 @@ export function linearIdentityResponse(
       },
     },
   });
+}
+
+export function linearUserResponse(user: {
+  id: string;
+  name: string;
+  email: string | null;
+}): Response {
+  return Response.json({ data: { user } });
 }
 
 export async function signLinearWebhookRequest(body: string): Promise<string> {

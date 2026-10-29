@@ -18,7 +18,8 @@ from .constants import (
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
 )
 from .docker_control import DockerControl
-from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE
+from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessId
+from .model_catalog import ensure_model_catalog
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 
@@ -43,11 +44,6 @@ FATAL_ERROR_REPORT_MAX_ATTEMPTS = 3
 FATAL_ERROR_REPORT_BACKOFF_BASE_SECONDS = 2
 FATAL_ERROR_REPORT_TIMEOUT_SECONDS = 5.0
 FATAL_ERROR_REPORT_MAX_CHARS = 1000
-
-#: Writes OpenCode's current model catalog to its cache file, which OpenCode
-#: reads in preference to the catalog compiled into its binary.
-OPENCODE_MODELS_REFRESH_COMMAND: tuple[str, ...] = ("opencode", "models", "--refresh")
-OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS = 120.0
 
 
 class BootExecutionCancelled(Exception):
@@ -606,31 +602,6 @@ class SandboxSupervisor:
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _refresh_models_catalog(self) -> None:
-        """Bake OpenCode's current model catalog into the image being built. Best-effort."""
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *OPENCODE_MODELS_REFRESH_COMMAND,
-                cwd=Path.home(),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            try:
-                async with asyncio.timeout(OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS):
-                    exit_code = await process.wait()
-            finally:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
-        except Exception as error:
-            self.log.warn("opencode_models.refresh_failed", exc=error)
-            return
-        if exit_code != 0:
-            self.log.warn("opencode_models.refresh_failed", exit_code=exit_code)
-            return
-        self.log.info("opencode_models.refresh_finished", exit_code=exit_code)
-
     async def _run_image_build_execution(
         self, expected_tunnel_ports: list[int]
     ) -> RepositoryBootResult:
@@ -687,6 +658,8 @@ class SandboxSupervisor:
         # The `harness completed` line is what tells an early-connected
         # bridge to attach its harness and report `ready`.
         with self.boot_events.phase_scope("harness"):
+            if self.config.harness in {HarnessId.OPENCODE, HarnessId.CODEX}:
+                await ensure_model_catalog(os.environ, self.log)
             await self.harness_process.start(boot_result.repositories, boot_result.workdir)
 
     async def _materialize_skills(self, boot_result: RepositoryBootResult) -> None:
@@ -741,7 +714,11 @@ class SandboxSupervisor:
 
             if self.boot_mode is BootMode.BUILD:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
-                await self._run_until_shutdown(self._refresh_models_catalog)
+                catalog_ready = await self._run_until_shutdown(
+                    lambda: ensure_model_catalog(os.environ, self.log, refresh=True)
+                )
+                if not catalog_ready:
+                    raise RuntimeError("Model price catalog unavailable")
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
