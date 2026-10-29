@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import {
   resolveHarnessSelection,
@@ -219,6 +219,19 @@ describe("harness policy with real D1 and Durable Object storage", () => {
       ws!.accept();
 
       try {
+        ws!.send(
+          JSON.stringify({
+            type: "ready",
+            sandboxId: SANDBOX_ID,
+            harness: "codex",
+            timestamp: Date.now(),
+          })
+        );
+        await vi.waitFor(async () => {
+          expect(await queryDO(stub, "SELECT supported FROM sandbox_command_protocol")).toEqual([
+            { supported: 0 },
+          ]);
+        });
         const dispatched = collectMessages(ws!, {
           until: (message) => message.type === "prompt",
         });
