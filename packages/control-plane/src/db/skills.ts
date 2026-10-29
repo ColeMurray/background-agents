@@ -238,10 +238,9 @@ export class SkillStore {
     const duplicateNames = new Set<string>();
     const seenNames = new Set<string>();
     for (const input of inputs) {
-      const name = input.name.toLowerCase();
-      if (seenNames.has(name)) duplicateNames.add(name);
-      seenNames.add(name);
-      if (RESERVED_SKILL_NAMES.has(name)) {
+      if (seenNames.has(input.name)) duplicateNames.add(input.name);
+      seenNames.add(input.name);
+      if (RESERVED_SKILL_NAMES.has(input.name)) {
         throw new SkillConflictError(`Skill name ${input.name} is reserved by the sandbox runtime`);
       }
     }
@@ -253,9 +252,7 @@ export class SkillStore {
 
     await this.validateAssignments(assignments);
     const unavailableNames = await this.unavailableNames(inputs.map((input) => input.name));
-    const existingName = inputs.find((input) =>
-      unavailableNames.has(input.name.toLowerCase())
-    )?.name;
+    const existingName = inputs.find((input) => unavailableNames.has(input.name))?.name;
     if (existingName) {
       throw new SkillConflictError(`A skill with the name ${existingName} already exists`);
     }
@@ -487,15 +484,15 @@ export class SkillStore {
    * enforces: reserved names and names held by deleted skills stay taken.
    */
   async nameAvailable(name: string): Promise<boolean> {
-    return !(await this.unavailableNames([name])).has(name.toLowerCase());
+    return !(await this.unavailableNames([name])).has(name);
   }
 
   /** Return requested canonical names held by the runtime or any catalog row, including deleted rows. */
   async unavailableNames(names: readonly string[]): Promise<Set<string>> {
-    const normalized = [...new Set(names.map((name) => name.toLowerCase()))];
-    const unavailable = new Set(normalized.filter((name) => RESERVED_SKILL_NAMES.has(name)));
-    for (let start = 0; start < normalized.length; start += MAX_D1_QUERY_PARAMETERS) {
-      const chunk = normalized.slice(start, start + MAX_D1_QUERY_PARAMETERS);
+    const unique = [...new Set(names)];
+    const unavailable = new Set(unique.filter((name) => RESERVED_SKILL_NAMES.has(name)));
+    for (let start = 0; start < unique.length; start += MAX_D1_QUERY_PARAMETERS) {
+      const chunk = unique.slice(start, start + MAX_D1_QUERY_PARAMETERS);
       const placeholders = chunk.map(() => "?").join(", ");
       const result = await this.db
         .prepare(`SELECT lower(name) AS name FROM skills WHERE lower(name) IN (${placeholders})`)

@@ -115,6 +115,7 @@ describe("bulk skill import requests", () => {
             nameAvailable: true,
           },
         ],
+        commitSha: "a".repeat(40),
         totalFiles: 1,
         totalBytes: 9,
       })

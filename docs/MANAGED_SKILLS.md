@@ -288,10 +288,11 @@ for its complete instructions and files. Existing names (including deleted skill
 names, and duplicate collection names cannot be selected. Choose skills individually or select all
 available skills, then apply shared global, repository, or environment assignments.
 
-Confirmation re-reads the collection and verifies the reviewed commit, paths, names, source digests,
-and generated revision digests. A changed source requires another preview. The selected skills,
-revisions, files, assignments, and individual commit-pinned provenance are saved atomically; any
-validation failure, name conflict, or failed write leaves the collection unimported.
+Confirmation first checks that the ref still resolves to the reviewed commit; if it moved, nothing
+is read and you are asked to preview again. It then re-reads only the selected skills and verifies
+their paths, names, source digests, and generated revision digests. The selected skills, revisions,
+files, assignments, and individual commit-pinned provenance are saved atomically; any validation
+failure, name conflict, or failed write leaves the collection unimported.
 
 Each collection is limited to 100 skills, 500 source files, 8 MiB of source content, and 25 shared
 assignments. Per-skill limits below still apply. Collection preview and confirmation have a longer

@@ -370,6 +370,8 @@ export const bulkSkillImportPreviewInputSchema = z.strictObject({
 
 export const bulkSkillImportPreviewResponseSchema = z.strictObject({
   skills: z.array(skillImportPreviewResponseSchema).min(1).max(MAX_BULK_SKILL_IMPORT_SKILLS),
+  /** The one commit every member was read at; confirmation must name it. */
+  commitSha: commitShaSchema,
   totalFiles: z.number().int().positive().max(MAX_BULK_SKILL_IMPORT_FILES),
   totalBytes: z.number().int().nonnegative().max(MAX_BULK_SKILL_IMPORT_BYTES),
 });

@@ -63,6 +63,14 @@ export class SkillImportError extends Error {
   }
 }
 
+/** The reviewed commit is no longer what the requested ref resolves to. */
+export function sourceMovedError(commitSha: string): SkillImportError {
+  return new SkillImportError(
+    `The source moved to commit ${commitSha} since it was previewed. Preview the import again.`,
+    409
+  );
+}
+
 export interface SkillImportResult {
   name: string;
   content: SkillContentInput;
@@ -78,6 +86,12 @@ export interface BulkSkillImportResult {
   commitSha: string;
   totalFiles: number;
   totalBytes: number;
+}
+
+/** The reviewed members of a collection, pinned to the commit the preview showed. */
+export interface BulkSkillImportSelection {
+  expectedCommitSha: string;
+  subdirectories: readonly (string | null)[];
 }
 
 interface ResolvedImportRepository {
@@ -338,11 +352,16 @@ export async function resolveSkillImportRepository(
   return access;
 }
 
-/** Resolve access, ref, and tree once, reusing an identity authorized by the route. */
+/**
+ * Resolve access, ref, and tree once, reusing an identity authorized by the route.
+ *
+ * @param expectedCommitSha - Reviewed commit; a ref that moved fails before the tree is listed.
+ */
 async function resolveImportRepository(
   provider: RepositoryReader,
   source: SkillImportSourceInput,
-  resolvedRepository?: RepositoryAccessResult
+  resolvedRepository?: RepositoryAccessResult,
+  expectedCommitSha?: string
 ): Promise<ResolvedImportRepository> {
   const label = `${source.repository.repoOwner}/${source.repository.repoName}`;
   const access = resolvedRepository ?? (await resolveSkillImportRepository(provider, source));
@@ -357,6 +376,9 @@ async function resolveImportRepository(
   }
   if (!commit) {
     throw new SkillImportError(`${label} has no branch, tag, or commit "${resolvedRef}"`, 404);
+  }
+  if (expectedCommitSha !== undefined && commit.sha !== expectedCommitSha) {
+    throw sourceMovedError(commit.sha);
   }
 
   let tree: Awaited<ReturnType<RepositoryReader["listTree"]>>;
@@ -526,15 +548,11 @@ export async function fetchSkillImport(
   return mapFetchedSkillImport(resolved, plan, files[0], nameOverride);
 }
 
-/** Discover and map every independent skill below one repository prefix. */
-export async function fetchBulkSkillImport(
-  provider: RepositoryReader,
-  source: SkillImportSourceInput,
-  resolvedRepository?: RepositoryAccessResult
-): Promise<BulkSkillImportResult> {
-  const resolved = await resolveImportRepository(provider, source, resolvedRepository);
+/** Discover independent skill roots below the source prefix from tree paths alone. */
+function discoverSkillRoots(resolved: ResolvedImportRepository): string[] {
+  const { entries, label, source } = resolved;
   const prefix = directoryPrefix(source.subdirectory ?? null);
-  const roots = resolved.entries
+  const roots = entries
     .filter(
       (entry) =>
         entry.type === "file" &&
@@ -545,9 +563,7 @@ export async function fetchBulkSkillImport(
     .sort();
 
   if (roots.length === 0) {
-    const location = source.subdirectory
-      ? `${resolved.label}/${source.subdirectory}`
-      : resolved.label;
+    const location = source.subdirectory ? `${label}/${source.subdirectory}` : label;
     throw new SkillImportError(`No skills found in ${location}`, 404);
   }
   if (roots.length > MAX_BULK_SKILL_IMPORT_SKILLS) {
@@ -578,16 +594,22 @@ export async function fetchBulkSkillImport(
       );
     }
   }
+  return roots;
+}
 
-  const plans = roots.map((root) => planSkillImport(resolved, root || null));
-  const selectedFiles = plans.flatMap((plan) => plan.entries);
-  if (selectedFiles.length > MAX_BULK_SKILL_IMPORT_FILES) {
+/** Enforce collection limits on planned roots, then read and map them through one queue. */
+async function readSkillCollection(
+  resolved: ResolvedImportRepository,
+  plans: SkillReadPlan[]
+): Promise<BulkSkillImportResult> {
+  const plannedFiles = plans.flatMap((plan) => plan.entries);
+  if (plannedFiles.length > MAX_BULK_SKILL_IMPORT_FILES) {
     throw new SkillImportError(
-      `Imported collection has ${selectedFiles.length} files, over the ${MAX_BULK_SKILL_IMPORT_FILES}-file aggregate limit`,
+      `Imported collection has ${plannedFiles.length} files, over the ${MAX_BULK_SKILL_IMPORT_FILES}-file aggregate limit`,
       400
     );
   }
-  const declaredBytes = selectedFiles.reduce((total, entry) => total + (entry.sizeBytes ?? 0), 0);
+  const declaredBytes = plannedFiles.reduce((total, entry) => total + (entry.sizeBytes ?? 0), 0);
   if (declaredBytes > MAX_BULK_SKILL_IMPORT_BYTES) {
     throw new SkillImportError(
       `Imported collection exceeds the ${MAX_BULK_SKILL_IMPORT_BYTES}-byte aggregate limit`,
@@ -599,7 +621,50 @@ export async function fetchBulkSkillImport(
   const skills = await Promise.all(
     plans.map((plan, index) => mapFetchedSkillImport(resolved, plan, files[index]))
   );
-  return { skills, commitSha: resolved.commitSha, totalFiles: selectedFiles.length, totalBytes };
+  return { skills, commitSha: resolved.commitSha, totalFiles: plannedFiles.length, totalBytes };
+}
+
+/** Discover and map every independent skill below one repository prefix. */
+export async function fetchBulkSkillImport(
+  provider: RepositoryReader,
+  source: SkillImportSourceInput,
+  resolvedRepository?: RepositoryAccessResult
+): Promise<BulkSkillImportResult> {
+  const resolved = await resolveImportRepository(provider, source, resolvedRepository);
+  const plans = discoverSkillRoots(resolved).map((root) => planSkillImport(resolved, root || null));
+  return readSkillCollection(resolved, plans);
+}
+
+/**
+ * Re-read only the selected members of a reviewed collection, in selection order.
+ *
+ * A moved ref fails with 409 before the tree is listed, so the outcome never
+ * depends on what the new tree contains. At the reviewed commit, root discovery
+ * matches the preview; only the selected roots are planned, read, and mapped.
+ */
+export async function fetchSelectedBulkSkillImport(
+  provider: RepositoryReader,
+  source: SkillImportSourceInput,
+  selection: BulkSkillImportSelection,
+  resolvedRepository?: RepositoryAccessResult
+): Promise<BulkSkillImportResult> {
+  const resolved = await resolveImportRepository(
+    provider,
+    source,
+    resolvedRepository,
+    selection.expectedCommitSha
+  );
+  const roots = new Set(discoverSkillRoots(resolved));
+  const plans = selection.subdirectories.map((subdirectory) => {
+    if (!roots.has(subdirectory ?? "")) {
+      throw new SkillImportError(
+        `The reviewed skill at ${subdirectory ?? "repository root"} is no longer in the collection. Preview again.`,
+        409
+      );
+    }
+    return planSkillImport(resolved, subdirectory);
+  });
+  return readSkillCollection(resolved, plans);
 }
 
 /** Present an upstream failure as an import failure without leaking retry semantics. */

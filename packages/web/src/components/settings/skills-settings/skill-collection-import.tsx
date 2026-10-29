@@ -117,7 +117,7 @@ export function SkillCollectionImport({
     try {
       const skills = await bulkImportSkills({
         source: sourceInput(),
-        expectedCommitSha: preview.skills[0].source.commitSha,
+        expectedCommitSha: preview.commitSha,
         skills: selected.map((skill) => ({
           subdirectory: skill.source.subdirectory,
           name: skill.name,

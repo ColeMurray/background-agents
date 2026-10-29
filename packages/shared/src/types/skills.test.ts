@@ -241,6 +241,7 @@ describe("managed skill contracts", () => {
     expect(
       bulkSkillImportPreviewResponseSchema.safeParse({
         skills: [],
+        commitSha: "a".repeat(40),
         totalFiles: 0,
         totalBytes: 0,
       }).success
@@ -248,8 +249,16 @@ describe("managed skill contracts", () => {
     expect(
       bulkSkillImportPreviewResponseSchema.safeParse({
         skills: [preview],
+        commitSha: "a".repeat(40),
         totalFiles: MAX_BULK_SKILL_IMPORT_FILES + 1,
         totalBytes: 0,
+      }).success
+    ).toBe(false);
+    expect(
+      bulkSkillImportPreviewResponseSchema.safeParse({
+        skills: [preview],
+        totalFiles: 1,
+        totalBytes: 10,
       }).success
     ).toBe(false);
   });

@@ -102,6 +102,13 @@ const preview: SkillImportPreviewResponse = {
   nameAvailable: true,
 };
 
+const collectionPreview: BulkSkillImportPreviewResponse = {
+  skills: [preview],
+  commitSha: preview.source.commitSha,
+  totalFiles: 1,
+  totalBytes: 40,
+};
+
 const importedSkill: Skill = {
   id: "skill-1",
   name: "deploy-service",
@@ -229,17 +236,13 @@ describe("repository skill preview races", () => {
     expect(screen.getByLabelText("Repository")).toBeDisabled();
     expect(screen.getByLabelText("Branch, tag, or commit (optional)")).toBeDisabled();
     expect(screen.getByLabelText("Prefix (optional)")).toBeDisabled();
-    await act(async () => pending.resolve({ skills: [preview], totalFiles: 1, totalBytes: 40 }));
+    await act(async () => pending.resolve(collectionPreview));
 
     expect(screen.getByText("collection:deploy-service")).toBeInTheDocument();
   });
 
   it("does not confirm a stale collection preview while refreshing", async () => {
-    previewBulkSkillImportMock.mockResolvedValueOnce({
-      skills: [preview],
-      totalFiles: 1,
-      totalBytes: 40,
-    });
+    previewBulkSkillImportMock.mockResolvedValueOnce(collectionPreview);
     const refresh = deferred<BulkSkillImportPreviewResponse>();
     previewBulkSkillImportMock.mockReturnValueOnce(refresh.promise);
     const user = userEvent.setup();
@@ -255,7 +258,7 @@ describe("repository skill preview races", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import 1 skills" }));
     expect(bulkImportSkillsMock).not.toHaveBeenCalled();
 
-    await act(async () => refresh.resolve({ skills: [preview], totalFiles: 1, totalBytes: 40 }));
+    await act(async () => refresh.resolve(collectionPreview));
     expect(screen.getByRole("button", { name: "Import 1 skills" })).toBeEnabled();
   });
 

@@ -384,7 +384,7 @@ describe("skill repository-bearing writes", () => {
     const collection = bulkSkillImportPreviewResponseSchema.parse(await preview.json());
     const response = await request("/skills/import/bulk", "POST", {
       source: importSource,
-      expectedCommitSha: collection.skills[0].source.commitSha,
+      expectedCommitSha: collection.commitSha,
       skills: collection.skills.map((member) => ({
         name: member.name,
         subdirectory: member.source.subdirectory,

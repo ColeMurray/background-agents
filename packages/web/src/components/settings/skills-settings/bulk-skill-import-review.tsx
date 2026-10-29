@@ -59,7 +59,7 @@ export function BulkSkillImportReview({
             bytes
           </p>
           <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
-            Commit {preview.skills[0].source.commitSha}
+            Commit {preview.commitSha}
           </p>
         </div>
         <label className="flex items-center gap-2 text-xs text-foreground">

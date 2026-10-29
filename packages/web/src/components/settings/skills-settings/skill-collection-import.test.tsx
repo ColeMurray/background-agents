@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { MAX_BULK_SKILL_IMPORT_ASSIGNMENTS } from "@open-inspect/shared/types/skills";
 import type { BulkSkillImportPreviewResponse } from "@open-inspect/shared/types/skills";
 import { BulkSkillImportReview } from "./bulk-skill-import-review";
@@ -77,6 +78,7 @@ function member(
 
 const preview: BulkSkillImportPreviewResponse = {
   skills: [member("deploy", "catalog/deploy", true), member("existing", "catalog/existing", false)],
+  commitSha: "a".repeat(40),
   totalFiles: 2,
   totalBytes: 40,
 };
@@ -242,6 +244,26 @@ describe("SkillImport collection mode", () => {
     ).toEqual(["deploy"]);
   });
 
+  it("asks for a fresh preview when the reviewed source moved", async () => {
+    const moved =
+      "The source moved to commit ffffffff since it was previewed. Preview the import again.";
+    bulkImportSkillsMock.mockRejectedValueOnce(new Error(moved));
+    const onImported = vi.fn();
+    const user = userEvent.setup();
+    render(<SkillImport onImported={onImported} onCancel={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Skill collection" }));
+    await user.click(screen.getByLabelText("Repository"));
+    await user.click(await screen.findByRole("option", { name: "acme/skills" }));
+    await user.click(screen.getByRole("button", { name: "Preview collection" }));
+    await user.click(screen.getByRole("button", { name: "Import 1 skills" }));
+
+    expect(toast.error).toHaveBeenCalledWith(moved);
+    expect(onImported).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Refresh preview" }));
+    expect(previewBulkSkillImportMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Import 1 skills" })).toBeEnabled();
+  });
+
   it("locks membership and assignments until a pending confirmation finishes", async () => {
     let reject!: (error: Error) => void;
     bulkImportSkillsMock.mockReturnValueOnce(
@@ -281,7 +303,7 @@ describe("SkillImport collection mode", () => {
 
     render(
       <BulkSkillImportReview
-        preview={{ skills, totalFiles: 64, totalBytes: 1280 }}
+        preview={{ skills, commitSha: "a".repeat(40), totalFiles: 64, totalBytes: 1280 }}
         selectedRoots={new Set(skills.map((skill) => skill.source.subdirectory ?? ""))}
         onToggle={vi.fn()}
         onToggleAll={vi.fn()}

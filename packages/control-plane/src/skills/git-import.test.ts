@@ -9,7 +9,12 @@ import {
 } from "@open-inspect/shared/types/skills";
 import type { GetRepositoryConfig, RepositoryReader, RepositoryTree } from "../source-control";
 import { SourceControlProviderError } from "../source-control";
-import { fetchBulkSkillImport, fetchSkillImport, SkillImportError } from "./git-import";
+import {
+  fetchBulkSkillImport,
+  fetchSelectedBulkSkillImport,
+  fetchSkillImport,
+  SkillImportError,
+} from "./git-import";
 
 const COMMIT = "a".repeat(40);
 
@@ -699,5 +704,76 @@ describe("fetchBulkSkillImport", () => {
       )
     ).rejects.toThrow(new RegExp(`${MAX_BULK_SKILL_IMPORT_BYTES}-byte aggregate limit`));
     expect(calls.blobs).toBeGreaterThan(0);
+  });
+});
+
+describe("fetchSelectedBulkSkillImport", () => {
+  function collection(count: number): Record<string, FakeFile> {
+    const files: Record<string, FakeFile> = {};
+    for (let index = 0; index < count; index++) {
+      const root = `catalog/skill-${index}`;
+      files[`${root}/SKILL.md`] = {
+        content: `---\nname: skill-${index}\ndescription: Skill ${index}\n---\nbody\n`,
+      };
+      files[`${root}/references/guide.md`] = { content: `guide ${index}` };
+    }
+    return files;
+  }
+
+  it("refuses a moved ref before listing the tree or reading blobs", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+    const error = await fetchSelectedBulkSkillImport(
+      fakeProvider(collection(MAX_BULK_SKILL_IMPORT_SKILLS + 1), { calls }),
+      source({ subdirectory: "catalog" }),
+      { expectedCommitSha: "f".repeat(40), subdirectories: ["catalog/skill-0"] }
+    ).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SkillImportError);
+    expect((error as SkillImportError).status).toBe(409);
+    expect((error as SkillImportError).message).toMatch(`source moved to commit ${COMMIT}`);
+    expect(calls).toEqual({ access: 1, resolve: 1, tree: 0, blobs: 0 });
+  });
+
+  it("reads and maps only the selected roots, in selection order", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+
+    const result = await fetchSelectedBulkSkillImport(
+      fakeProvider(collection(MAX_BULK_SKILL_IMPORT_SKILLS), { calls }),
+      source({ subdirectory: "catalog" }),
+      { expectedCommitSha: COMMIT, subdirectories: ["catalog/skill-42", "catalog/skill-7"] }
+    );
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(["skill-42", "skill-7"]);
+    expect(result).toMatchObject({ commitSha: COMMIT, totalFiles: 4 });
+    expect(calls).toEqual({ access: 1, resolve: 1, tree: 1, blobs: 4 });
+  });
+
+  it("does not validate unselected skill content", async () => {
+    const result = await fetchSelectedBulkSkillImport(
+      fakeProvider(
+        { ...collection(1), "catalog/broken/SKILL.md": { content: "no frontmatter" } },
+        { otherEntries: ["catalog/broken/link"] }
+      ),
+      source({ subdirectory: "catalog" }),
+      { expectedCommitSha: COMMIT, subdirectories: ["catalog/skill-0"] }
+    );
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(["skill-0"]);
+  });
+
+  it("refuses a selected root the reviewed commit does not contain", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+
+    await expect(
+      fetchSelectedBulkSkillImport(
+        fakeProvider(collection(2), { calls }),
+        source({ subdirectory: "catalog" }),
+        { expectedCommitSha: COMMIT, subdirectories: ["catalog/skill-0", "elsewhere/skill"] }
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("elsewhere/skill is no longer in the collection"),
+    });
+    expect(calls.blobs).toBe(0);
   });
 });

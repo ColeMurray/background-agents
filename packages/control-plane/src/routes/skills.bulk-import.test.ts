@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bulkSkillImportPreviewResponseSchema,
+  MAX_BULK_SKILL_IMPORT_SKILLS,
+  type BulkSkillImportPreviewResponse,
+} from "@open-inspect/shared/types/skills";
 import type * as AuthenticateModule from "../auth/authenticate";
 import { SkillValidationError } from "../db/skills";
-import type * as GitImportModule from "../skills/git-import";
+import type * as SourceControlModule from "../source-control";
+import type { RepositoryTreeEntry } from "../source-control";
 import {
   createTestRequestHandler,
   ownerAuthorizationDatabase,
@@ -13,9 +19,11 @@ import { skillRoutes } from "./skills";
 
 const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
-  fetchBulkSkillImport: vi.fn(),
   unavailableNames: vi.fn(),
   createImportedSkills: vi.fn(),
+  resolveCommit: vi.fn(),
+  listTree: vi.fn(),
+  readBlob: vi.fn<(input: { blobId: string }) => Promise<Uint8Array>>(),
 }));
 
 vi.mock("../auth/authenticate", async (importOriginal) => ({
@@ -23,14 +31,19 @@ vi.mock("../auth/authenticate", async (importOriginal) => ({
   authenticate: mocks.authenticate,
 }));
 
-vi.mock("../skills/git-import", async (importOriginal) => ({
-  ...(await importOriginal<typeof GitImportModule>()),
-  fetchBulkSkillImport: mocks.fetchBulkSkillImport,
-  resolveSkillImportRepository: vi.fn().mockResolvedValue({
-    repoOwner: "acme",
-    repoName: "skills",
-    repoId: 1,
-    defaultBranch: "main",
+vi.mock("../source-control", async (importOriginal) => ({
+  ...(await importOriginal<typeof SourceControlModule>()),
+  createSourceControlProviderFromEnv: () => ({
+    name: "github",
+    checkRepositoryAccess: async () => ({
+      repoOwner: "acme",
+      repoName: "skills",
+      repoId: 1,
+      defaultBranch: "main",
+    }),
+    resolveCommit: mocks.resolveCommit,
+    listTree: mocks.listTree,
+    readBlob: mocks.readBlob,
   }),
 }));
 
@@ -56,40 +69,40 @@ const sourceInput = {
   ref: "main",
   subdirectory: "catalog",
 };
-const commitSha = "a".repeat(40);
+const reviewedCommit = "a".repeat(40);
+const movedCommit = "f".repeat(40);
 
-function fetchedSkill(
-  name: string,
-  subdirectory: string,
-  digest = name.charCodeAt(0).toString(16)
-) {
-  const sourceSha256 = digest.padEnd(64, "b").slice(0, 64);
-  const revisionSha256 = digest.padEnd(64, "c").slice(0, 64);
-  return {
-    name,
-    content: {
-      description: `${name} description`,
-      body: `${name} body`,
-      license: null,
-      compatibility: null,
-      metadata: {},
-      files: [],
-    },
-    source: {
-      provider: "github" as const,
-      repoOwner: "acme",
-      repoName: "skills",
-      requestedRef: "main",
-      resolvedRef: "main",
-      commitSha,
-      subdirectory,
-      sourceSha256,
-    },
-    warnings: [],
-    revisionSha256,
-    totalBytes: 20,
-    files: [{ path: "SKILL.md", content: name, sizeBytes: name.length, executable: false }],
+/** One skill root: its SKILL.md plus `references` supporting files. */
+function skillFiles(root: string, name: string, references = 0): Record<string, string> {
+  const files: Record<string, string> = {
+    [`catalog/${root}/SKILL.md`]: `---\nname: ${name}\ndescription: ${name} description\n---\n${name} body\n`,
   };
+  for (let index = 0; index < references; index++) {
+    files[`catalog/${root}/references/${index}.md`] = `${name} reference ${index}`;
+  }
+  return files;
+}
+
+/** Serve `files` as the tree the requested ref resolves to; blob IDs are paths. */
+function serveRepository(
+  commitSha: string,
+  files: Record<string, string>,
+  otherEntries: string[] = []
+): void {
+  const encoder = new TextEncoder();
+  const entries: RepositoryTreeEntry[] = Object.entries(files).map(([path, content]) => ({
+    path,
+    type: "file",
+    blobId: path,
+    sizeBytes: encoder.encode(content).byteLength,
+    executable: false,
+  }));
+  for (const path of otherEntries) {
+    entries.push({ path, type: "other", blobId: path, sizeBytes: null, executable: false });
+  }
+  mocks.resolveCommit.mockResolvedValue({ sha: commitSha });
+  mocks.listTree.mockResolvedValue({ entries, truncated: false });
+  mocks.readBlob.mockImplementation(async ({ blobId }) => encoder.encode(files[blobId]));
 }
 
 function post(path: string, body: unknown): Promise<Response> {
@@ -100,6 +113,34 @@ function post(path: string, body: unknown): Promise<Response> {
   );
 }
 
+/** Preview the served collection, then forget its repository reads. */
+async function preview(): Promise<BulkSkillImportPreviewResponse> {
+  const response = await post("/skills/import/bulk/preview", { source: sourceInput });
+  expect(response.status).toBe(200);
+  const reviewed = bulkSkillImportPreviewResponseSchema.parse(await response.json());
+  vi.clearAllMocks();
+  return reviewed;
+}
+
+function confirmation(reviewed: BulkSkillImportPreviewResponse, names: readonly string[]) {
+  return {
+    source: sourceInput,
+    expectedCommitSha: reviewed.commitSha,
+    skills: reviewed.skills
+      .filter((skill) => names.includes(skill.name))
+      .map((skill) => ({
+        subdirectory: skill.source.subdirectory,
+        name: skill.name,
+        expectedSourceSha256: skill.source.sourceSha256,
+        expectedRevisionSha256: skill.revisionSha256,
+      })),
+  };
+}
+
+function readPaths(): string[] {
+  return mocks.readBlob.mock.calls.map(([{ blobId }]) => blobId).sort();
+}
+
 describe("bulk managed skill import routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,28 +149,30 @@ describe("bulk managed skill import routes", () => {
       request,
     }));
     mocks.unavailableNames.mockResolvedValue(new Set());
+    mocks.createImportedSkills.mockImplementation(async (inputs: { name: string }[]) =>
+      inputs.map((input, index) => ({
+        id: `skill_${index}`,
+        name: input.name,
+        currentRevisionId: `skillrev_${index}`,
+      }))
+    );
   });
 
   it("marks existing, reserved, and every duplicate collection name unavailable", async () => {
-    const skills = [
-      fetchedSkill("duplicate", "catalog/a", "1"),
-      fetchedSkill("duplicate", "catalog/b", "2"),
-      fetchedSkill("existing", "catalog/c", "3"),
-      fetchedSkill("agent-browser", "catalog/d", "4"),
-      fetchedSkill("free", "catalog/e", "5"),
-    ];
-    mocks.fetchBulkSkillImport.mockResolvedValue({
-      skills,
-      commitSha,
-      totalFiles: 5,
-      totalBytes: 100,
+    serveRepository(reviewedCommit, {
+      ...skillFiles("a", "duplicate"),
+      ...skillFiles("b", "duplicate"),
+      ...skillFiles("c", "existing"),
+      ...skillFiles("d", "agent-browser"),
+      ...skillFiles("e", "free"),
     });
     mocks.unavailableNames.mockResolvedValue(new Set(["existing", "agent-browser"]));
 
     const response = await post("/skills/import/bulk/preview", { source: sourceInput });
-    const body = (await response.json()) as { skills: { name: string; nameAvailable: boolean }[] };
+    const body = bulkSkillImportPreviewResponseSchema.parse(await response.json());
 
     expect(response.status).toBe(200);
+    expect(body.commitSha).toBe(reviewedCommit);
     expect(body.skills.map(({ name, nameAvailable }) => [name, nameAvailable])).toEqual([
       ["duplicate", false],
       ["duplicate", false],
@@ -148,105 +191,118 @@ describe("bulk managed skill import routes", () => {
   });
 
   it.each([
-    ["commit", { expectedCommitSha: "f".repeat(40) }, /source moved/],
-    [
-      "root",
-      { skill: { subdirectory: "catalog/missing", name: "one" } },
-      /no longer in the collection/,
-    ],
-    ["name", { skill: { subdirectory: "catalog/one", name: "renamed" } }, /now named one/],
-    [
-      "source digest",
-      { skill: { subdirectory: "catalog/one", expectedSourceSha256: "f".repeat(64) } },
-      /source content changed/,
-    ],
-    [
-      "revision digest",
-      { skill: { subdirectory: "catalog/one", expectedRevisionSha256: "f".repeat(64) } },
-      /imported skill changed/,
-    ],
-  ] as [
-    string,
-    {
-      expectedCommitSha?: string;
-      skill?: Partial<{
-        subdirectory: string;
-        name: string;
-        expectedSourceSha256: string;
-        expectedRevisionSha256: string;
-      }>;
-    },
-    RegExp,
-  ][])("rejects %s drift without writing", async (_case, override, message) => {
-    const skill = fetchedSkill("one", "catalog/one", "1");
-    mocks.fetchBulkSkillImport.mockResolvedValue({
-      skills: [skill],
-      commitSha,
-      totalFiles: 1,
-      totalBytes: 20,
-    });
-    const reviewed = {
-      subdirectory: skill.source.subdirectory,
-      name: skill.name,
-      expectedSourceSha256: skill.source.sourceSha256,
-      expectedRevisionSha256: skill.revisionSha256,
-      ...override.skill,
-    };
+    ["root", { subdirectory: "catalog/missing" }, /no longer in the collection/],
+    ["name", { name: "renamed" }, /now named one/],
+    ["source digest", { expectedSourceSha256: "f".repeat(64) }, /source content changed/],
+    ["revision digest", { expectedRevisionSha256: "f".repeat(64) }, /imported skill changed/],
+  ] as const)("rejects %s drift without writing", async (_case, override, message) => {
+    serveRepository(reviewedCommit, skillFiles("one", "one"));
+    const body = confirmation(await preview(), ["one"]);
 
     const response = await post("/skills/import/bulk", {
-      source: sourceInput,
-      expectedCommitSha: override.expectedCommitSha ?? commitSha,
-      skills: [reviewed],
+      ...body,
+      skills: [{ ...body.skills[0], ...override }],
     });
 
     expect(response.status).toBe(409);
     expect((await response.json()) as { error: string }).toEqual({
       error: expect.stringMatching(message),
     });
-    expect(mocks.fetchBulkSkillImport).toHaveBeenCalledTimes(1);
     expect(mocks.createImportedSkills).not.toHaveBeenCalled();
   });
 
-  it("persists only selected reviewed roots with shared assignments and audits each skill", async () => {
-    const selected = [
-      fetchedSkill("one", "catalog/one", "1"),
-      fetchedSkill("two", "catalog/two", "2"),
-    ];
-    const unselected = fetchedSkill("three", "catalog/three", "3");
-    mocks.fetchBulkSkillImport.mockResolvedValue({
-      skills: [...selected, unselected],
-      commitSha,
-      totalFiles: 3,
-      totalBytes: 60,
+  it("refuses a moved source with 409 before listing or reading it", async () => {
+    serveRepository(reviewedCommit, { ...skillFiles("one", "one"), ...skillFiles("two", "two") });
+    const body = confirmation(await preview(), ["one"]);
+    mocks.resolveCommit.mockResolvedValue({ sha: movedCommit });
+
+    const response = await post("/skills/import/bulk", body);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: `The source moved to commit ${movedCommit} since it was previewed. Preview the import again.`,
     });
-    const stored = selected.map((skill, index) => ({
-      id: `skill_${index}`,
-      name: skill.name,
-      currentRevisionId: `skillrev_${index}`,
-      source: { ...skill.source, importedAt: 1, revisionId: `skillrev_${index}` },
-    }));
-    mocks.createImportedSkills.mockResolvedValue(stored);
+    expect(mocks.resolveCommit).toHaveBeenCalledOnce();
+    expect(mocks.listTree).not.toHaveBeenCalled();
+    expect(mocks.readBlob).not.toHaveBeenCalled();
+    expect(mocks.createImportedSkills).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "more skills than the collection limit",
+      () =>
+        serveRepository(
+          movedCommit,
+          Object.assign(
+            {},
+            ...Array.from({ length: MAX_BULK_SKILL_IMPORT_SKILLS + 1 }, (_, index) =>
+              skillFiles(`skill-${index}`, `skill-${index}`)
+            )
+          )
+        ),
+    ],
+    [
+      "a nested skill root",
+      () =>
+        serveRepository(movedCommit, {
+          ...skillFiles("one", "one"),
+          ...skillFiles("one/child", "child"),
+        }),
+    ],
+    [
+      "an unselected skill that cannot be imported",
+      () =>
+        serveRepository(movedCommit, { ...skillFiles("one", "one"), ...skillFiles("two", "two") }, [
+          "catalog/two/link",
+        ]),
+    ],
+  ])("answers 409, not 400, when the moved tree has %s", async (_case, moveTree) => {
+    serveRepository(reviewedCommit, { ...skillFiles("one", "one"), ...skillFiles("two", "two") });
+    const body = confirmation(await preview(), ["one"]);
+    moveTree();
+
+    const response = await post("/skills/import/bulk", body);
+
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toMatch(/source moved/);
+    expect(mocks.readBlob).not.toHaveBeenCalled();
+    expect(mocks.createImportedSkills).not.toHaveBeenCalled();
+  });
+
+  it("reads only the selected roots and persists them with shared assignments", async () => {
+    const names = Array.from({ length: 10 }, (_, index) => `skill-${index}`);
+    serveRepository(
+      reviewedCommit,
+      Object.assign({}, ...names.map((name) => skillFiles(name, name, 2)))
+    );
+    const reviewed = await preview();
     const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     const response = await post("/skills/import/bulk", {
-      source: sourceInput,
-      expectedCommitSha: commitSha,
-      skills: selected.map((skill) => ({
-        subdirectory: skill.source.subdirectory,
-        name: skill.name,
-        expectedSourceSha256: skill.source.sourceSha256,
-        expectedRevisionSha256: skill.revisionSha256,
-      })),
+      ...confirmation(reviewed, ["skill-3", "skill-7"]),
       assignments: [{ type: "global" }],
     });
 
     expect(response.status).toBe(201);
-    expect(mocks.fetchBulkSkillImport).toHaveBeenCalledTimes(1);
-    expect(mocks.createImportedSkills).toHaveBeenCalledWith(
-      selected.map((skill) => ({ name: skill.name, content: skill.content, source: skill.source })),
-      [{ type: "global" }],
-      "user-1"
-    );
+    expect(mocks.listTree).toHaveBeenCalledOnce();
+    expect(readPaths()).toEqual([
+      "catalog/skill-3/SKILL.md",
+      "catalog/skill-3/references/0.md",
+      "catalog/skill-3/references/1.md",
+      "catalog/skill-7/SKILL.md",
+      "catalog/skill-7/references/0.md",
+      "catalog/skill-7/references/1.md",
+    ]);
+    expect(mocks.createImportedSkills).toHaveBeenCalledOnce();
+    const [inputs, assignments, actor] = mocks.createImportedSkills.mock.calls[0];
+    expect(inputs.map((input: { name: string }) => input.name)).toEqual(["skill-3", "skill-7"]);
+    expect(inputs[0].source).toMatchObject({
+      commitSha: reviewedCommit,
+      subdirectory: "catalog/skill-3",
+    });
+    expect(assignments).toEqual([{ type: "global" }]);
+    expect(actor).toBe("user-1");
     const auditEvents = info.mock.calls
       .map(([line]) => JSON.parse(String(line)) as { event?: string; action?: string })
       .filter((event) => event.event === "managed_skills.audit");
@@ -255,28 +311,14 @@ describe("bulk managed skill import routes", () => {
   });
 
   it("returns a validation response when an assigned environment disappears before the write", async () => {
-    const skill = fetchedSkill("one", "catalog/one", "1");
-    mocks.fetchBulkSkillImport.mockResolvedValue({
-      skills: [skill],
-      commitSha,
-      totalFiles: 1,
-      totalBytes: 20,
-    });
+    serveRepository(reviewedCommit, skillFiles("one", "one"));
+    const body = confirmation(await preview(), ["one"]);
     mocks.createImportedSkills.mockRejectedValue(
       new SkillValidationError("One or more assigned environments no longer exist")
     );
 
     const response = await post("/skills/import/bulk", {
-      source: sourceInput,
-      expectedCommitSha: commitSha,
-      skills: [
-        {
-          subdirectory: skill.source.subdirectory,
-          name: skill.name,
-          expectedSourceSha256: skill.source.sourceSha256,
-          expectedRevisionSha256: skill.revisionSha256,
-        },
-      ],
+      ...body,
       assignments: [{ type: "environment", environmentId: "env-deleted" }],
     });
 
