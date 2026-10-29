@@ -273,10 +273,11 @@ export function SafeMarkdown({
             ol: MarkdownOrderedList,
             // Blockquotes
             blockquote: MarkdownBlockquote,
-            // Tables
+            // Tables: break-words resets the inherited overflow-wrap:anywhere, which would
+            // let auto layout shrink columns to one character; wide tables scroll instead.
             table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
               <div className="max-w-full overflow-x-auto">
-                <table className="min-w-full border-collapse text-sm" {...props}>
+                <table className="min-w-full border-collapse text-sm break-words" {...props}>
                   {children}
                 </table>
               </div>
