@@ -24,7 +24,7 @@ export function emptyMarkdownPreviewStatus(file: SessionDiffFile): "empty" | "de
  * full context, so a complete document is a single hunk that starts on the first line.
  */
 export function previewMarkdownDocument(patch: string): MarkdownPreviewDocument {
-  const [file, ...otherFiles] = parsePatchFiles(patch).flatMap((parsed) => parsed.files);
+  const [file, ...otherFiles] = parsePatchFilesStrictly(patch);
   if (!file || otherFiles.length > 0) return { status: "unavailable" };
   if (file.type === "deleted") return { status: "deleted" };
 
@@ -41,4 +41,16 @@ export function previewMarkdownDocument(patch: string): MarkdownPreviewDocument 
 
   const content = file.additionLines.join("");
   return content ? { status: "document", content } : { status: "empty" };
+}
+
+/**
+ * Lenient parsing rewrites a hunk's counts to the lines it found, so a truncated hunk would
+ * pass for a complete one. Strict parsing throws on that mismatch instead.
+ */
+function parsePatchFilesStrictly(patch: string) {
+  try {
+    return parsePatchFiles(patch, undefined, true).flatMap((parsed) => parsed.files);
+  } catch {
+    return [];
+  }
 }

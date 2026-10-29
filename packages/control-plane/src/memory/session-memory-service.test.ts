@@ -8,6 +8,7 @@ import type { MemoryPartition } from "./partition";
 import { emptySelection } from "./selection";
 import { SessionMemoryService, type SessionMemoryServiceDeps } from "./session-memory-service";
 import type {
+  MemoryPromptContext,
   MemoryRecord,
   MemorySession,
   MemorySources,
@@ -18,6 +19,25 @@ import type {
 const api = { repoOwner: "acme", repoName: "api", repoId: 1 };
 const web = { repoOwner: "acme", repoName: "web", repoId: 2 };
 const apiPartition: MemoryPartition = { type: "repository", repoId: api.repoId };
+const ownerPrompt: MemoryPromptContext = { authorUserId: "owner", othersPrompted: false };
+const teammatePrompt: MemoryPromptContext = { authorUserId: "teammate", othersPrompted: true };
+const afterTeammate: MemoryPromptContext = { authorUserId: "owner", othersPrompted: true };
+const personalHit = {
+  id: "mine",
+  revisionId: "rev_mine",
+  partition: { type: "personal", userId: "owner" },
+  scope: { type: "personal" },
+  title: "Test setup",
+  description: "How to run the tests",
+} as const;
+const repositoryHit = {
+  id: "api",
+  revisionId: "rev_api",
+  partition: apiPartition,
+  scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+  title: "Deploys",
+  description: "How to deploy",
+} as const;
 
 function memorySession(
   overrides: Partial<Omit<MemorySession, "principal" | "sources">> & {
@@ -71,10 +91,13 @@ function setup(
     pinned?: string[];
     loaded?: PinnedSelection;
     readable?: boolean[];
+    /** Successive prompt lookups; the last answer repeats. */
+    prompts?: MemoryPromptContext[];
   } = {}
 ) {
   const records = new Map((options.records ?? []).map((memory) => [memory.id, memory]));
   const readable = [...(options.readable ?? [])];
+  const prompts = [...(options.prompts ?? [ownerPrompt])];
   const deps = {
     selections: {
       loadSession: vi.fn(async () => options.session ?? memorySession()),
@@ -91,15 +114,26 @@ function setup(
       search: vi.fn<SessionMemoryServiceDeps["factIndex"]["search"]>(async () => []),
     },
     access: {
-      check: vi.fn(async () =>
+      check: vi.fn<SessionMemoryServiceDeps["access"]["check"]>(async () =>
         (readable.shift() ?? true)
           ? ({ kind: "granted" } as const)
           : ({ kind: "denied", reason: "repository_ungranted" } as const)
       ),
     },
+    prompts: {
+      current: vi.fn(async () => (prompts.length > 1 ? prompts.shift()! : prompts[0])),
+    },
+    audit: {
+      recordRead: vi.fn<SessionMemoryServiceDeps["audit"]["recordRead"]>(async () => {}),
+    },
     requestId: "request",
   } satisfies SessionMemoryServiceDeps;
-  return { deps, service: new SessionMemoryService(deps) };
+  return {
+    deps,
+    service: new SessionMemoryService(deps),
+    /** Answer every later prompt lookup with `next`. */
+    promptBy: (next: MemoryPromptContext) => prompts.splice(0, prompts.length, next),
+  };
 }
 
 const fact = {
@@ -130,8 +164,10 @@ describe("SessionMemoryService.write", () => {
         sessionId: "session",
         requestId: "request",
       },
-      { personalAutoSaveEligible: true }
+      // Only personal facts can skip review; a shared write never asks who is prompting.
+      { personalAutoSaveEligible: false }
     );
+    expect(deps.prompts.current).not.toHaveBeenCalled();
     expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
       apiPartition,
     ]);
@@ -169,11 +205,48 @@ describe("SessionMemoryService.write", () => {
     expect(deps.records.create).not.toHaveBeenCalled();
   });
 
+  it("writes personal memory only on the owner's own prompt", async () => {
+    const { service, deps, promptBy } = setup();
+    const personal = { ...fact, scopeType: "personal" as const };
+    promptBy(teammatePrompt);
+    await expect(service.write("session", personal)).rejects.toThrow(
+      "Personal memory is available only on the session owner's own prompts"
+    );
+    promptBy({ authorUserId: null, othersPrompted: true });
+    await expect(service.write("session", personal)).rejects.toThrow(MemoryAccessError);
+    expect(deps.records.create).not.toHaveBeenCalled();
+
+    promptBy(ownerPrompt);
+    await service.write("session", personal);
+    expect(deps.records.create).toHaveBeenCalledWith(
+      expect.objectContaining({ partition: { type: "personal", userId: "owner" } }),
+      expect.objectContaining({ kind: "agent", userId: "owner" }),
+      { personalAutoSaveEligible: true }
+    );
+  });
+
+  it("stops auto-saving the owner's personal facts once anyone else has prompted", async () => {
+    const { service, deps } = setup({ prompts: [{ authorUserId: "owner", othersPrompted: true }] });
+    await service.write("session", { ...fact, scopeType: "personal" });
+    expect(deps.records.create.mock.calls[0][2]).toEqual({ personalAutoSaveEligible: false });
+  });
+
   it("denies a write when the principal can no longer read the partition", async () => {
     const { service, deps } = setup({ readable: [false] });
     await expect(service.write("session", { ...fact, scopeType: "repository" })).rejects.toThrow(
       MemoryAccessError
     );
+    expect(deps.records.create).not.toHaveBeenCalled();
+  });
+
+  it("checks the personal store before writing to it", async () => {
+    const { service, deps } = setup({ readable: [false] });
+    await expect(service.write("session", { ...fact, scopeType: "personal" })).rejects.toThrow(
+      MemoryAccessError
+    );
+    expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
+      { type: "personal", userId: "owner" },
+    ]);
     expect(deps.records.create).not.toHaveBeenCalled();
   });
 });
@@ -197,6 +270,87 @@ describe("SessionMemoryService.read", () => {
       status: "active",
       content: "Start the database",
     });
+  });
+
+  it("reads personal memory only on the owner's prompt and audits what it returns", async () => {
+    const repository = record("api", {
+      partition: apiPartition,
+      scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+    });
+    const records = [record("mine"), repository];
+    const teammate = setup({ records, prompts: [teammatePrompt] });
+    await expect(teammate.service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    await expect(teammate.service.read("session", "api")).resolves.toMatchObject({
+      id: "api",
+    });
+    expect(teammate.deps.audit.recordRead).not.toHaveBeenCalled();
+
+    const owner = setup({ records });
+    await expect(owner.service.read("session", "mine")).resolves.toMatchObject({
+      content: "Start the database",
+    });
+    expect(owner.deps.audit.recordRead).toHaveBeenCalledWith({
+      requestId: "request",
+      sessionId: "session",
+      promptAuthorUserId: "owner",
+      ownerUserId: "owner",
+      memoryIds: ["mine"],
+    });
+  });
+
+  it("conceals a personal record when the owner opts out while it is being read", async () => {
+    const { service, deps } = setup({ records: [record("mine")] });
+    // Once the preference is off, loading the session drops its personal owner.
+    deps.selections.loadSession
+      .mockResolvedValueOnce(memorySession())
+      .mockResolvedValueOnce(memorySession({ sources: { personalOwnerUserId: null } }));
+    await expect(service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    expect(deps.selections.loadSession).toHaveBeenCalledTimes(2);
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
+  it("never asks the session runtime when personal memory is not involved", async () => {
+    const repository = record("api", {
+      partition: apiPartition,
+      scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+    });
+    const { service, deps } = setup({ records: [repository] });
+    deps.prompts.current.mockRejectedValue(new Error("Session runtime unavailable"));
+    await expect(service.read("session", "api")).resolves.toMatchObject({ id: "api" });
+    await expect(
+      service.search("session", { query: "needle", limit: 10, scopeType: "repository" })
+    ).resolves.toEqual({ results: [], hasMore: false });
+    await expect(
+      service.write("session", { ...fact, scopeType: "repository" })
+    ).resolves.toMatchObject({ id: "created" });
+
+    const excluded = setup({ session: memorySession({ sources: { personalOwnerUserId: null } }) });
+    await excluded.service.search("session", { query: "needle", limit: 10 });
+    expect(deps.prompts.current).not.toHaveBeenCalled();
+    expect(excluded.deps.prompts.current).not.toHaveBeenCalled();
+  });
+
+  it("conceals a personal record when someone else prompts while it is being read", async () => {
+    const { service, deps } = setup({
+      records: [record("mine")],
+      prompts: [ownerPrompt, afterTeammate],
+    });
+    await expect(service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
+  it("audits an archived personal record's notice like any personal read", async () => {
+    const archived = record("old", {
+      status: "archived",
+      archiveKind: "manual",
+      archivedAt: 5,
+      archiveNote: "No longer true",
+    });
+    const { service, deps } = setup({ records: [archived], pinned: ["old"] });
+    await expect(service.read("session", "old")).resolves.toMatchObject({ status: "archived" });
+    expect(deps.audit.recordRead).toHaveBeenCalledWith(
+      expect.objectContaining({ memoryIds: ["old"] })
+    );
   });
 
   it("returns a body-free notice only for pinned archived records", async () => {
@@ -247,12 +401,82 @@ describe("SessionMemoryService.search", () => {
     });
   });
 
+  it("searches personal memory only on the owner's prompt", async () => {
+    const { service, deps } = setup({ prompts: [teammatePrompt] });
+    await service.search("session", { query: "needle", limit: 10 });
+    expect(deps.factIndex.search).toHaveBeenCalledWith(
+      expect.objectContaining({ partitions: [{ partition: apiPartition }] })
+    );
+    await expect(
+      service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
+    ).rejects.toThrow("Personal memory is available only on the session owner's own prompts");
+  });
+
+  it("stops reading personal memory on the owner's prompts once anyone else has prompted", async () => {
+    const records = [record("mine")];
+    const { service, deps } = setup({ records, prompts: [afterTeammate] });
+    await expect(service.read("session", "mine")).rejects.toThrow(MemoryNotFoundError);
+    await expect(
+      service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
+    ).rejects.toThrow("someone else has prompted it");
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
+  it("audits the personal records a search returns", async () => {
+    const { service, deps } = setup();
+    deps.factIndex.search.mockResolvedValue([personalHit, repositoryHit]);
+    await service.search("session", { query: "needle", limit: 10 });
+    expect(deps.audit.recordRead).toHaveBeenCalledWith(
+      expect.objectContaining({ promptAuthorUserId: "owner", memoryIds: ["mine"] })
+    );
+  });
+
+  it("withholds personal hits when the owner opts out while the query runs", async () => {
+    const { service, deps } = setup();
+    // Once the preference is off, loading the session drops its personal owner.
+    deps.selections.loadSession
+      .mockResolvedValueOnce(memorySession())
+      .mockResolvedValueOnce(memorySession({ sources: { personalOwnerUserId: null } }));
+    deps.factIndex.search.mockResolvedValue([personalHit, repositoryHit]);
+    const response = await service.search("session", { query: "needle", limit: 10 });
+    expect(response.results.map((result) => result.id)).toEqual(["api"]);
+    expect(deps.selections.loadSession).toHaveBeenCalledTimes(2);
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
+  it("drops personal hits when someone else prompts while the query runs", async () => {
+    const { service, deps } = setup({ prompts: [ownerPrompt, afterTeammate] });
+    deps.factIndex.search.mockResolvedValue([personalHit, repositoryHit]);
+    const response = await service.search("session", { query: "needle", limit: 10 });
+    expect(response.results.map((result) => result.id)).toEqual(["api"]);
+    expect(deps.audit.recordRead).not.toHaveBeenCalled();
+  });
+
   it("discards results when access is revoked while the query runs", async () => {
-    const { service, deps } = setup({ readable: [true, false] });
+    // Personal store check, then access before and after the query.
+    const { service, deps } = setup({ readable: [true, true, false] });
     await expect(service.search("session", { query: "needle", limit: 10 })).rejects.toThrow(
       MemoryAccessError
     );
     expect(deps.factIndex.search).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a personal store its owner may not use, and refuses it when requested", async () => {
+    const { service, deps } = setup();
+    deps.access.check.mockImplementation(async (_principal, partitions) =>
+      partitions.some((partition) => partition.type === "personal")
+        ? { kind: "denied", reason: "personal_unavailable" }
+        : { kind: "granted" }
+    );
+    await service.search("session", { query: "needle", limit: 10 });
+    expect(deps.factIndex.search).toHaveBeenCalledWith({
+      terms: ["needle"],
+      limit: 10,
+      partitions: [{ partition: apiPartition }],
+    });
+    await expect(
+      service.search("session", { query: "needle", limit: 10, scopeType: "personal" })
+    ).rejects.toThrow("Memory scope is no longer available");
   });
 });
 
@@ -308,8 +532,59 @@ describe("SessionMemoryService.renderedContext", () => {
     expect(rendered.rendered).toContain(harnessMemoryToolName(harness, "memory_write"));
   });
 
+  it("keeps pinned personal records after the owner opts out", async () => {
+    const { service, deps } = setup({
+      loaded,
+      session: memorySession({ sources: { personalOwnerUserId: null } }),
+    });
+    expect((await service.renderedContext("session")).rendered).toContain("Test setup");
+    expect(deps.access.check).toHaveBeenCalledWith({ userId: "owner", ownerTeamId: null }, [
+      { type: "personal", userId: "owner" },
+    ]);
+  });
+
   it("refuses to install when the principal lost access to a pinned partition", async () => {
-    const { service } = setup({ loaded, readable: [false] });
+    // The personal store is still usable; the full check fails.
+    const { service } = setup({ loaded, readable: [true, false] });
     await expect(service.renderedContext("session")).rejects.toThrow(MemoryAccessError);
+  });
+
+  it("leaves personal records out while their owner may not use personal memory", async () => {
+    const deploy: PinnedMemoryEntry = {
+      memoryId: "deploy",
+      revisionId: "rev_deploy",
+      scope: { type: "repository", repoOwner: "acme", repoName: "api" },
+      partition: apiPartition,
+      title: "Deploy runbook",
+      inclusion: "summary",
+      description: "How to deploy",
+    };
+    const { service, deps } = setup({
+      loaded: {
+        selection: {
+          ...manifest,
+          items: [
+            ...manifest.items,
+            {
+              ...manifest.items[0],
+              memoryId: "deploy",
+              revisionId: "rev_deploy",
+              scope: deploy.scope,
+              title: deploy.title,
+            },
+          ],
+        },
+        drift: [],
+        entries: [entry, deploy],
+      },
+    });
+    deps.access.check.mockImplementation(async (_principal, partitions) =>
+      partitions.some((partition) => partition.type === "personal")
+        ? { kind: "denied", reason: "personal_unavailable" }
+        : { kind: "granted" }
+    );
+    const { rendered } = await service.renderedContext("session");
+    expect(rendered).toContain("Deploy runbook");
+    expect(rendered).not.toContain("Test setup");
   });
 });

@@ -1,3 +1,4 @@
+/** Bound a promise even when its underlying operation does not honor cancellation. */
 export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {
     void promise.catch(() => undefined);

@@ -22,7 +22,7 @@ import {
 import { ChevronDownIcon } from "@/components/ui/icons";
 import { MemoryCollection } from "./memory-collection";
 
-/** Persist the account-wide default and disclose the audience of included personal context. */
+/** Persist the account-wide preference and disclose who personal context reaches. */
 function PersonalMemoryDefault() {
   const switchId = useId();
   const { preferences, error: loadError, mutate } = useMemoryPreferences();
@@ -48,11 +48,12 @@ function PersonalMemoryDefault() {
           disabled={!preferences || saving}
           onCheckedChange={(checked) => void save(checked)}
         />
-        <label htmlFor={switchId}>Include my personal memories in new sessions</label>
+        <label htmlFor={switchId}>Use my personal memories in my sessions</label>
       </div>
       <p className="text-xs text-muted-foreground">
-        Applies to all new web, integration-created and scheduled sessions. Existing sessions keep
-        their original selection.
+        Applies to sessions you start on the web or in a Slack direct message. Turning it off also
+        stops your existing sessions from searching, reading or saving them. Sessions started from
+        now on by automations, Slack channels, Linear or GitHub don&apos;t include them.
       </p>
       <p className="text-xs text-muted-foreground">{PERSONAL_MEMORY_DISCLOSURE}</p>
       {(saveError || loadError) && (
@@ -65,8 +66,9 @@ function PersonalMemoryDefault() {
 }
 
 /**
- * Combine owner-only memory management with the future-session inclusion default. The default is
- * available to every session creator; only the catalog requires `memories.manage_own`.
+ * Combine owner-only memory management with the personal memory preference. The preference is
+ * available to every session creator so anyone can opt out; only the catalog requires
+ * `memories.manage_own`, and sessions use personal memory only while the owner holds it.
  */
 export function MemoriesSettings() {
   const { hasPermission } = useCurrentUserAuthorization();

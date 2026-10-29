@@ -158,6 +158,12 @@ const userSchema = z.object({
   login: z.string().optional(),
 });
 
+// "User", "Bot", "Organization" or "Mannequin". Read only to classify the
+// sender, so a malformed value is dropped rather than failing the payload.
+const senderSchema = userSchema.extend({
+  type: z.string().optional().catch(undefined),
+});
+
 const repositorySchema = z.object({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   name: z.string().optional(),
@@ -169,7 +175,7 @@ const labelArraySchema = z.array(z.object({ name: z.string().optional() }));
 const baseEventSchema = z.object({
   action: z.string(),
   repository: repositorySchema,
-  sender: userSchema.optional(),
+  sender: senderSchema.optional(),
 });
 
 // Repo identity on a PR's head/base. `id` is the stable provider repo id used

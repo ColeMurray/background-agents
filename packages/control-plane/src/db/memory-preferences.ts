@@ -1,7 +1,10 @@
 import type { MemoryPreferences } from "@open-inspect/shared/types/memories";
 import type { SqlDatabase } from "./sql-database";
 
-/** Per-user memory defaults applied when new sessions resolve; existing manifests never change. */
+/**
+ * Per-user memory preferences: the default new sessions resolve with, and, while personal memory
+ * is off, a stop on personal reads and writes in existing sessions. Pinned manifests never change.
+ */
 export class MemoryPreferenceStore {
   constructor(private readonly db: SqlDatabase) {}
 

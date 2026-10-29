@@ -6,13 +6,8 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_LINEAR_UNBOUND_CHANNELS,
-  linearBotGlobalSettingsSchema,
-  type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
-  type GitHubBotSettings,
   type IntegrationId,
-  type SandboxSettings,
-  type VncSettings,
 } from "@open-inspect/shared/types/integrations";
 import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import {
@@ -396,10 +391,10 @@ async function handleGetResolvedConfig(
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
-  const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 
+  // Resolve inside each branch so `id` is narrowed and `settings` is typed per integration.
   if (id === "github") {
-    const githubSettings = settings as GitHubBotSettings;
+    const { enabledRepos, settings: githubSettings } = await store.getResolvedConfig(id, repo);
     const harness = getValidHarnessOrDefault(githubSettings.harness);
 
     return json({
@@ -419,7 +414,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "linear") {
-    const linearSettings = linearBotGlobalSettingsSchema.parse(settings);
+    const { enabledRepos, settings: linearSettings } = await store.getResolvedConfig(id, repo);
     const harness = getValidHarnessOrDefault(linearSettings.harness);
 
     return json({
@@ -440,7 +435,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "code-server") {
-    const codeServerSettings = settings as CodeServerSettings;
+    const { enabledRepos, settings: codeServerSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,
@@ -452,7 +447,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "vnc") {
-    const vncSettings = settings as VncSettings;
+    const { enabledRepos, settings: vncSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,
@@ -464,7 +459,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "sandbox") {
-    const sandboxSettings = settings as SandboxSettings;
+    const { enabledRepos, settings: sandboxSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,

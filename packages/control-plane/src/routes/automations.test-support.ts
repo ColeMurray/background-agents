@@ -65,7 +65,7 @@ export const mockProviderAccountStore = {
 };
 
 export const mockUserStore = {
-  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
+  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", outcome: "existing" }),
 };
 
 export const mockEnvironmentStore = {

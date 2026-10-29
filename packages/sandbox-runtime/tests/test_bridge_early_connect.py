@@ -20,6 +20,7 @@ from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 from sandbox_runtime.harness import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessStartError
+from sandbox_runtime.reconnect_backoff import RECONNECT_BACKOFF_BASE
 from tests.conftest import ScriptedHarness
 
 
@@ -289,7 +290,7 @@ class TestHarnessAttach:
         await bridge.boot_attach._relay_boot_events()
 
         assert bridge.git_signing.initialize.await_count == 2
-        sleep.assert_awaited_once_with(bridge.RECONNECT_BACKOFF_BASE)
+        sleep.assert_awaited_once_with(RECONNECT_BACKOFF_BASE)
         assert bridge.boot_attach._boot_ready.is_set()
 
     async def test_non_retryable_signing_failure_exits_with_the_deterministic_cause(

@@ -358,11 +358,12 @@ project_root = "../../../"
 #          "https://cdn.example.com/logo.svg".
 # app_icon_url = ""
 
-# Override the R2 media bucket name (optional)
+# Name of the R2 media bucket Terraform creates and manages (optional)
 # Defaults to "open-inspect-media-<deployment_name>" when left empty.
-# Set this when the bucket must be pre-created out-of-band — for example, when
-# the Cloudflare API token used by Terraform doesn't have permission to create
-# R2 buckets and an admin had to provision one with a specific name.
+# This selects the name of the managed cloudflare_r2_bucket.media resource; it
+# does not select an externally managed bucket. Import a pre-created bucket into
+# state before applying. Changing the name of a bucket Terraform already manages
+# plans replacement, not an in-place rename, as described below.
 #
 # Manual setup requirements (when an admin pre-creates the bucket):
 #   - Must live in the same Cloudflare account as the Workers (cloudflare_account_id).
@@ -375,23 +376,43 @@ project_root = "../../../"
 #   wrangler r2 bucket create <bucket-name> --location ENAM
 # Or create via the Cloudflare dashboard: R2 -> Create bucket (Standard storage class).
 #
-# After manual creation, import the bucket so Terraform manages the binding without
-# trying to recreate it:
+# Set r2_media_bucket_name to the pre-created bucket's name, then import it so
+# Terraform manages the bucket without trying to recreate it. Run from this
+# directory with the deployment's initialized backend, workspace, and variables.
+# If cloudflare_r2_bucket.media already tracks a bucket, use the migration below
+# instead of importing over the occupied address:
 #   terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<bucket-name>/default
 #
-# WARNING — renaming an existing Terraform-managed bucket:
-# If you previously deployed without this variable (Terraform owns the default-named
-# bucket) and now set r2_media_bucket_name to a different name WITHOUT first running
-# `terraform import` on the new name, Terraform will destroy the existing bucket and
-# create a new one — permanently deleting all stored objects. Migrate objects first
-# (e.g. with rclone) and import the new bucket before applying.
+# WARNING - changing an existing Terraform-managed bucket's name:
+# Terraform plans to delete the old bucket and create a new one. It does not empty
+# the bucket: Cloudflare rejects deletion while objects remain, so apply fails
+# without deleting them. In-progress multipart uploads and event notification
+# rules also block deletion. Do not rely on a name change to migrate stored media.
+#
+# To switch to a pre-created bucket while retaining the old bucket:
+#   1. Pause automated Terraform applies and media writes. Back up Terraform state
+#      securely, and use the same initialized backend/workspace as the deployment.
+#   2. Create the destination bucket with the requirements above. Copy and verify
+#      all objects (e.g. with rclone); keep writes paused through the cutover.
+#   3. Set r2_media_bucket_name to the destination name in local variables and in
+#      the CI configuration (R2_MEDIA_BUCKET_NAME) if CI manages the deployment.
+#   4. Replace the occupied state entry; do not plan/apply between these commands:
+#        terraform state rm cloudflare_r2_bucket.media
+#        terraform import cloudflare_r2_bucket.media <cloudflare_account_id>/<new-bucket-name>/default
+#      If import fails, resolve it before any apply; the address is now untracked.
+#   5. Run terraform plan and confirm the destination bucket is not being created,
+#      replaced, or deleted. Apply the Worker binding change, verify media access,
+#      then resume writes and automated applies.
+# The old bucket and its objects remain, but are no longer managed by Terraform.
+# Retain or clean them up separately only after verifying the cutover.
 #
 # Worker runtime needs (granted automatically through the binding, listed for reference):
 #   - R2 object-level: Read, Write, Delete on this bucket only.
 # The Terraform/Cloudflare API token does NOT need object-level R2 permissions —
 # it only manages the bucket resource and the Worker binding. Required token scopes:
-#   - Workers R2 Storage: Edit (only needed when Terraform creates/manages the bucket;
-#     if the bucket is pre-created and imported, drop to Read or omit)
+#   - Workers R2 Storage: Edit for bucket creation, updates, or deletion. An imported
+#     bucket still requires bucket read access for imports and Terraform refresh;
+#     Read alone is sufficient only while no bucket changes are planned.
 #   - Workers Scripts: Edit (to attach the MEDIA_BUCKET binding to the Worker)
 # r2_media_bucket_name = ""
 
@@ -419,12 +440,19 @@ enable_service_bindings = false
 # allowlist (GitHub username, email domain, exact email, or GitHub org
 # membership). Set at least one unless you intentionally opt into open access
 # with unsafe_allow_all_users = true.
+# These are deployment baseline rules, additive with SQL-managed rules in
+# Settings > Workspace access > Sign-in allowlist. The UI cannot narrow this
+# baseline, and Terraform changes do not remove managed grants. Keep a compatible
+# deployment baseline for every enabled provider; managed rules do not satisfy
+# Terraform safety checks. Prefer a known valid recovery admin email below.
+# Google needs email/domain rules; GitHub also supports username/org rules.
+# Managed limits: 50 total rules, 10 orgs, 64-KiB requests (not baseline limits).
 
 # Comma-separated list of GitHub usernames allowed to sign in
 allowed_users = ""
 
 # Comma-separated list of email domains allowed to sign in (matches any
-# provider's verified email). Example: "example.com,corp.io"
+# provider's verified email; exact domains, not subdomains). Example: "example.com,corp.io"
 allowed_email_domains = ""
 
 # Comma-separated list of exact email addresses allowed to sign in. Use this for
@@ -433,12 +461,17 @@ allowed_email_domains = ""
 allowed_emails = ""
 
 # Comma-separated list of GitHub organizations whose active members can sign in.
-# Requests read:org only when set, then checks membership at sign-in with the
-# signing-in user's OAuth token. Existing sessions last until session expiry.
+# Checks membership with the signing-in user's token; rules request no new OAuth
+# scopes or read:org. Removing a rule does not revoke existing browser sessions;
+# use Members > Suspend for revocation. Verified GitHub email is still required.
 # Requires GitHub App Organization permissions: Members read-only; existing apps
 # must republish/request approval after this permission changes.
 allowed_github_orgs = ""
 
-# Explicitly bypass the Terraform access-control safety check and allow any
-# authenticated user to sign in when all allowlists are empty.
+# Explicit unsafe opt-in: any otherwise valid provider identity may sign in ONLY
+# when all effective deployment AND managed lists are empty. Nonempty rules still
+# apply. The editor is read-only whenever this flag is true, even when dormant.
+# For old-code rollback: stop deployments/control automatic rollback, copy the
+# managed rules from Settings, union them with the ACTUAL deployed baseline,
+# deploy that union with this flag false, and verify it before rollback.
 unsafe_allow_all_users = false

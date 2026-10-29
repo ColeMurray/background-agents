@@ -87,6 +87,7 @@ export class SlackEventHandler {
       if (!matchesConditions(config.conditions, event, conditionRegistry)) continue;
 
       const triggerMetadata = serializeSlackTriggerMetadata(event);
+      const actorKind = event.botId === undefined ? "person" : "bot";
       const botLimit =
         event.botId === undefined ? "under_limit" : await deps.bots.limitState(automation.id, now);
       if (botLimit === "over_limit_recorded") {
@@ -103,6 +104,7 @@ export class SlackEventHandler {
         const result = await deps.invocations.skipEvent(
           {
             automation,
+            actorKind,
             triggerKey: event.triggerKey,
             concurrencyKey: event.concurrencyKey,
             triggerMetadata,
@@ -124,6 +126,7 @@ export class SlackEventHandler {
       const result = await deps.invocations.start({
         automation,
         source: "event",
+        actorKind,
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata,

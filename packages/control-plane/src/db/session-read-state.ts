@@ -2,12 +2,22 @@ import {
   INITIAL_SESSION_READ_STATE_VERSION,
   type SessionReadState,
 } from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 
-export interface ViewerReadStateRow {
-  unread: number;
-  latest_terminal_message_id: string | null;
-  latest_terminal_message_created_at: number | null;
-}
+export const viewerReadStateRowSchema = z.union([
+  z.object({
+    unread: z.literal(0),
+    latest_terminal_message_id: z.null(),
+    latest_terminal_message_created_at: z.null(),
+  }),
+  z.object({
+    unread: z.union([z.literal(0), z.literal(1)]),
+    latest_terminal_message_id: z.string(),
+    latest_terminal_message_created_at: z.number(),
+  }),
+]);
+
+export type ViewerReadStateRow = z.infer<typeof viewerReadStateRowSchema>;
 
 /** Requires `users AS viewer` and `session_read_states AS read_state` joins. */
 export function unreadSql(sessionAlias: string): string {
@@ -33,6 +43,6 @@ export function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
     : {
         latestMessageId: row.latest_terminal_message_id,
         unread: row.unread === 1,
-        version: row.latest_terminal_message_created_at ?? INITIAL_SESSION_READ_STATE_VERSION,
+        version: row.latest_terminal_message_created_at,
       };
 }

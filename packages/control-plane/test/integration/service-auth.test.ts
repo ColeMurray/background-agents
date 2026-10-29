@@ -173,6 +173,14 @@ describe("sig1 service-credential authentication", () => {
   });
 
   it("accepts a signed request with a query string regardless of param order", async () => {
+    await new UserStore(env.DB).resolveOrCreateUser(
+      {
+        provider: "linear",
+        providerUserId: "query-order",
+        providerEmail: "query-order@linear.test",
+      },
+      () => {}
+    );
     const createdBy = "a".repeat(32);
     const signedUrl = `https://test.local/sessions?limit=5&createdBy=${createdBy}`;
     const headers = await buildServiceAuthHeaders({
@@ -389,6 +397,7 @@ describe("sig1 service-credential authentication", () => {
       actor: "linear:U-CREATOR",
       body: JSON.stringify({
         title: "Linear callback session",
+        actorEmail: "creator@linear.test",
         model: "anthropic/claude-haiku-4-5",
       }),
     });
@@ -811,11 +820,14 @@ describe("sig1 service-credential authentication", () => {
 
   it("does not relink a known actor when a session body carries a conflicting email", async () => {
     const users = new UserStore(env.DB);
-    const knownActor = await users.resolveOrCreateUser({
-      provider: "slack",
-      providerUserId: "U-KNOWN-IMMUTABLE",
-      displayName: "Known Actor",
-    });
+    const knownActor = await users.resolveOrCreateUser(
+      {
+        provider: "slack",
+        providerUserId: "U-KNOWN-IMMUTABLE",
+        displayName: "Known Actor",
+      },
+      () => {}
+    );
     const conflictingViewer = await users.createUser({
       displayName: "Conflicting Viewer",
       email: "conflicting-viewer@corp.test",

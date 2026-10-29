@@ -112,6 +112,7 @@ export class Scheduler {
         const result = await this.deps.invocations.start({
           automation,
           source: "schedule",
+          actorKind: "system",
           scheduledAt: automation.next_run_at!,
           advanceToNextRunAt: nextRunAt,
           repositories,
@@ -144,6 +145,7 @@ export class Scheduler {
                 id: this.deps.crypto.generateId(),
                 automation_id: automation.id,
                 source: "schedule",
+                actor_kind: "system",
                 scheduled_at: automation.next_run_at,
                 trigger_key: null,
                 concurrency_key: null,
@@ -208,6 +210,9 @@ export class Scheduler {
     const result = await this.deps.invocations.start({
       automation,
       source: "manual",
+      // Only a signed-in user reaches the trigger route today. A credential that
+      // lets an agent trigger runs must record its firings as something else.
+      actorKind: "person",
       executionPrincipal: {
         platformUserId: requesterUserId,
         participantUserId: requesterUserId,

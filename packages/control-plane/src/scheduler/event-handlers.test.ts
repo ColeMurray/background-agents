@@ -96,7 +96,7 @@ function slackHarness() {
     attribution: { resolve: vi.fn().mockResolvedValue(null) },
     scmProvider: "github" as const,
     botFirings: {
-      countEventFiringsSince: vi.fn().mockResolvedValue(0),
+      countFiringsSince: vi.fn().mockResolvedValue(0),
       hasSkippedInvocationSince: vi.fn().mockResolvedValue(false),
     },
     clock: { now: () => 100 },
@@ -239,17 +239,20 @@ describe("Slack bot messages", () => {
   it("starts below the hourly limit", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT - 1);
+    deps.botFirings.countFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT - 1);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(botEvent)).resolves.toMatchObject({ triggered: 1 });
     expect(deps.invocations.skipEvent).not.toHaveBeenCalled();
+    expect(deps.invocations.start).toHaveBeenCalledWith(
+      expect.objectContaining({ actorKind: "bot" })
+    );
   });
 
   it("records a skip instead of starting once bot messages reached the hourly limit", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
+    deps.botFirings.countFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(botEvent)).resolves.toEqual({
@@ -259,14 +262,13 @@ describe("Slack bot messages", () => {
       invocationIds: ["inv-skip"],
     });
 
-    expect(deps.botFirings.countEventFiringsSince).toHaveBeenCalledExactlyOnceWith(
-      "auto-1",
-      100 - SLACK_BOT_TRIGGER_WINDOW_MS,
-      '%"botId":%',
-      SLACK_BOT_TRIGGER_LIMIT
-    );
+    expect(deps.botFirings.countFiringsSince).toHaveBeenCalledExactlyOnceWith("auto-1", {
+      actorKind: "bot",
+      since: 100 - SLACK_BOT_TRIGGER_WINDOW_MS,
+      limit: SLACK_BOT_TRIGGER_LIMIT,
+    });
     expect(deps.invocations.skipEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ triggerKey: botEvent.triggerKey }),
+      expect.objectContaining({ actorKind: "bot", triggerKey: botEvent.triggerKey }),
       SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON
     );
     expect(deps.invocations.start).not.toHaveBeenCalled();
@@ -275,7 +277,7 @@ describe("Slack bot messages", () => {
   it("counts later over-limit messages without recording another skip", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
+    deps.botFirings.countFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
     deps.botFirings.hasSkippedInvocationSince.mockResolvedValue(true);
     const handler = new SlackEventHandler(deps);
 
@@ -297,11 +299,14 @@ describe("Slack bot messages", () => {
   it("never counts or limits a person's messages", async () => {
     const deps = slackHarness();
     deps.channels.getSlackAutomationsForChannel.mockResolvedValue([optedIn(automation)]);
-    deps.botFirings.countEventFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
+    deps.botFirings.countFiringsSince.mockResolvedValue(SLACK_BOT_TRIGGER_LIMIT);
     const handler = new SlackEventHandler(deps);
 
     await expect(handler.handle(slackEvent)).resolves.toMatchObject({ triggered: 1 });
-    expect(deps.botFirings.countEventFiringsSince).not.toHaveBeenCalled();
+    expect(deps.botFirings.countFiringsSince).not.toHaveBeenCalled();
+    expect(deps.invocations.start).toHaveBeenCalledWith(
+      expect.objectContaining({ actorKind: "person" })
+    );
   });
 
   it("does not send the already-active notice to a bot", async () => {
@@ -589,6 +594,7 @@ describe("AutomationEventHandler source dispatch", () => {
     expect(deps.invocations.start).toHaveBeenCalledExactlyOnceWith({
       automation: matching,
       source: "event",
+      actorKind: "unknown",
       triggerKey: linearEvent.triggerKey,
       concurrencyKey: linearEvent.concurrencyKey,
       triggerMetadata: null,
@@ -636,6 +642,7 @@ describe("AutomationEventHandler source dispatch", () => {
       expect(deps.invocations.start).toHaveBeenCalledExactlyOnceWith({
         automation: sentryAutomation,
         source: "event",
+        actorKind: "unknown",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: null,

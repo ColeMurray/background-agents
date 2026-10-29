@@ -77,13 +77,13 @@ export interface ResumeSandboxData {
   createdAt: number;
 }
 
-/** Provider access discovered while resuming an existing sandbox. */
-export interface ProviderResumeAccessData {
-  providerObjectId: string;
-  codeServer: { url: string; password: string } | null;
-  vnc: { url: string; password: string } | null;
-  ttyd: { url: string | null; token: string } | null;
-  tunnelUrls: Record<string, string> | null;
+/** Provider access: omitted artifacts are preserved; explicit null clears an artifact. */
+export interface ProviderAccessData {
+  providerObjectId: string | null;
+  codeServer?: { url: string; password: string } | null;
+  vnc?: { url: string; password: string } | null;
+  ttyd?: { url: string | null; token: string } | null;
+  tunnelUrls?: Record<string, string> | null;
 }
 
 /**
@@ -376,45 +376,52 @@ export class SandboxRepository {
   }
 
   /**
-   * Commit all provider access returned by a resume as one generation-scoped
+   * Commit all provider access returned by startup as one generation-scoped
    * write. `ready` is allowed because the bridge can complete startup before
-   * the provider's resume request returns.
+   * the provider's request returns. An unfenced failed boot may self-heal only
+   * for providers without explicit stop.
    */
-  async completeProviderResume(
+  async commitProviderAccess(
     generation: { sandboxId: string | null; createdAt: number },
-    access: ProviderResumeAccessData,
-    expectedProviderObjectId?: string
+    access: ProviderAccessData,
+    expectedProviderObjectId?: string,
+    allowFailedSelfHeal = false
   ): Promise<boolean> {
     const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
       access.codeServer ? this.encrypt(access.codeServer.password) : null,
       access.vnc ? this.encrypt(access.vnc.password) : null,
       access.ttyd ? this.encrypt(access.ttyd.token) : null,
     ]);
+    const assignments = ["modal_object_id = COALESCE(?, modal_object_id)"];
+    const values: (string | null)[] = [access.providerObjectId];
+    if (access.codeServer !== undefined) {
+      assignments.push("code_server_url = ?, code_server_password = ?");
+      values.push(access.codeServer?.url ?? null, codeServerPassword);
+    }
+    if (access.vnc !== undefined) {
+      assignments.push("vnc_url = ?, vnc_password = ?");
+      values.push(access.vnc?.url ?? null, vncPassword);
+    }
+    if (access.ttyd !== undefined) {
+      assignments.push("ttyd_url = ?, ttyd_token = ?");
+      values.push(access.ttyd?.url ?? null, ttydToken);
+    }
+    if (access.tunnelUrls !== undefined) {
+      assignments.push("tunnel_urls = ?");
+      values.push(access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null);
+    }
     const result = this.sql.exec(
-      `UPDATE sandbox SET
-         modal_object_id = ?,
-         code_server_url = ?,
-         code_server_password = ?,
-         vnc_url = ?,
-         vnc_password = ?,
-         ttyd_url = ?,
-         ttyd_token = ?,
-         tunnel_urls = ?
+      `UPDATE sandbox SET ${assignments.join(", ")}
        WHERE id = (SELECT id FROM sandbox LIMIT 1)
          AND modal_sandbox_id IS ? AND created_at = ?
-          AND (status IN ('connecting', 'ready') OR (? IS NOT NULL AND status = 'spawning'))
+          AND (status IN ('connecting', 'ready') OR (? IS NOT NULL AND status = 'spawning')
+               OR (? = 1 AND status = 'failed'))
           AND fenced = 0 AND (? IS NULL OR modal_object_id = ?)`,
-      access.providerObjectId,
-      access.codeServer?.url ?? null,
-      codeServerPassword,
-      access.vnc?.url ?? null,
-      vncPassword,
-      access.ttyd?.url ?? null,
-      ttydToken,
-      access.tunnelUrls ? JSON.stringify(access.tunnelUrls) : null,
+      ...values,
       generation.sandboxId,
       generation.createdAt,
       expectedProviderObjectId ?? null,
+      allowFailedSelfHeal ? 1 : 0,
       expectedProviderObjectId ?? null,
       expectedProviderObjectId ?? null
     );
@@ -530,16 +537,6 @@ export class SandboxRepository {
     );
   }
 
-  /** Set one access artifact's URL and encrypted secret. */
-  async updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): Promise<void> {
-    const { urlColumn, secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
-    this.sql.exec(
-      `UPDATE sandbox SET ${urlColumn} = ?, ${secretColumn} = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      url,
-      await this.encrypt(secret)
-    );
-  }
-
   /** Read and decrypt one access artifact's stored secret. */
   async getSandboxAccessSecret(kind: SandboxAccessKind): Promise<string | null> {
     const { secretColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
@@ -564,13 +561,6 @@ export class SandboxRepository {
     const { urlColumn } = ACCESS_ARTIFACT_COLUMNS[kind];
     this.sql.exec(
       `UPDATE sandbox SET ${urlColumn} = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
-    );
-  }
-
-  updateSandboxTunnelUrls(urls: Record<string, string>): void {
-    this.sql.exec(
-      `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      JSON.stringify(urls)
     );
   }
 

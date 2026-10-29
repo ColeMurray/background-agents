@@ -33,6 +33,7 @@ function authorization(
 }
 
 const ungranted = api;
+const owner = authorization(["memories.manage_own"]);
 
 function sessionPolicy(overrides: Partial<SessionMemoryAccessPolicyDeps> = {}) {
   const deps = {
@@ -43,7 +44,7 @@ function sessionPolicy(overrides: Partial<SessionMemoryAccessPolicyDeps> = {}) {
         id === "dev" ? ({ id, owner_team_id: "team" } as EnvironmentRow) : null
       ),
     },
-    authorization: { getEffectiveAuthorization: vi.fn(async () => authorization()) },
+    authorization: { getEffectiveAuthorization: vi.fn(async () => owner) },
     repositoryGrants: {
       ungrantedRepository: vi.fn<
         SessionMemoryAccessPolicyDeps["repositoryGrants"]["ungrantedRepository"]
@@ -60,7 +61,7 @@ const GRANTED = { kind: "granted" };
 describe("SessionMemoryAccessPolicy", () => {
   it("checks team activity and grant coverage for team sessions", async () => {
     const { policy, deps } = sessionPolicy();
-    expect(await policy.check(team, [api, dev, personal])).toEqual(GRANTED);
+    expect(await policy.check(team, [api, dev])).toEqual(GRANTED);
     expect(deps.grants.covers).toHaveBeenCalledWith("team", [1]);
     expect(deps.authorization.getEffectiveAuthorization).not.toHaveBeenCalled();
     deps.grants.covers.mockResolvedValueOnce(false);
@@ -75,7 +76,7 @@ describe("SessionMemoryAccessPolicy", () => {
     });
   });
 
-  it("evaluates workspace sessions as their owner, loading authorization once", async () => {
+  it("evaluates workspace sessions as their owner", async () => {
     const { policy, deps } = sessionPolicy();
     expect(await policy.check(workspace, [api])).toEqual(GRANTED);
     deps.repositoryGrants.ungrantedRepository.mockResolvedValueOnce(ungranted);
@@ -84,8 +85,7 @@ describe("SessionMemoryAccessPolicy", () => {
       reason: "repository_ungranted",
       partition: api,
     });
-    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(1);
-    expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(authorization(), [api]);
+    expect(deps.repositoryGrants.ungrantedRepository).toHaveBeenCalledWith(owner, [api]);
   });
 
   it.each([
@@ -101,6 +101,40 @@ describe("SessionMemoryAccessPolicy", () => {
     expect(await policy.check(workspace, [])).toEqual({
       kind: "denied",
       reason: "owner_unavailable",
+    });
+  });
+
+  it("admits a personal store while its owner may manage personal memory", async () => {
+    const { policy, deps } = sessionPolicy();
+    expect(await policy.check(team, [api, dev, personal])).toEqual(GRANTED);
+    expect(await policy.check(workspace, [personal, personal])).toEqual(GRANTED);
+    // Once per check (the workspace owner and personal owner are the same user), never reused.
+    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledTimes(2);
+    expect(deps.authorization.getEffectiveAuthorization).toHaveBeenCalledWith(USER);
+  });
+
+  it("observes a revocation between checks by the same policy", async () => {
+    const { policy, deps } = sessionPolicy();
+    expect(await policy.check(team, [personal])).toEqual(GRANTED);
+    deps.authorization.getEffectiveAuthorization.mockResolvedValueOnce(authorization());
+    expect(await policy.check(team, [personal])).toMatchObject({ reason: "personal_unavailable" });
+  });
+
+  it.each([
+    ["lacks memories.manage_own", async () => authorization(["sessions.create"])],
+    ["is suspended", async () => authorization(["memories.manage_own"], { suspendedAt: 1 })],
+    [
+      "has no authorization",
+      async () => {
+        throw new AuthorizationError(404, "not_found");
+      },
+    ],
+  ])("denies a personal store whose owner %s", async (_case, load) => {
+    const { policy } = sessionPolicy({ authorization: { getEffectiveAuthorization: load } });
+    expect(await policy.check(team, [api, personal])).toEqual({
+      kind: "denied",
+      reason: "personal_unavailable",
+      partition: personal,
     });
   });
 
