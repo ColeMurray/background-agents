@@ -225,8 +225,8 @@ describe("SignInAllowlistSection", () => {
 
   it.each([
     ["an email domain", " @EXAMPLE.com ", null, "Anyone with an @example.com email", true],
-    ["a GitHub user", " OctoCat ", /GitHub user octocat/, "octocat on GitHub", false],
-    ["a GitHub organization", " MY-ORG ", /my-org GitHub org/, "Members of my-org on GitHub", true],
+    ["a GitHub user", " OctoCat ", /GitHub user OctoCat/, "octocat on GitHub", false],
+    ["a GitHub organization", " MY-ORG ", /MY-ORG GitHub org/, "Members of my-org on GitHub", true],
   ] as const)(
     "adds %s from free-form input and reviews broad access when applicable",
     async (_kind, value, option, description, broad) => {

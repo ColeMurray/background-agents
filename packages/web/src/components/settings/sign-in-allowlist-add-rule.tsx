@@ -121,7 +121,9 @@ export function SignInAllowlistAddRule({
                 onClick={() => choose(index)}
               >
                 <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{suggestion.label(candidate.value)}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {suggestion.label(candidate.value.trim())}
+                </span>
                 {suggestion.hint && (
                   <span className="hidden text-xs text-muted-foreground sm:inline">
                     {suggestion.hint}

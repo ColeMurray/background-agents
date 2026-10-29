@@ -32,20 +32,21 @@ export interface RuleCandidate {
   value: string;
 }
 
+/** A GitHub profile URL; only literal spaces may surround it, as admissionRulesSchema trims those. */
+const GITHUB_PROFILE_URL = /^ *(?:https?:\/\/)?(?:www\.)?github\.com\/([^/@\s]+)\/? *$/i;
+
 /**
  * Rule types that free-form input could mean, most likely first. Emails and domains are
  * unambiguous; a bare name could be a GitHub user or organization, so both are offered.
+ *
+ * Only classifies: candidate values keep the raw input so admissionRulesSchema alone validates
+ * and normalizes it. The sole extractions are a leading "@" and a GitHub profile URL's name.
  */
 export function detectRuleTypes(raw: string): RuleCandidate[] {
-  const input = raw
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^(?:www\.)?github\.com\//, "")
-    .replace(/\/+$/, "");
+  const input = raw.trim();
   if (!input) return [];
-  if (/^[^@\s]+@[^@\s]+$/.test(input)) return [{ type: "allowedEmails", value: input }];
-  const name = input.replace(/^@/, "");
+  if (/^[^@\s]+@[^@\s]+$/.test(input)) return [{ type: "allowedEmails", value: raw }];
+  const name = raw.match(GITHUB_PROFILE_URL)?.[1] ?? raw.replace(/^(\s*)@/, "$1");
   if (name.includes(".")) return [{ type: "allowedEmailDomains", value: name }];
   return [
     { type: "allowedGitHubUsers", value: name },

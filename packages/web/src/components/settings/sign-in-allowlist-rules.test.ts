@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  admissionRulesSchema,
   emptyAdmissionRules,
   type AdmissionPolicySnapshot,
 } from "@open-inspect/shared/admission-settings";
@@ -26,25 +27,57 @@ const snapshot: AdmissionPolicySnapshot = {
 describe("detectRuleTypes", () => {
   it.each([
     ["", []],
-    ["  Person@Example.com ", [{ type: "allowedEmails", value: "person@example.com" }]],
+    ["  Person@Example.com ", [{ type: "allowedEmails", value: "  Person@Example.com " }]],
     ["example.com", [{ type: "allowedEmailDomains", value: "example.com" }]],
-    ["@Example.com", [{ type: "allowedEmailDomains", value: "example.com" }]],
+    [" @Example.com", [{ type: "allowedEmailDomains", value: " Example.com" }]],
     [
       "OctoCat",
       [
-        { type: "allowedGitHubUsers", value: "octocat" },
-        { type: "allowedGitHubOrganizations", value: "octocat" },
+        { type: "allowedGitHubUsers", value: "OctoCat" },
+        { type: "allowedGitHubOrganizations", value: "OctoCat" },
       ],
     ],
     [
-      "https://github.com/my-org/",
+      " https://www.GitHub.com/My-Org/ ",
       [
-        { type: "allowedGitHubUsers", value: "my-org" },
-        { type: "allowedGitHubOrganizations", value: "my-org" },
+        { type: "allowedGitHubUsers", value: "My-Org" },
+        { type: "allowedGitHubOrganizations", value: "My-Org" },
       ],
     ],
   ])("interprets %j", (input, expected) => {
     expect(detectRuleTypes(input)).toEqual(expected);
+  });
+});
+
+describe("detectRuleTypes with admissionRulesSchema", () => {
+  /** Adds the first candidate the way the editor does and returns the saved rule, if valid. */
+  function save(input: string) {
+    const [candidate] = detectRuleTypes(input);
+    const parsed = admissionRulesSchema.safeParse({
+      ...emptyAdmissionRules(),
+      [candidate.type]: [candidate.value],
+    });
+    return parsed.success ? { [candidate.type]: parsed.data[candidate.type] } : null;
+  }
+
+  it.each([
+    ["github.com/alice@example.com", { allowedEmails: ["github.com/alice@example.com"] }],
+    ["www.github.com/alice@example.com", { allowedEmails: ["www.github.com/alice@example.com"] }],
+    [" NEW@Example.com ", { allowedEmails: ["new@example.com"] }],
+    [" @EXAMPLE.com ", { allowedEmailDomains: ["example.com"] }],
+    ["https://github.com/My-Org/", { allowedGitHubUsers: ["my-org"] }],
+  ])("saves %j as the schema normalizes it", (input, expected) => {
+    expect(save(input)).toEqual(expected);
+  });
+
+  it.each([
+    "\u212a@example.com",
+    "\u212aorp.com",
+    "\talice@example.com",
+    "alice@example.com\n",
+    "\tgithub.com/alice",
+  ])("leaves %j for the schema to reject", (input) => {
+    expect(save(input)).toBeNull();
   });
 });
 
