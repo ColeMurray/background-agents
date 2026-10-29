@@ -7,7 +7,11 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { HarnessAdmissionError, resolveHarnessSelection } from "../harness-admission";
-import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import type {
+  CreateSessionInput,
+  CreateSessionResponse,
+} from "@open-inspect/shared/types/session-api";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -55,6 +59,25 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
+
+/**
+ * Whether a new session includes its owner's personal memory; undefined leaves it to their saved
+ * default. People choose per session. Sessions an integration starts answer in places others read,
+ * so they go without, except a Slack direct message, which is as private as a web session.
+ */
+function personalMemoryInclusion(
+  spawnSource: SpawnSource | undefined,
+  body: Pick<CreateSessionInput, "includePersonalMemories" | "directMessage">
+): boolean | undefined {
+  switch (spawnSource) {
+    case "user":
+      return body.includePersonalMemories;
+    case "slack-bot":
+      return body.directMessage ? body.includePersonalMemories : false;
+    default:
+      return false;
+  }
+}
 
 async function extractSessionActorProfileClaims(
   request: Request,
@@ -310,7 +333,7 @@ export async function handleCreateSession(
     principal: { userId: resolvedUserId, ownerTeamId: teamId },
     repositories: scopeMembers,
     environmentId,
-    includePersonalMemories: body.includePersonalMemories,
+    includePersonalMemories: personalMemoryInclusion(spawnSource, body),
   });
 
   const input: SessionInitInput = {

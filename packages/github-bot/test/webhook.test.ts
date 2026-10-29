@@ -392,6 +392,41 @@ describe("POST /webhooks/github", () => {
     );
   });
 
+  it("forwards whether the sender is a bot", async () => {
+    const body = JSON.stringify({
+      action: "opened",
+      pull_request: { number: 42, draft: false, head: { ref: "feature", sha: "abc123" } },
+      repository: { id: 99, name: "repo", private: false, owner: { login: "test" } },
+      sender: { id: 8, login: "open-inspect[bot]", type: "Bot" },
+    });
+    const env = makeEnv();
+    const ctx = makeCtx();
+
+    const res = await app.fetch(
+      new Request("http://localhost/webhooks/github", {
+        method: "POST",
+        body,
+        headers: {
+          "X-Hub-Signature-256": await sign(SECRET, body),
+          "X-GitHub-Event": "pull_request",
+          "X-GitHub-Delivery": "delivery-bot-1",
+        },
+      }),
+      env,
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    await flushWaitUntil(ctx);
+    const forwarded = vi
+      .mocked(env.CONTROL_PLANE.fetch)
+      .mock.calls.find(([url]) => url === "https://internal/internal/github-event");
+    expect(JSON.parse(String(forwarded?.[1]?.body))).toMatchObject({
+      actor: "open-inspect[bot]",
+      actorKind: "bot",
+    });
+  });
+
   it("returns 401 for invalid signature", async () => {
     const body = '{"action":"created"}';
     const res = await app.fetch(

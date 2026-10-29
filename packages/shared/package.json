@@ -18,6 +18,14 @@
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
     },
+    "./actor-enrollment": {
+      "import": "./dist/actor-enrollment.js",
+      "types": "./dist/actor-enrollment.d.ts"
+    },
+    "./abortable": {
+      "import": "./dist/abortable.js",
+      "types": "./dist/abortable.d.ts"
+    },
     "./models": {
       "import": "./dist/models.js",
       "types": "./dist/models.d.ts"
@@ -45,6 +53,10 @@
     "./http-body": {
       "import": "./dist/http-body.js",
       "types": "./dist/http-body.d.ts"
+    },
+    "./admission-settings": {
+      "import": "./dist/admission-settings.js",
+      "types": "./dist/admission-settings.d.ts"
     },
     "./inline-prompt-flags": {
       "import": "./dist/inline-prompt-flags.js",

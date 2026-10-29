@@ -15,27 +15,52 @@ in Settings → Memories or Settings → Shared memories; it is not yet active m
 
 ## User experience
 
-| Surface                    | Behavior                                                                                                                                                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                        |
-| Settings → Shared memories | Opens on **All**, every readable repository and environment memory with its scope. Select a scope to narrow it or to create. Readers see the catalog; maintainers manage it.              |
-| Personal default           | **Include my personal memories in new sessions** is initially enabled. It applies to web, integration-created and scheduled sessions, and is available to every session creator.          |
-| Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. |
+| Surface                    | Behavior                                                                                                                                                                                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Settings → Memories        | Manage your personal facts and directives, review proposals, edit, archive, restore, supersede, revert to an earlier revision and inspect history.                                                                                                                          |
+| Settings → Shared memories | Opens on **All**, every readable repository and environment memory with its scope. Select a scope to narrow it or to create. Readers see the catalog; maintainers manage it.                                                                                                |
+| Personal preference        | **Use my personal memories in my sessions** is initially enabled and available to every session creator. It is the default for sessions started on the web or in a Slack DM; turning it off also stops personal reads and writes in existing sessions.                      |
+| Session sidebar → Memories | Pinned memories grouped by repository, environment or personal scope; hover or focus a row for its revision, inclusion and estimate. Flags omitted records and subsequent edits/archives. Personal items are listed only for the personal owner; other viewers see a count. |
 
-Personal memories can be included in **shared sessions**. Included content may appear in responses
-and be visible to collaborators. This does not give collaborators access to the owner's personal
-settings catalog. Opting out excludes personal context and also denies personal reads and writes
-through memory tools. Changing the default affects **new sessions only**; it cannot erase text
-already supplied to an agent or included in a conversation.
+### Personal memory follows the owner's prompts
+
+Personal memory is the session owner's working context. It applies to work the owner starts and
+prompts, whatever the session's visibility, and never answers anyone else's prompt.
+
+| Rule                                     | Mechanism                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Which sessions select it                 | `routes/session-create.ts` honors the owner's choice (or saved default) for user principals and for a Slack-bot session marked `directMessage`. Other integration-started sessions (Slack channels, Linear, GitHub reviews and mentions) and every automation run, manual ones included, select none.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Only the owner's prompts use it          | Memory routes ask the session runtime (`/internal/memory-prompt-context`), only when personal memory is involved, for the account behind the processing prompt. Prompts run one at a time, so that author is unambiguous, and each prompt keeps the account it was queued under, so later identity links or merges never reclassify it. Personal search, read and write require it to be the personal owner. A call between prompts, an author without an account, an Autofix turn, or a runtime that cannot answer counts as someone else's. Once anyone else's prompt has been dispatched to the agent of this session or of a session that spawned it, live reads stop for good: a prompt can leave a program running in the sandbox, and a parent's sandbox can spawn and prompt its children, so the route also asks each ancestor's runtime (`?userId=` the owner). The session and prompt are read again just before personal records are returned. |
+| Pinned context still shapes every prompt | The boot render (`oi-memory.md`) keeps the pinned personal directives and catalog for the session's lifetime while the owner can use personal memory, so they reach other people's prompts too. Live reads are what the prompt rule withholds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| The preference is live                   | `SessionMemorySelectionStore.loadSession` drops the personal owner while their current preference is off or their account is suspended, so personal search, read and write stop in existing sessions, and the agent write guard refuses a personal write that commits after an opt-out. An opt-out leaves the pinned boot context unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| The owner's permission is live           | `SessionMemoryAccessPolicy` admits a personal partition only while its owner is active and holds `memories.manage_own`, checked on every call. Without it, new sessions select no personal memory, the boot render leaves pinned personal records out (an opt-out keeps them), unscoped search skips the store, explicit personal search, reads and writes are refused, and the agent write guard refuses a personal write that commits after the revocation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Children                                 | A child spawned on the personal owner's prompt (by the account that prompt was queued under, so never on an Autofix turn) copies the parent's selection, personal records included. One spawned on anyone else's prompt copies only the shared records, with its token estimate measured on them, and has no personal owner. A prompt the parent relays to a child, the first one or a follow-up, counts as the parent's prompt did: it keeps the account that prompt was queued under, none for an Autofix turn, whatever account its author has since.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Audit                                    | Sandbox reads and searches that return personal records write one `memory.personal_read` row per request, naming the session, the prompt author and the record IDs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+
+What this does not cover:
+
+- Anything the agent wrote from personal memory stays in the transcript, where every reader and
+  later prompt can see it.
+- The pinned boot context reaches every prompt and sits in the sandbox's files, where anyone with
+  terminal access can read it.
+- Changing the preference cannot erase text already supplied to an agent.
+- Sandbox access is trusted like the session's other credentials. Anyone who can open the terminal,
+  editor or desktop can do what the agent can there, so while the owner's prompts run they can
+  search and read the owner's personal memories and save personal facts, and the read audit names
+  the owner as the prompt author.
+
+Prompts queued before these rules carry no recorded account and count as someone else's, so a
+session prompted earlier keeps its pinned context but no longer reads personal memory live or
+auto-saves personal facts.
 
 ### Facts, directives and approval
 
-| Record                           | How it loads                                              | Agent-write policy                                                                                                         |
-| -------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Personal fact                    | Title and description in the catalog; body read on demand | Active immediately only in a root session that has remained private and owner-only. Otherwise proposed for owner approval. |
-| Personal directive               | Full content                                              | Proposed for owner approval.                                                                                               |
-| Repository/environment fact      | Catalog; body on demand                                   | Proposed for maintainer approval.                                                                                          |
-| Repository/environment directive | Full content                                              | Proposed for maintainer approval.                                                                                          |
+| Record                           | How it loads                                              | Agent-write policy                                                                                                          |
+| -------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Personal fact                    | Title and description in the catalog; body read on demand | Active immediately on the owner's prompt in a root session nobody else has prompted. Otherwise proposed for owner approval. |
+| Personal directive               | Full content                                              | Proposed for owner approval.                                                                                                |
+| Repository/environment fact      | Catalog; body on demand                                   | Proposed for maintainer approval.                                                                                           |
+| Repository/environment directive | Full content                                              | Proposed for maintainer approval.                                                                                           |
 
 Human-authored records are active immediately. Editing keeps the original record provenance and adds
 a revision with the editor's identity. Rejected proposals are archived; restoring them returns them
@@ -57,10 +82,11 @@ and superseding require a concrete scope. Status tabs, search, paging, bulk acti
 fencing work the same across scopes. Browsing is capped at a fixed depth, after which the page asks
 the viewer to choose a scope or narrow the search.
 
-Sandbox tools currently authenticate a session, not an immutable prompt author. For this reason,
-automatic personal facts are disabled permanently once a session is shared or gains a collaborator,
-even if it is later made private again. Children never auto-save personal facts. A child created by
-a different participant cannot write to the inherited owner's personal scope.
+Sandbox tools authenticate a session; the prompt author comes from the session runtime. Automatic
+personal facts stop once a prompt from anyone else has been dispatched to the agent, which the route
+checks against the runtime's message log before each write. Visibility and collaborators play no
+part. Children never auto-save personal facts: `personal_auto_save_eligible` is set only for root
+sessions and rechecked at commit.
 
 ## Architecture and implementation
 
@@ -71,7 +97,7 @@ a different participant cannot write to the inherited owner's personal scope.
 | Access policy    | `control-plane/src/authorization/memory-access.ts`                          | `MemoryManagementPolicy` for humans and `SessionMemoryAccessPolicy` for session principals, both returning typed decisions with stores injected; `memory-access-factory.ts` wires D1.                                                                                                                                                 |
 | Stores           | `control-plane/src/db/memory-records.ts`, `session-memory-selections.ts`, … | SQL only: revisioned records and lifecycle, pinned selections, preferences, lexical fact search and the commit-time agent write guard. Queries are built with the `sql` fragment template.                                                                                                                                            |
 | D1               | Migration `0084_memories.sql`                                               | Records keyed by typed identity columns (`owner_user_id` — a foreign key to `users` — `repo_id` or `environment_id`, exactly one per `partition_type`) with a generated, indexed `partition_key`; repository names are display-only. Immutable revisions, per-user default, session manifest headers and ordered revision references. |
-| Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Select and pin the session's memories in the session insert's transaction (`Pinned<T>`: resolved for roots, inherited by children). Schedulers use the execution owner's default.                                                                                                                                                     |
+| Session creation | `routes/session-create.ts`, scheduler, child spawn                          | Select and pin the session's memories in the session insert's transaction (`SessionMemoryPin`: resolved for roots, inherited by children). Automation runs and most integration-started sessions select no personal memory.                                                                                                           |
 | Runtime boot     | `sandbox-runtime/src/sandbox_runtime/memories.py`                           | Fetch the rendered memory with the session-bound token, clear stale restored content, then atomically write owner-readable `oi-memory.md` in the harness configuration directory.                                                                                                                                                     |
 | Harness tools    | `tools/_memory.js`, `harness/memory_tools.py`                               | Both harnesses build `memory_read`, `memory_search` and `memory_write` from the generated specs and forward arguments verbatim. OpenCode reads the file via `instructions`; Claude appends it.                                                                                                                                        |
 | Web              | `web/src/hooks/use-memories.ts`, `components/settings/memories-settings/`   | Typed queries and mutations (revision fencing via `If-Match`), owner/shared management pages and session diagnostics.                                                                                                                                                                                                                 |
@@ -104,8 +130,9 @@ pre-memory repository images. Restores remove old context and abandoned staging 
 fetching; new content is installed through a unique exclusive 0600 file and atomic replacement.
 
 - Directives and catalog entries use **pinned revisions** for the session's lifetime, including
-  sandbox restarts and restores. A child copies the same selection and personal owner, not the
-  spawning participant's personal catalog.
+  sandbox restarts and restores. A child spawned on the personal owner's prompt copies the same
+  selection and personal owner; one spawned on anyone else's prompt copies only the shared records.
+  Neither gets the spawning participant's personal catalog.
 - `memory_read` returns the **current** fact body and provenance. A pinned archived record returns
   only its archive notice (`archiveKind`, `archivedAt`, `archiveNote`). Proposals, unpinned
   archives, and directives cannot be expanded by sandbox tools.
@@ -155,19 +182,22 @@ owner-only, including when the caller is another administrator.
 | `POST /memories/:id/{action}`                             | `approve`, `reject`, `archive`, or `restore` with `If-Match`; only `archive` and `reject` accept an optional `archiveNote`. Transitions follow `MEMORY_TRANSITIONS`.                                                                                    |
 | `POST /memories/bulk`                                     | Apply one `action` to up to `MEMORY_BULK_ACTION_MAX_RECORDS` records, each named with the `revisionId` it was reviewed at. Records are authorized and decided independently, in order; the response lists each record's outcome.                        |
 | `POST /memories/preview`                                  | Summarize the selection a new session would pin (items, sizes, omissions), without creating it. Pass `teamId` to preview a team session; the caller must be a member of the active team.                                                                |
-| `GET, PUT /memory-preferences`                            | Read/save the current user's personal inclusion default.                                                                                                                                                                                                |
-| `GET /sessions/:id/memories`                              | The pinned selection summary with per-item drift, readable with the session.                                                                                                                                                                            |
+| `GET, PUT /memory-preferences`                            | Read/save the current user's personal memory preference.                                                                                                                                                                                                |
+| `GET /sessions/:id/memories`                              | The pinned selection summary with per-item drift, readable with the session. Personal items are listed only for the personal owner; other readers get `hiddenPersonalCount`.                                                                            |
 | `GET /sessions/:id/sandbox-memory`                        | The session's rendered memory (boot context), sandbox-bound.                                                                                                                                                                                            |
 | `GET /sessions/:id/sandbox-memory/:memoryId`              | Sandbox-bound live read.                                                                                                                                                                                                                                |
 | `POST /sessions/:id/sandbox-memory`                       | Sandbox-bound agent write with scope/approval/quota checks.                                                                                                                                                                                             |
 | `POST /sessions/:id/sandbox-memory/search`                | Session-authorized lexical discovery of active current facts, including records outside the boot catalog.                                                                                                                                               |
 
 Sandbox routes reject credentials belonging to another session and recheck current workspace/team
-repository grants and environment ownership on every boot render, read, search and write. Agent
+repository grants and environment ownership on every boot render, read, search and write. Personal
+reads, searches and writes also require the processing prompt to be the personal owner's (see
+[Personal memory follows the owner's prompts](#personal-memory-follows-the-owners-prompts)). Agent
 inserts additionally enforce, atomically, the facts about the writing session: an active owner, a
-live (`created`/`active`) session that still reaches the target partition, personal auto-save
-eligibility, quotas and the replacement predecessor. Settled sessions must be reactivated by a fresh
-prompt before writing. Grant rules are deliberately not duplicated in that SQL guard: a grant
+live (`created`/`active`) session that still reaches the target partition (for personal writes, with
+the owner's preference on and `memories.manage_own` held), personal auto-save eligibility, quotas
+and the replacement predecessor. Settled sessions must be reactivated by a fresh prompt before
+writing. Repository and team grant rules are deliberately not duplicated in that SQL guard: a grant
 revoked in the milliseconds between the route check and the insert can leave a shared-scope
 _proposal_, which every later read denies and a human must approve. Repository memories are keyed by
 the stable repository ID, so a reused name never inherits them and a renamed repository keeps them.
@@ -226,9 +256,10 @@ memory_search({ query: "billing webhook deduplication", scopeType: "repository",
 
 Omit `scopeType` to search permitted session scopes. Repository scope searches all attached
 repositories; optionally supply both `repoOwner` and `repoName` to select one. Personal owner and
-environment identity are derived from the session. Personal opt-out excludes personal results, and
-inherited children can discover only their pinned personal memory IDs. Selected shared scopes are
-authorized before the query and checked again before returning results.
+environment identity are derived from the session. Personal results need the personal owner's own
+prompt, no one else's prompt dispatched to this session or one that spawned it, and the owner's
+preference on; inherited children can discover only their pinned personal memory IDs. Selected
+shared scopes are authorized before the query and checked again before returning results.
 
 Queries are literal whitespace-separated keywords: every term must occur in the current title,
 description or body. Matching uses SQLite's ASCII case folding; it provides no stemming, synonyms,
@@ -275,7 +306,8 @@ npm run test:integration -w @open-inspect/control-plane -- \
   test/integration/memories.test.ts \
   test/integration/memories-routes.test.ts \
   test/integration/memories-access.test.ts \
-  test/integration/memories-search.test.ts --maxWorkers=1
+  test/integration/memories-search.test.ts \
+  test/integration/memories-personal-prompts.test.ts --maxWorkers=1
 npm test -w @open-inspect/web -- --maxWorkers=1
 npm run typecheck -w @open-inspect/control-plane -w @open-inspect/web
 npm run lint:sql-portability

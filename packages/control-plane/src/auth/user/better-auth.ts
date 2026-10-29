@@ -1,11 +1,14 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
 import { SIGN_IN_FAILURE_PATH } from "@open-inspect/shared/sign-in-failure";
+import { isSignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { createSignInFailureRedirectHook } from "./sign-in-failure";
 import { createCanonicalBetterAuthAdapter } from "../../db/better-auth-adapter";
 import type { SqlDatabase } from "../../db/sql-database";
 import { generateId } from "../crypto";
 import type { ProviderProfileResolver } from "./provider-profile";
+import type { VerifiedProviderIdentity } from "./providers/types";
+import type { OAuthAccountKeyContext } from "better-auth/oauth2";
 
 const MS_PER_SECOND = 1000;
 
@@ -53,6 +56,31 @@ export function createUserAuth(config: UserAuthConfig) {
     // Every failed sign-in, ours or Better Auth's own, lands on the login page.
     onAPIError: { errorURL: signInFailureURL },
     hooks: { before: createSignInFailureRedirectHook(signInFailureURL) },
+    // Keep the built-in OAuth transports, but pair our vetted profile data with
+    // its subject resolver. The built-in profile types describe different data.
+    plugins: [
+      {
+        id: "canonical-provider-profiles",
+        init(ctx) {
+          return {
+            context: {
+              socialProviders: ctx.socialProviders.map((provider) => {
+                const providerConfig = isSignInProvider(provider.id)
+                  ? config[provider.id]
+                  : undefined;
+                if (!providerConfig) return provider;
+                return {
+                  ...provider,
+                  getUserInfo: providerConfig.getUserInfo,
+                  accountSubject: ({ profile }: OAuthAccountKeyContext<VerifiedProviderIdentity>) =>
+                    profile.subject,
+                };
+              }),
+            },
+          };
+        },
+      },
+    ],
     // Workers do not expose NODE_ENV through process.env under every supported
     // compatibility date. Keep the production security behavior explicit.
     rateLimit: {
@@ -80,7 +108,8 @@ export function createUserAuth(config: UserAuthConfig) {
       ...(config.github
         ? {
             github: {
-              ...config.github,
+              clientId: config.github.clientId,
+              clientSecret: config.github.clientSecret,
               disableDefaultScope: true,
             },
           }
@@ -88,7 +117,8 @@ export function createUserAuth(config: UserAuthConfig) {
       ...(config.google
         ? {
             google: {
-              ...config.google,
+              clientId: config.google.clientId,
+              clientSecret: config.google.clientSecret,
               disableIdTokenSignIn: true,
             },
           }

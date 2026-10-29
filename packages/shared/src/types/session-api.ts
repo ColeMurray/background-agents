@@ -187,10 +187,16 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
+/**
+ * Sources a public prompt caller may assert. "automation" decides who opens a
+ * PR, and it and "agent" are minted only on internal paths.
+ */
+export const publicPromptSourceSchema = messageSourceSchema.exclude(["automation", "agent"]);
+
 export const sendPromptRequestSchema = z
   .object({
     content: promptContentSchema,
-    source: messageSourceSchema.optional(),
+    source: publicPromptSourceSchema.optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
@@ -345,6 +351,10 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
     githubReview: createSessionGithubReviewSchema.optional(),
+    // Set by the Slack bot for a one-to-one conversation with the actor. Integration-started
+    // sessions use the owner's personal memory only then; the control plane ignores it from
+    // other callers.
+    directMessage: z.boolean().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

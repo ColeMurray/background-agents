@@ -15,7 +15,12 @@ import type { AutomationRunRow } from "../db/automation-store";
 const slackRunMetadataSchema = z.object({
   channel: z.string(),
   messageTs: z.string(),
-  /** `bot_id` of the bot or integration that posted the triggering message. */
+  /**
+   * `bot_id` of the bot or integration that posted the triggering message.
+   * Limits count the invocation's actor_kind, not this field. Keep writing it:
+   * it records which bot, and a worker rolled back past actor_kind counts bot
+   * firings by matching it.
+   */
   botId: z.string().optional(),
 });
 

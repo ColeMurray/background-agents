@@ -226,8 +226,8 @@ describe("modal-vm startup resolution", () => {
     const completing = new Promise<void>((resolve) => (completeEntered = resolve));
     let releaseCompletion!: () => void;
     const completionGate = new Promise<void>((resolve) => (releaseCompletion = resolve));
-    const complete = vi.mocked(f.storage.completeProviderResume).getMockImplementation()!;
-    vi.mocked(f.storage.completeProviderResume).mockImplementationOnce(async (...args) => {
+    const complete = vi.mocked(f.storage.commitProviderAccess).getMockImplementation()!;
+    vi.mocked(f.storage.commitProviderAccess).mockImplementationOnce(async (...args) => {
       completeEntered();
       await completionGate;
       return complete(...args);
@@ -250,7 +250,7 @@ describe("modal-vm startup resolution", () => {
 
     expect(f.sandbox.modal_object_id).toBe("sb-real");
     expect(f.sandbox.ttyd_token).toBeTruthy();
-    expect(f.storage.completeProviderResume).toHaveBeenCalledWith(
+    expect(f.storage.commitProviderAccess).toHaveBeenCalledWith(
       generation,
       expect.objectContaining({ providerObjectId: "sb-real" }),
       pending
@@ -411,7 +411,7 @@ describe("modal-vm startup resolution", () => {
     expect(f.store.read()?.expiresAtMs).toBe(generation.createdAt + 3_600_000);
     expect(f.sandbox.ttyd_url).toBeNull();
     expect(f.sandbox.ttyd_token).toBeNull();
-    expect(f.storage.completeProviderResume).toHaveBeenCalledExactlyOnceWith(
+    expect(f.storage.commitProviderAccess).toHaveBeenCalledExactlyOnceWith(
       generation,
       {
         providerObjectId: "sb-real",
@@ -422,8 +422,6 @@ describe("modal-vm startup resolution", () => {
       },
       formatPendingVmReference("test-session", generation.sandboxId)
     );
-    expect(f.storage.updateSandboxAccess).not.toHaveBeenCalled();
-    expect(f.storage.updateSandboxTunnelUrls).not.toHaveBeenCalled();
   });
 
   it("mints terminal access when the bridge resolves while the original instance holds the token", async () => {
@@ -480,7 +478,7 @@ describe("modal-vm startup resolution", () => {
         )
       ).resolves.toBe(valid);
     }
-    expect(f.storage.completeProviderResume).toHaveBeenCalledExactlyOnceWith(
+    expect(f.storage.commitProviderAccess).toHaveBeenCalledExactlyOnceWith(
       generation,
       {
         providerObjectId: "sb-real",
@@ -491,8 +489,6 @@ describe("modal-vm startup resolution", () => {
       },
       formatPendingVmReference(createConfig.sessionId, generation.sandboxId)
     );
-    expect(f.storage.updateSandboxAccess).not.toHaveBeenCalled();
-    expect(f.storage.updateSandboxTunnelUrls).not.toHaveBeenCalled();
   });
 
   it("retains a committed bridge identity when access publication fails in the background", async () => {
@@ -557,7 +553,7 @@ describe("modal-vm startup resolution", () => {
       last_spawn_failure: lastSpawnFailure,
     });
     expect(f.store.read()).toEqual({ ...shutdownBefore, providerObjectId: "sb-real" });
-    expect(f.storage.completeProviderResume).toHaveBeenCalledExactlyOnceWith(
+    expect(f.storage.commitProviderAccess).toHaveBeenCalledExactlyOnceWith(
       generation,
       expect.objectContaining({ providerObjectId: "sb-real" }),
       pending
@@ -656,13 +652,11 @@ describe("modal-vm startup resolution", () => {
       tunnelUrls: { "8080": "https://late-port.example" },
     });
     await expect(work).resolves.toBeUndefined();
-    expect(f.storage.completeProviderResume).toHaveBeenCalledOnce();
+    expect(f.storage.commitProviderAccess).toHaveBeenCalledOnce();
     expect(f.sandbox).toEqual(successor);
     expect(f.sandbox.modal_object_id).toBe("sb-newer");
     expect(f.store.read()).toEqual(shutdownBefore);
     expect(f.store.read()?.providerObjectId).not.toBe("sb-real");
-    expect(f.storage.updateSandboxAccess).not.toHaveBeenCalled();
-    expect(f.storage.updateSandboxTunnelUrls).not.toHaveBeenCalled();
   });
 
   it("retries transient bridge lookups after readiness until the same generation resolves", async () => {

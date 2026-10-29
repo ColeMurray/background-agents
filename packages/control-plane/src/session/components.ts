@@ -125,6 +125,7 @@ import { SessionEventStream } from "./event-stream";
 import { AutofixHandler } from "./http/handlers/autofix.handler";
 import { MessagesHandler } from "./http/handlers/messages.handler";
 import { ChildSessionsHandler } from "./http/handlers/child-sessions.handler";
+import { MemoryPromptContextHandler } from "./http/handlers/memory-prompt-context.handler";
 import { ChildSummaryHandler } from "./http/handlers/child-summary.handler";
 import { SessionInitHandler } from "./http/handlers/session-init.handler";
 import { SandboxHandler } from "./http/handlers/sandbox.handler";
@@ -217,6 +218,8 @@ export interface SessionComponents {
    */
   sourceControlProvider: SourceControlProvider;
   userEnvResolver: UserEnvResolver;
+  /** The live provider object, shared by the lifecycle manager and shutdown coordinator. */
+  sandboxProvider: SandboxProvider;
   access: SandboxAccess;
   lifecycleManager: SandboxLifecycleManager;
   messageQueue: SessionMessageQueue;
@@ -726,6 +729,10 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messenger,
     messageService
   );
+  const memoryPromptContextHandler = new MemoryPromptContextHandler(
+    messageRepository,
+    sessionCoreRepository
+  );
   const childSummaryHandler = new ChildSummaryHandler(
     sessionCoreRepository,
     sandboxRepository,
@@ -974,6 +981,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     tunnelUrls: (_request, _url, requestLog) => sandboxHandler.tunnelUrls(requestLog),
     spawnContext: () => childSessionsHandler.getSpawnContext(),
     activePromptAuthor: () => childSessionsHandler.getActivePromptAuthor(),
+    memoryPromptContext: (_request, url) =>
+      memoryPromptContextHandler.getContext(url.searchParams.get("userId")),
     childSummary: (_request, url) => childSummaryHandler.getChildSummary(url),
     parentPrompt: (request) => childSessionsHandler.parentPrompt(request),
     cancel: () => sessionLifecycleHandler.cancel(),
@@ -1057,6 +1066,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
       scmProvider = next;
     },
     userEnvResolver,
+    sandboxProvider,
     access,
     lifecycleManager,
     messageQueue,

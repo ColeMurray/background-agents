@@ -263,10 +263,18 @@ export interface AutomationEnvironmentRow {
   updated_at: number;
 }
 
+/**
+ * Who authored the action that started a firing. `system` is the scheduler,
+ * which has no author; `unknown` is a source that does not report one. The
+ * column has no CHECK, so readers must tolerate kinds a newer worker added.
+ */
+export type InvocationActorKind = "person" | "bot" | "system" | "unknown";
+
 export interface AutomationInvocationRow {
   id: string;
   automation_id: string;
   source: AutomationInvocationSource;
+  actor_kind: InvocationActorKind;
   scheduled_at: number | null;
   trigger_key: string | null;
   concurrency_key: string | null;
@@ -1502,15 +1510,16 @@ export class AutomationStore {
       this.db
         .prepare(
           `INSERT INTO automation_invocations
-           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+           (id, automation_id, source, actor_kind, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE NOT EXISTS (${overlap.sql}) ${grantsGuard.sql} ${scheduleGuard.sql}`
         )
         .bind(
           invocation.id,
           invocation.automation_id,
           invocation.source,
+          invocation.actor_kind,
           invocation.scheduled_at,
           invocation.trigger_key,
           invocation.concurrency_key,
@@ -1605,9 +1614,9 @@ export class AutomationStore {
     return this.db
       .prepare(
         `INSERT INTO automation_invocations
-           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+           (id, automation_id, source, actor_kind, scheduled_at, trigger_key, concurrency_key,
             trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE 1 = 1 ${scheduleGuard.sql}
            ON CONFLICT DO NOTHING`
       )
@@ -1615,6 +1624,7 @@ export class AutomationStore {
         invocation.id,
         invocation.automation_id,
         invocation.source,
+        invocation.actor_kind,
         invocation.scheduled_at,
         invocation.trigger_key,
         invocation.concurrency_key,
@@ -1728,26 +1738,25 @@ export class AutomationStore {
   }
 
   /**
-   * Count an automation's unskipped event firings created at or after `since`
-   * whose trigger metadata matches the `metadataLike` pattern, stopping at
-   * `limit`: callers only need to know whether a threshold is reached.
+   * Count an automation's unskipped firings by `actorKind` created at or after
+   * `since`, stopping at `limit`: callers only need to know whether a threshold
+   * is reached. The literal `skip_reason IS NULL` lets the count use the partial
+   * idx_invocations_actor_created.
    */
-  async countEventFiringsSince(
+  async countFiringsSince(
     automationId: string,
-    since: number,
-    metadataLike: string,
-    limit: number
+    options: { actorKind: InvocationActorKind; since: number; limit: number }
   ): Promise<number> {
     const row = await this.db
       .prepare(
         `SELECT COUNT(*) AS count FROM (
            SELECT 1 FROM automation_invocations
-           WHERE automation_id = ? AND source = 'event' AND skip_reason IS NULL
-             AND created_at >= ? AND trigger_metadata LIKE ?
+           WHERE automation_id = ? AND actor_kind = ? AND skip_reason IS NULL
+             AND created_at >= ?
            LIMIT ?
          ) AS matching_firings`
       )
-      .bind(automationId, since, metadataLike, limit)
+      .bind(automationId, options.actorKind, options.since, options.limit)
       .first<{ count: number }>();
     return row?.count ?? 0;
   }

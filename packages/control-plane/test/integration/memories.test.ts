@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type { MemoryContent } from "@open-inspect/shared/types/memories";
+import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore, type NewMemory } from "../../src/db/memory-records";
 import type { MemoryPartition } from "../../src/memory/partition";
 import type { MemoryActor } from "../../src/memory/types";
@@ -16,7 +17,7 @@ const agent: MemoryActor = {
   sessionId: "session_a",
   requestId: "tool",
 };
-/** session_a is private and collaborator-free, so its personal facts may skip review. */
+/** session_a is a root session nobody else has prompted, so its personal facts may skip review. */
 const AUTO_SAVE = { personalAutoSaveEligible: true };
 const owner: MemoryPartition = { type: "personal", userId: "user_a" };
 const fact: MemoryContent = {
@@ -173,12 +174,25 @@ describe("memory persistence", () => {
     expect(restored.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(await store.list(owner, page)).toHaveLength(1);
   });
-  it("fences personal autosave after a session was shared, even when made private again", async () => {
+  it("auto-saves personal facts whatever the visibility, only while the session is eligible", async () => {
     const store = new MemoryRecordStore(env.DB);
     await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "workspace");
-    await new SessionScopeStore(env.DB).updateVisibility(["session_a"], "private");
+    expect((await store.create(memory(), agent, AUTO_SAVE)).status).toBe("active");
+    // An ineligible session, such as a child, cannot auto-save even when the caller claims it may.
+    await env.DB.prepare(
+      "UPDATE session_memory_manifests SET personal_auto_save_eligible = 0 WHERE session_id = 'session_a'"
+    ).run();
     await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
     expect((await store.create(memory(), agent)).status).toBe("proposed");
+  });
+  it("fences agent personal writes, active or proposed, once the owner opts out", async () => {
+    const store = new MemoryRecordStore(env.DB);
+    await new MemoryPreferenceStore(env.DB).set("user_a", { includePersonalMemories: false });
+    await expect(store.create(memory(), agent, AUTO_SAVE)).rejects.toThrow(/session access/);
+    await expect(store.create(memory(), agent)).rejects.toThrow(/session access/);
+    expect(await store.list(owner, { ...page, status: "proposed" })).toEqual([]);
+    await new MemoryPreferenceStore(env.DB).set("user_a", { includePersonalMemories: true });
+    expect((await store.create(memory(), agent, AUTO_SAVE)).status).toBe("active");
   });
   it("does not let an auto-saved fact bypass directive approval through supersession", async () => {
     const store = new MemoryRecordStore(env.DB);

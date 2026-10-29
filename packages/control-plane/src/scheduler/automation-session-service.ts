@@ -90,6 +90,8 @@ export class AutomationSessionService {
     ]);
     if (!authorized) throw new AutomationExecutionUnauthorizedError(executionDenialReason(team));
 
+    // Personal memory serves its owner's own prompts, and nobody prompts an automation run,
+    // whoever triggered it; like personal skill profiles, it stays out.
     const memorySelection = await this.deps.selectMemory(ctx, {
       principal: {
         userId: executionPrincipal.platformUserId,
@@ -97,6 +99,7 @@ export class AutomationSessionService {
       },
       repositories: scopeMembers,
       environmentId: target.environmentId,
+      includePersonalMemories: false,
     });
 
     const sessionInput: SessionInitInput = {

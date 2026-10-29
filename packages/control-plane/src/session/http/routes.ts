@@ -54,6 +54,7 @@ export interface SessionInternalRouteHandlers {
   tunnelUrls: SessionInternalRouteHandler;
   spawnContext: SessionInternalRouteHandler;
   activePromptAuthor: SessionInternalRouteHandler;
+  memoryPromptContext: SessionInternalRouteHandler;
   childSummary: SessionInternalRouteHandler;
   parentPrompt: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
@@ -145,6 +146,11 @@ export function createSessionInternalRoutes(
       method: "GET",
       path: SessionInternalPaths.activePromptAuthor,
       handler: handlers.activePromptAuthor,
+    },
+    {
+      method: "GET",
+      path: SessionInternalPaths.memoryPromptContext,
+      handler: handlers.memoryPromptContext,
     },
     { method: "GET", path: SessionInternalPaths.childSummary, handler: handlers.childSummary },
     { method: "POST", path: SessionInternalPaths.parentPrompt, handler: handlers.parentPrompt },

@@ -43,7 +43,7 @@ Teams add internal access boundaries, not tenant isolation. A new team has no re
 
 ## Identity and admission
 
-Sign-in is GitHub, Google, or both. After the provider verifies identity and email, the deployment's admission rules decide whether the person joins: by GitHub username, verified email, verified email domain, or active membership in an allowed GitHub organization. Admission is checked at sign-in only; suspension is the immediate revocation tool. Details are in [Workspace access and roles](/administration/workspace-access).
+Sign-in is GitHub, Google, or both. After the provider verifies identity and email, the deployment's admission rules decide whether the person joins: by GitHub username, verified email, verified email domain, or active membership in an allowed GitHub organization. Creating a new account through a bot also requires admission using the evidence the bot can attest. Existing bot actors and actors linking to an existing account keep that account's restrictions without repeating admission. Suspension is the immediate revocation tool. Details are in [Workspace access and roles](/administration/workspace-access).
 
 ## Roles are product capabilities
 

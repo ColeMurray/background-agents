@@ -206,13 +206,20 @@ describe("Scheduler slack event handling (integration)", () => {
       expect(await fetchRuns(id)).toHaveLength(1);
     });
 
+    async function actorKindOf(invocationId: string): Promise<string | undefined> {
+      const row = await env.DB.prepare("SELECT actor_kind FROM automation_invocations WHERE id = ?")
+        .bind(invocationId)
+        .first<{ actor_kind: string }>();
+      return row?.actor_kind;
+    }
+
     async function seedBotFirings(automationId: string, count: number, createdAt: number) {
       for (let i = 0; i < count; i++) {
         await env.DB.prepare(
           `INSERT INTO automation_invocations
-            (id, automation_id, source, trigger_key, concurrency_key, trigger_metadata,
-             created_at, updated_at)
-           VALUES (?, ?, 'event', ?, ?, ?, ?, ?)`
+            (id, automation_id, source, actor_kind, trigger_key, concurrency_key,
+             trigger_metadata, created_at, updated_at)
+           VALUES (?, ?, 'event', 'bot', ?, ?, ?, ?, ?)`
         )
           .bind(
             `inv-bot-${automationId}-${i}`,
@@ -240,6 +247,7 @@ describe("Scheduler slack event handling (integration)", () => {
       );
       expect(skip).toBeDefined();
       expect(botResult.invocationIds).toEqual([skip!.id]);
+      expect(await actorKindOf(skip!.id)).toBe("bot");
 
       // Later refusals in the window are counted but leave no further rows.
       const laterResult = await sendEvent(makeSlackEvent(fromBot));
@@ -286,53 +294,77 @@ describe("Scheduler slack event handling (integration)", () => {
       expect(result.triggered).toBe(1);
     });
 
-    it("records bot-started firings with the bot's id", async () => {
+    it("records bot-started firings as bot, keeping the bot's id in the metadata", async () => {
       const store = new AutomationStore(env.DB);
       const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
 
       await sendEvent(makeSlackEvent(fromBot));
 
       const row = await env.DB.prepare(
-        "SELECT trigger_metadata FROM automation_invocations WHERE automation_id = ?"
+        "SELECT actor_kind, trigger_metadata FROM automation_invocations WHERE automation_id = ?"
       )
         .bind(id)
-        .first<{ trigger_metadata: string }>();
+        .first<{ actor_kind: string; trigger_metadata: string }>();
+      expect(row!.actor_kind).toBe("bot");
+      // A worker rolled back past actor_kind counts bot firings by this key.
       expect(JSON.parse(row!.trigger_metadata)).toMatchObject({ botId: "BALERTS" });
     });
 
-    it("counts the automation's unskipped matching event firings since a time, up to a limit", async () => {
+    it("records a person's firing as person", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
+
+      const [invocation] = await fetchInvocations(store, id);
+      expect(await actorKindOf(invocation!.id)).toBe("person");
+    });
+
+    it("counts the automation's unskipped firings by actor kind since a time, up to a limit", async () => {
       const store = new AutomationStore(env.DB);
       const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
       const otherId = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
       const now = Date.now();
-      const rows: Array<[string, string | null, string | null, number]> = [
-        [id, JSON.stringify({ channel: "C1", messageTs: "1", botId: "B1" }), null, now],
-        [id, JSON.stringify({ channel: "C1", messageTs: "2", botId: "B2" }), null, now],
-        [id, JSON.stringify({ channel: "C1", messageTs: "3" }), null, now],
-        [id, null, null, now],
-        [
-          id,
-          JSON.stringify({ channel: "C1", messageTs: "4", botId: "B1" }),
-          "slack_bot_trigger_limit",
-          now,
-        ],
-        [id, JSON.stringify({ channel: "C1", messageTs: "5", botId: "B1" }), null, now - 10_000],
-        [otherId, JSON.stringify({ channel: "C1", messageTs: "6", botId: "B1" }), null, now],
+      const botMetadata = JSON.stringify({ channel: "C1", messageTs: "1", botId: "B1" });
+      const rows: Array<[string, string, string | null, string | null, number]> = [
+        [id, "bot", botMetadata, null, now],
+        // Counted by the column alone, whatever the metadata says.
+        [id, "bot", null, null, now],
+        [id, "person", JSON.stringify({ channel: "C1", messageTs: "3" }), null, now],
+        // Metadata naming a bot does not make a firing count.
+        [id, "person", botMetadata, null, now],
+        [id, "unknown", botMetadata, null, now],
+        [id, "bot", botMetadata, "slack_bot_trigger_limit", now],
+        [id, "bot", botMetadata, null, now - 10_000],
+        [otherId, "bot", botMetadata, null, now],
       ];
-      for (const [i, [automationId, metadata, skipReason, createdAt]] of rows.entries()) {
+      for (const [
+        i,
+        [automationId, actorKind, metadata, skipReason, createdAt],
+      ] of rows.entries()) {
         await env.DB.prepare(
           `INSERT INTO automation_invocations
-            (id, automation_id, source, trigger_metadata, skip_reason, created_at, updated_at)
-           VALUES (?, ?, 'event', ?, ?, ?, ?)`
+            (id, automation_id, source, actor_kind, trigger_metadata, skip_reason, created_at,
+             updated_at)
+           VALUES (?, ?, 'event', ?, ?, ?, ?, ?)`
         )
-          .bind(`inv-count-${i}`, automationId, metadata, skipReason, createdAt, createdAt)
+          .bind(
+            `inv-count-${i}`,
+            automationId,
+            actorKind,
+            metadata,
+            skipReason,
+            createdAt,
+            createdAt
+          )
           .run();
       }
 
       const since = now - 1_000;
-      expect(await store.countEventFiringsSince(id, since, '%"botId":%', 10)).toBe(2);
+      expect(await store.countFiringsSince(id, { actorKind: "bot", since, limit: 10 })).toBe(2);
+      expect(await store.countFiringsSince(id, { actorKind: "person", since, limit: 10 })).toBe(2);
       // Stops scanning once the limit is reached.
-      expect(await store.countEventFiringsSince(id, since, '%"botId":%', 1)).toBe(1);
+      expect(await store.countFiringsSince(id, { actorKind: "bot", since, limit: 1 })).toBe(1);
     });
 
     it("ignores bot messages when the opted-in automation has no Slack User include list", async () => {
