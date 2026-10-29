@@ -4,7 +4,7 @@ description: How an agent splits work into parallel child sessions, what childre
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-10-03"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/control-plane/src/routes/session-scope.ts
   - packages/control-plane/src/db/session-index.ts
@@ -30,7 +30,7 @@ A child starts with the repository, not the conversation. It knows nothing about
 
 ## The child-session tools
 
-The agent has four tools for working with children. They are available on both harnesses.
+The agent has four tools for working with children. They are available on every harness.
 
 | Tool                | Arguments                                                                                                                                                                              | What it does                                                                                                                                                  |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,7 +64,7 @@ For a team-owned parent, spawning a child requires the active prompt author's ow
 | Team and visibility                | The parent's owning team and visibility at creation. Collaborator grants are copied from the parent.                                                                                                    |
 | Repository and environment         | The parent's primary repository and, for environment-launched parents, the same environment. Because secrets are scoped by repository and environment, the child sees the same secrets the parent does. |
 | Branch                             | A new branch cut from the parent's base branch. Children do not share the parent's working branch.                                                                                                      |
-| Harness                            | Always the parent's harness (OpenCode or Claude Agent).                                                                                                                                                 |
+| Harness                            | Always the parent's harness (OpenCode, Claude Agent, or Codex).                                                                                                                                         |
 | Model and reasoning effort         | The parent's, unless `spawn-child` overrides them. An override must be an enabled model that the harness supports, and the reasoning effort must be valid for that model.                               |
 | Provider authentication            | Inherited from the parent, so a session running on a connected subscription passes that to its children.                                                                                                |
 | Managed skills                     | The parent's pinned skills, at the same revisions.                                                                                                                                                      |

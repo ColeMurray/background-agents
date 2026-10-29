@@ -2,11 +2,14 @@ import {
   encodeRepositoryPathSegments,
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
+import { DEFAULT_HARNESS, harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import type { Env, LinearChannelScope } from "../types";
 import { fetchControlPlaneJson } from "../control-plane";
 
 const resolvedLinearConfigSchema = z.object({
+  // Control planes that predate the harness setting omit it.
+  harness: harnessIdSchema.default(DEFAULT_HARNESS),
   model: z.string().nullable(),
   reasoningEffort: z.string().nullable(),
   allowUserPreferenceOverride: z.boolean(),
@@ -23,6 +26,7 @@ const resolvedLinearConfigResponseSchema = z.object({
 export type ResolvedLinearConfig = z.infer<typeof resolvedLinearConfigSchema>;
 
 const DEFAULT_CONFIG: ResolvedLinearConfig = {
+  harness: DEFAULT_HARNESS,
   model: null,
   reasoningEffort: null,
   allowUserPreferenceOverride: true,

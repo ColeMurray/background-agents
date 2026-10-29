@@ -82,18 +82,10 @@ function summarizeArgumentCount(args: Record<string, unknown> | undefined): stri
   return argumentCount > 0 ? `${argumentCount} argument${argumentCount === 1 ? "" : "s"}` : "";
 }
 
-function summarizeApplyPatch(patchText: string | undefined): PatchSummary {
-  if (!patchText) {
-    return {
-      addCount: 0,
-      updateCount: 0,
-      deleteCount: 0,
-      totalFiles: 0,
-      firstFile: null,
-      firstOperation: null,
-    };
-  }
-
+function summarizeApplyPatch(
+  patchText: string | undefined,
+  changes: unknown[] | undefined
+): PatchSummary {
   const summary: PatchSummary = {
     addCount: 0,
     updateCount: 0,
@@ -103,6 +95,32 @@ function summarizeApplyPatch(patchText: string | undefined): PatchSummary {
     firstOperation: null,
   };
 
+  function recordChange(operation: PatchOperation, filePath: string): void {
+    if (operation === "add") summary.addCount += 1;
+    else if (operation === "update") summary.updateCount += 1;
+    else summary.deleteCount += 1;
+    summary.totalFiles += 1;
+    if (!summary.firstFile) {
+      summary.firstFile = basename(filePath);
+      summary.firstOperation = operation;
+    }
+  }
+
+  if (!patchText) {
+    for (const change of changes ?? []) {
+      if (!change || typeof change !== "object") continue;
+      const entry = change as Record<string, unknown>;
+      const filePath = getStringArg(entry, "path");
+      const kind = entry.kind;
+      if (!filePath || !kind || typeof kind !== "object") continue;
+      const operation = getStringArg(kind as Record<string, unknown>, "type");
+      if (operation === "add" || operation === "update" || operation === "delete") {
+        recordChange(operation, filePath);
+      }
+    }
+    return summary;
+  }
+
   for (const line of patchText.split("\n")) {
     let operation: PatchOperation | null = null;
     let filePath: string | undefined;
@@ -110,24 +128,15 @@ function summarizeApplyPatch(patchText: string | undefined): PatchSummary {
     if (line.startsWith("*** Add File: ")) {
       operation = "add";
       filePath = line.slice("*** Add File: ".length);
-      summary.addCount += 1;
     } else if (line.startsWith("*** Update File: ")) {
       operation = "update";
       filePath = line.slice("*** Update File: ".length);
-      summary.updateCount += 1;
     } else if (line.startsWith("*** Delete File: ")) {
       operation = "delete";
       filePath = line.slice("*** Delete File: ".length);
-      summary.deleteCount += 1;
     }
 
-    if (!operation) continue;
-
-    summary.totalFiles += 1;
-    if (!summary.firstFile) {
-      summary.firstFile = basename(filePath);
-      summary.firstOperation = operation;
-    }
+    if (operation) recordChange(operation, filePath ?? "");
   }
 
   return summary;
@@ -348,7 +357,7 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
 
     case "apply_patch": {
       const patchText = getStringArg(args, "patchText");
-      const patchSummary = summarizeApplyPatch(patchText);
+      const patchSummary = summarizeApplyPatch(patchText, getArrayArg(args, "changes"));
 
       let summary = "patch";
       if (patchSummary.totalFiles === 1 && patchSummary.firstFile) {

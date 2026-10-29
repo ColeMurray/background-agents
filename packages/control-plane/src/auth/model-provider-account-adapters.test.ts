@@ -124,14 +124,24 @@ describe("model provider account adapters", () => {
 
     expect(
       openai.runtimeMetadata(
-        { refreshToken: "secret", accountId: "credential-account" },
+        { refreshToken: "secret", accountId: "stored-account" },
         "stored-account"
       )
-    ).toEqual({ accountId: "credential-account" });
+    ).toEqual({ accountId: "stored-account" });
     expect(openai.runtimeMetadata({ refreshToken: "secret" }, "stored-account")).toEqual({
       accountId: "stored-account",
     });
     expect(xai.runtimeMetadata({ refreshToken: "secret" }, null)).toEqual({});
+  });
+
+  it("rejects cached OpenAI metadata whose workspace differs from the bound account", () => {
+    const openai = new OpenAIModelProviderAccountAdapter();
+    expect(() =>
+      openai.runtimeMetadata({ refreshToken: "secret", accountId: "other" }, "bound")
+    ).toThrow(/identity did not match/);
+    expect(() => openai.runtimeMetadata({ refreshToken: "secret" }, null)).toThrow(
+      /could not be verified/
+    );
   });
 
   it("validates persisted OpenAI device state and its schema version before polling", async () => {

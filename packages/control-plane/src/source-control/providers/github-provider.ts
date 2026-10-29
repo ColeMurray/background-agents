@@ -13,6 +13,8 @@ import type {
   SourceControlProvider,
   SourceControlAuthContext,
   GetRepositoryConfig,
+  ListBranchesContext,
+  ListBranchesResult,
   RepositoryAccessResult,
   RepositoryInfo,
   CreatePullRequestConfig,
@@ -34,7 +36,9 @@ import {
   parseProviderResponse,
 } from "../errors";
 import { classifyGitTreeEntry } from "./git-tree";
+import { listBranchesWithCache } from "../branch-cache";
 import {
+  type GitHubAppConfig,
   getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
   getInstallationTokenCacheKey,
@@ -265,11 +269,13 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
   private readonly appConfig?: GitHubProviderConfig["appConfig"];
   private readonly cacheStore?: GitHubProviderConfig["cacheStore"];
+  private readonly branchesCache?: GitHubProviderConfig["branchesCache"];
   private readonly userAgent: string;
 
   constructor(config: GitHubProviderConfig = {}) {
     this.appConfig = config.appConfig;
     this.cacheStore = config.cacheStore;
+    this.branchesCache = config.branchesCache;
     this.userAgent = config.userAgent || USER_AGENT;
   }
 
@@ -727,16 +733,32 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
   /**
    * List branches for a repository.
    */
-  async listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]> {
-    if (!this.appConfig) {
+  async listBranches(
+    config: GetRepositoryConfig,
+    context: ListBranchesContext
+  ): Promise<ListBranchesResult> {
+    const appConfig = this.appConfig;
+    if (!appConfig) {
       throw new SourceControlProviderError(
         "GitHub App not configured - cannot list branches",
         "permanent"
       );
     }
 
+    return listBranchesWithCache(
+      config,
+      () => this.fetchBranches(appConfig, config),
+      context,
+      this.branchesCache
+    );
+  }
+
+  private async fetchBranches(
+    appConfig: GitHubAppConfig,
+    config: GetRepositoryConfig
+  ): Promise<{ name: string }[]> {
     try {
-      return await listRepositoryBranches(this.appConfig, config.owner, config.name, {
+      return await listRepositoryBranches(appConfig, config.owner, config.name, {
         cacheStore: this.cacheStore,
         userAgent: this.userAgent,
       });

@@ -9,8 +9,9 @@ import {
   seedMessage,
   seedSandboxAuth,
   waitForSandboxStatus,
+  closeWebSocket,
 } from "./helpers";
-import { runInSessionDO } from "./session-do-access";
+import { componentsOf, runInSessionDO } from "./session-do-access";
 
 describe("POST /internal/sandbox-event", () => {
   it("stores step usage received over the sandbox WebSocket without duplicating a resent step", async () => {
@@ -71,7 +72,7 @@ describe("POST /internal/sandbox-event", () => {
         { id: "step-usage", total_tokens: 5, reason: null },
       ]);
     });
-    ws!.close();
+    await closeWebSocket(ws!);
   });
   it("stores token event", async () => {
     const { stub } = await initSession();
@@ -301,6 +302,54 @@ describe("POST /internal/sandbox-event", () => {
       "SELECT type FROM events WHERE type = 'heartbeat'"
     );
     expect(events).toHaveLength(0);
+  });
+
+  it("keeps a quiet unattended turn alive through heartbeats beyond the inactivity timeout", async () => {
+    const { stub } = await initNamedSession(`quiet-automation-${crypto.randomUUID()}`, {
+      spawnSource: "automation",
+    });
+    await seedSandboxAuth(stub, { sandboxId: "quiet-sandbox", authToken: "quiet-token" });
+    const [{ id: authorId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    const startedAt = Date.now();
+    await seedMessage(stub, {
+      id: "quiet-turn",
+      authorId,
+      content: "Wait for a quiet tool",
+      source: "automation",
+      status: "processing",
+      createdAt: startedAt,
+      startedAt,
+    });
+
+    await runInSessionDO(stub, async (instance) => {
+      const { lifecycleManager, sandboxEventProcessor, sandboxRepository } = componentsOf(instance);
+      const clock = vi.spyOn(Date, "now");
+      lifecycleManager.updateLastActivity(startedAt);
+      try {
+        // Only heartbeats arrive throughout this turn, including beyond the idle cutoff.
+        for (let elapsedMs = 30_000; elapsedMs <= 180_000; elapsedMs += 30_000) {
+          const now = startedAt + elapsedMs;
+          clock.mockReturnValue(now);
+          await sandboxEventProcessor.processSandboxEvent({
+            type: "heartbeat",
+            sandboxId: "quiet-sandbox",
+            timestamp: now / 1000,
+          });
+          clock.mockReturnValue(now + 29_000);
+          await expect(lifecycleManager.handleAlarm()).resolves.toBe("no_action");
+          expect(sandboxRepository.getSandbox()).toMatchObject({
+            status: "ready",
+            last_activity: now,
+          });
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    });
+    expect(await queryDO(stub, "SELECT id FROM events WHERE type = 'heartbeat'")).toEqual([]);
   });
 
   it("applies generated session title without storing a timeline event", async () => {

@@ -14,6 +14,7 @@ import asyncio
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -67,6 +68,8 @@ def processes(monkeypatch, tmp_path):
         fakes.spawns.append((command, *args))
         assert kwargs.get("start_new_session") is True
         if command == "dockerd":
+            # A replacement daemon must publish its own readiness after installing its handler.
+            Path(fakes.ready_marker).unlink(missing_ok=True)
             program = fakes.daemon_program()
         elif command == "docker":
             assert kwargs["env"] == {

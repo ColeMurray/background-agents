@@ -42,12 +42,14 @@ const automation: AutomationListItem = {
   harness: "opencode",
   triggerType: "schedule",
   scheduleCron: "0 9 * * *",
+  scheduleOnceAt: null,
   scheduleTz: "UTC",
   model: "openai/gpt-5.4",
   reasoningEffort: null,
   enabled: true,
   nextRunAt: null,
   consecutiveFailures: 0,
+  maxRetries: 0,
   createdBy: "user-1",
   userId: null,
   ownerTeamId: null,
@@ -89,6 +91,14 @@ describe("automation collection", () => {
       "/automations/auto-1?teamId=team%2Fone"
     );
     expect(mocks.useAutomations).toHaveBeenCalledWith("", "team/one");
+  });
+
+  it("shows a loading skeleton in place of the list on the initial load", () => {
+    mocks.useAutomations.mockReturnValue({ ...list, automations: [], loading: true });
+    render(<AutomationCollection>{() => null}</AutomationCollection>);
+    expect(screen.getByRole("status", { name: "Loading automations" })).toBeInTheDocument();
+    expect(screen.queryByText("No automations yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more automations" })).not.toBeInTheDocument();
   });
 
   it("does not show an empty-state creation prompt after a failed initial load", () => {

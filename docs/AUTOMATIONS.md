@@ -1,6 +1,6 @@
 # Automations
 
-Automations let you run coding agents either on a recurring schedule or when an external event
+Automations let you run coding agents on a schedule (once or recurring) or when an external event
 arrives. Define the repository configuration, model, and instructions once, then Open-Inspect starts
 a new session whenever the trigger fires.
 
@@ -8,7 +8,7 @@ Trigger types:
 
 | Trigger Type        | Description                               | Availability       |
 | ------------------- | ----------------------------------------- | ------------------ |
-| **Schedule**        | Run on a cron schedule                    | Available          |
+| **Schedule**        | Run once or on a cron schedule            | Available          |
 | **Inbound Webhook** | Trigger from any system with an HTTP POST | Available          |
 | **Sentry Alert**    | Trigger from a Sentry Custom Integration  | Available          |
 | **Slack Message**   | Trigger on messages in watched channels   | Available          |
@@ -62,7 +62,7 @@ reassigned without changing ownership.
 
 | Trigger Type        | Additional Fields                                                                            |
 | ------------------- | -------------------------------------------------------------------------------------------- |
-| **Schedule**        | **Schedule** and **Timezone**                                                                |
+| **Schedule**        | **Schedule** (**Recurring** or **Run once**), **Timezone** (recurring only), and **Retries** |
 | **Inbound Webhook** | No extra required fields                                                                     |
 | **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                  |
 | **GitHub Event**    | **Event Type** and optional **Conditions**                                                   |
@@ -104,7 +104,9 @@ deployments, monitoring systems, scheduled jobs, and custom integrations.
 2. Copy the generated webhook URL and API key shown after creation.
 3. Send an authenticated HTTP `POST` request with a JSON body.
 4. Open-Inspect prepends a webhook context block to your automation instructions and starts a new
-   session if the request matches the automation's conditions.
+   session if the request matches the automation's conditions. A request with a `sessionKey` can
+   continue the session an earlier request started instead (see
+   [Continuing a Session](#continuing-a-session)).
 
 ### Setup Notes
 
@@ -204,15 +206,39 @@ shown to the agent.
 If you do not provide an `idempotencyKey`, each webhook delivery gets its own concurrency key. That
 means separate deliveries for the same automation can run at the same time.
 
+### Continuing a Session
+
+Include a `sessionKey` string in the JSON body to send several deliveries to one session. The first
+delivery with a key starts a run as usual. A later delivery with the same key is queued as a
+follow-up prompt on that run's session instead of starting a run, whether the run is still starting,
+working, or finished, as long as the session was active within the last 7 days. The follow-up
+carries the payload's context block without the saved instructions, and it is sent as the
+automation's executor, who must be able to collaborate on the session; without that access the
+delivery is skipped.
+
+Conditions still apply to follow-ups. The `sessionKey` stays in the stored body, is removed from the
+context block, and must be a non-empty string of at most 256 characters, or the request is rejected
+with `400`. Pair it with an `idempotencyKey`: the session recognizes a retried follow-up and the
+retry counts as skipped. A follow-up that arrives while the first run is still starting is held and
+queued right after the run's own first prompt. If the session will not take a follow-up (archived,
+cancelled, out of budget, needing sandbox recovery, or unreachable), the request fails with `409`,
+`422`, `429`, or `503` instead of starting over in a new session. After 7 days without activity in
+the session, the next delivery starts a new run.
+
 ### Responses
 
 Successful requests return JSON in this shape:
 
 ```json
-{ "ok": true, "triggered": 1, "skipped": 0 }
+{ "ok": true, "triggered": 1, "skipped": 0, "steered": 0, "invocationId": "3f2a…" }
 ```
 
-`triggered` is the number of automation runs started.
+`triggered` is the number of automation runs started, and `steered` the number of follow-ups routed
+into an existing session by a `sessionKey`. `invocationId` identifies the firing this request
+belongs to (for a repeated `idempotencyKey`, the original firing, and for a follow-up, the firing of
+the run whose session took it), or is `null` when nothing was recorded. Read its status with the
+same API key at `GET /webhooks/automation/<automation-id>/invocations/<invocation-id>`, which
+returns `{ invocationId, status, runs: [{ id, status, sessionId }] }` and never session content.
 
 `skipped` includes runs not started because of duplicate delivery, concurrency protection, or
 runtime authorization denial. Authorization denial does not pause an event-driven automation or
@@ -221,13 +247,20 @@ another delivery.
 
 ### Error Responses
 
-| Status | Meaning                                          |
-| ------ | ------------------------------------------------ |
-| `400`  | Invalid JSON body                                |
-| `401`  | Missing or invalid API key                       |
-| `404`  | Automation not found or not a webhook automation |
-| `413`  | Payload too large                                |
-| `415`  | `Content-Type` was not `application/json`        |
+| Status | Meaning                                                                                                                 |
+| ------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid JSON body, or an invalid `sessionKey`                                                                           |
+| `401`  | Missing or invalid API key                                                                                              |
+| `404`  | Automation not found or not a webhook automation                                                                        |
+| `409`  | The `sessionKey` session cannot take prompts: `SESSION_NOT_PROMPTABLE`, `BUDGET_EXHAUSTED`, `SANDBOX_RECOVERY_REQUIRED` |
+| `413`  | Payload too large                                                                                                       |
+| `415`  | `Content-Type` was not `application/json`                                                                               |
+| `422`  | The `sessionKey` session rejected the follow-up for another reason; a retry is rejected the same way                    |
+| `429`  | The `sessionKey` session's queue is full (`PROMPT_QUEUE_FULL`)                                                          |
+| `503`  | The `sessionKey` session could not be reached (`SESSION_UNAVAILABLE`); safe to retry with the same `idempotencyKey`     |
+
+A refused follow-up returns `{ "error", "code", "invocationId" }`, where `invocationId` is the run
+whose session refused it, and starts nothing.
 
 ---
 
@@ -252,14 +285,19 @@ ID in the untrusted event context sent to the agent. When GitHub supplies them, 
 includes the branch, commit SHA, workflow path, and run URL. Open-Inspect includes the attempt
 number in its deduplication key, so it can admit each GitHub rerun once.
 
+**Draft** matches on the pull request's draft state. Set it to **Not draft** to skip draft pull
+requests before Open-Inspect starts a session. Pair it with a **PR Ready for Review** automation,
+which fires when the author marks a draft pull request ready, so the pull request still gets a run
+when it leaves draft without a new push.
+
 **Conclusion** also works for completed check suites. **Check Conclusion** remains available for
 existing check-suite automations.
 
 Each event type offers only the conditions its payload can answer, so the choices change with the
 event you pick — pull requests offer branch, target branch, label, and actor; issues offer label and
-actor; comments offer actor. Changing the event type removes conditions the new one cannot answer,
-and the form says which. GitHub webhook payloads carry no file list, so path-pattern filtering is
-not offered for any GitHub event.
+actor; comments offer actor. PR opened and PR updated also offer **Draft**. Changing the event type
+removes conditions the new one cannot answer, and the form says which. GitHub webhook payloads carry
+no file list, so path-pattern filtering is not offered for any GitHub event.
 
 ---
 
@@ -306,6 +344,35 @@ A message runs the automation only when **every** condition passes. The bot-ment
 stripped before matching, and messages that `@mention` the bot are handled by the interactive
 `@mention` flow instead — they never double-fire as triggers.
 
+### Bot messages
+
+By default, messages posted by other bots and integrations (alerting tools, CI notifications,
+incoming webhooks) do not trigger a Slack automation. Turn on **Trigger on bot messages** on the
+automation to let them start runs; the agent is told the message came from a bot. The automation
+must also have a **Slack User** include condition listing the bot IDs (`B…`) allowed to trigger it,
+and saving is refused without one. A bot matches by its bot ID, which works for app bots and for
+legacy integrations that post without a user. The list limits people too, so add the user IDs of
+anyone else who should still trigger the automation. The Open-Inspect bot's own messages never
+trigger an automation.
+
+Only a bot message's `text` is read. An integration that posts its content only in attachments or
+blocks, with empty `text`, triggers nothing, and one that sets `text` to a short fallback is matched
+on that fallback alone.
+
+A bot can start a run but never continues one: continuing a thread's session needs a Slack user
+linked to an Open-Inspect account, so a bot's reply in a thread that already has a session is
+dropped.
+
+Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
+are skipped. The first skip in the hour appears in the automation's run history, and the rest are
+not recorded, so a busy bot does not flood it. This stops a loop in which a run makes another bot
+post in the watched channel, which starts the automation again. The limit can be overshot by bot
+messages that arrive at the same moment, since each is checked before the others are counted,
+including several bots answering one run at once. Messages from people are not limited.
+
+Bot output is untrusted input that can start autonomous work, so list only bots you trust. Anyone
+holding an incoming-webhook URL can post as that integration.
+
 ### Run feedback
 
 A triggering message is marked with the 👀 reaction while its run is in flight. When the run
@@ -321,14 +388,15 @@ the message needs nothing from you, reply with exactly `NO_REPLY` and nothing el
 agent will answer everything it is woken for unless told otherwise. A run that opened a pull request
 or produced other artifacts always posts.
 
-Every reply in a thread **continues the same session** — during the run and after it finishes — for
-up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The
-reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if it had gone
-idle), and the agent posts its response in-thread when the turn finishes. A follow-up does not need
-to match the trigger condition — conditions gate new runs, not replies that continue an existing
-thread. If a reply races the very first trigger before its session exists, it falls back to an
-ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply more than 7
-days after the first trigger starts a fresh run.
+Every reply in a thread **continues the same session** — while the run starts, during it, and after
+it finishes — until the session has been idle for 7 days, exactly like replying in an `@mention`
+thread. The reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if
+it had gone idle), and the agent posts its response in-thread when the turn finishes. A reply that
+arrives while the run is still starting is held and queued right after the run's own first prompt. A
+follow-up does not need to match the trigger condition — conditions gate new runs, not replies that
+continue an existing thread. If a reply races the very first trigger before its run exists, it falls
+back to an ephemeral "a run is already active" notice (reason `concurrent_run_active`); a reply
+after 7 idle days starts a fresh run.
 
 These automation follow-ups also forward text only. Attachments on a thread reply are not delivered
 to the session.
@@ -337,7 +405,26 @@ to the session.
 
 ## Schedule Options
 
-The schedule picker offers four presets and a custom mode:
+The **Schedule** field chooses **Recurring** or **Run once**. The mode is fixed after creation.
+
+### Run Once
+
+**Run once** takes a **Run at** date and time, entered in the browser's local timezone and stored as
+`scheduleOnceAt` (epoch milliseconds). It must be in the future. The automation starts on the first
+scheduler tick at or after that time, consuming its slot when the firing is admitted. It stays
+enabled while its runs are active or waiting to retry, then disables itself. A one-shot whose slot
+comes due while a previous run is active is recorded as **Skipped** and still consumes the slot.
+
+To cancel a pending one-shot, including any waiting retries, pause or delete it. Editing the time
+reschedules it and withdraws retries waiting on the previous time. A paused one-shot whose time has
+passed must be given a new future time before it can be resumed. Fired one-shots that completed, or
+were skipped because a previous run was active, are hidden from the automations list once no run is
+active; their history stays readable on the detail page. A one-shot skipped because execution
+authorization was denied stays listed so its access or executor can be repaired.
+
+### Recurring Schedules
+
+The recurring schedule picker offers four presets and a custom mode:
 
 | Preset         | Description                                  | Controls                              |
 | -------------- | -------------------------------------------- | ------------------------------------- |
@@ -370,6 +457,28 @@ Examples:
 > (e.g., `*/5 * * * *`) are rejected.
 
 > **Note**: Six-field expressions (with seconds) are not supported.
+
+### Launch Retries
+
+**Retries** (`maxRetries`, none by default, up to 5) relaunches a scheduled run that failed before
+it tried to enqueue its first prompt, for example when a D1 stall stops the session from being
+created. It applies to recurring and one-shot schedules alike.
+
+- **Not retried**: **Trigger Now** runs; runs that fail once the first-prompt enqueue has been
+  attempted, even if that call fails (the session may have accepted it, so a retry could repeat the
+  work), including agent failures, timeouts, and budget stops; and configuration errors such as a
+  model the harness cannot run.
+- **Backoff**: the first retry waits 2 minutes and the wait doubles for each later attempt. While it
+  waits, the run shows **Retrying** with the launch error and the time of the next attempt.
+- **Attempts**: each attempt opens a new session under the same run row, which shows the attempt
+  number. Execution authorization is checked again before every attempt.
+- **Auto-pause**: a run counts as a success only if its relaunched session completes successfully;
+  one that exhausts its retries counts as a single failure. A waiting run counts as active for
+  concurrency.
+- **Cancellation**: pausing or deleting the automation, or lowering **Retries** below the attempts a
+  waiting run has made, prevents that run from relaunching. The scheduler marks it **Failed** during
+  its once-per-minute retry sweeps. Sweeps process a limited batch, so a backlog can delay the
+  status change across multiple sweeps.
 
 ---
 
@@ -408,12 +517,13 @@ without recreating the definition; it does not move ownership or rewrite existin
 ### Pause and Resume
 
 **Pausing** an automation stops it from firing. Scheduled automations will not run on their cron,
-and event-driven automations will ignore incoming events until resumed. You can pause from the
-automations list or the detail page.
+one-shots will not start (waiting retries fail), and event-driven automations will ignore incoming
+events until resumed. You can pause from the automations list or the detail page.
 
-**Resuming** reactivates the automation. Scheduled automations calculate the next run time from the
-current moment. Event-driven automations resume listening immediately. Resuming also resets the
-consecutive failure counter (see [Auto-Pause](#auto-pause) below).
+**Resuming** reactivates the automation. Recurring automations calculate the next run time from the
+current moment; one-shots keep their configured future time. Event-driven automations resume
+listening immediately. Resuming also resets the consecutive failure counter (see
+[Auto-Pause](#auto-pause) below).
 
 ### Trigger Now
 
@@ -428,15 +538,32 @@ executor's. In addition to trigger permission, the requester must pass runtime s
 and be a current member of the active owning team for a team automation, even if they are a
 workspace Owner or Administrator.
 
+No automation run, scheduled, event-driven or manual, loads anyone's personal memories or personal
+skill profiles: personal memory serves its owner's own prompts, and nobody prompts an automation
+run. Repository and environment memories apply as in any session.
+
 ### Edit
 
 You can change an automation's name, repository selection, branch, model, and instructions at any
 time — including adding or removing repositories while a run is active (in-flight sessions are
 unaffected; the next firing uses the new selection). For scheduled automations, you can also change
-the schedule and timezone. Repository-scoped triggers require exactly one repository; other trigger
-types can be changed to **No repository**.
+the schedule, timezone, and retries; a one-shot's time can change, but not its schedule mode.
+Repository-scoped triggers require exactly one repository; other trigger types can be changed to
+**No repository**.
 
 If you update the schedule or timezone, the next run time is recalculated automatically.
+
+### Duplicate
+
+**Duplicate** on the detail page opens the create form (`/automations/new?from=<id>`) filled in from
+the automation. The copy is named `<name> (copy)`, trimmed to the name limit, and is saved only when
+you click **Create Automation**, as a new automation with you as its executor and no run history.
+Nothing that authenticates a trigger is copied: an inbound webhook copy gets its own URL and a new
+API key, and a Sentry copy asks for the Sentry client secret again and gets its own webhook URL,
+which the Sentry Custom Integration must point at. If you cannot create automations in the source's
+team, the copy starts in your current scope with no repositories or environments; targets you cannot
+use are left out. A notice above the form says when either happens. The button appears only when you
+can create automations.
 
 ### Delete
 
@@ -470,6 +597,7 @@ reason, and session link.
 | ------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | **Starting**        | A session is being created for this run.                                                                            |
 | **Running**         | At least one session is actively executing.                                                                         |
+| **Retrying**        | A scheduled run failed to start and is waiting to launch again (see [Launch Retries](#launch-retries)).             |
 | **Completed**       | Every session finished successfully.                                                                                |
 | **Failed**          | Every session encountered an error. The failure reason is shown on the run.                                         |
 | **Partial failure** | A multi-repository run where some repositories completed and some failed.                                           |
@@ -503,12 +631,13 @@ those triggers fires while a previous run is still in progress, the new run is r
 
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
-`idempotencyKey` can overlap.
+`idempotencyKey` can overlap. Deliveries that share a `sessionKey` are keyed by it: a later one
+continues the first run's session rather than overlapping it.
 
-Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — for 7 days
-after the thread's first trigger they continue the same session (during the run and after it
-finishes), routed to that session as follow-up prompts (see the **Run feedback** note under
-[Slack Message Triggers](#slack-message-triggers)).
+Slack Message triggers key concurrency by thread. Replies in a thread are not skipped — until the
+session has been idle for 7 days they continue the same session (while the run starts, during it,
+and after it finishes), routed to that session as follow-up prompts (see the **Run feedback** note
+under [Slack Message Triggers](#slack-message-triggers)).
 
 This prevents overlapping sessions from interfering with each other on the same repository.
 
@@ -545,4 +674,5 @@ auto-pause threshold.
 | Webhook payload size                   | 64 KB                                  |
 | Concurrent runs per automation         | 1 for scheduled/manual triggers only   |
 | Consecutive failures before auto-pause | 3                                      |
+| Launch retries per scheduled run       | 5                                      |
 | Run execution timeout                  | 90 minutes                             |

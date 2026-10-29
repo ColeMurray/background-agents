@@ -13,7 +13,7 @@ import {
   type PreparedImageAttachments,
 } from "../attachments";
 import type { Env } from "../types";
-import { sendPrompt } from "./control-plane-client";
+import { sendPrompt, type SendPromptResult } from "./control-plane-client";
 
 export interface DeliverPromptOptions {
   sessionId: string;
@@ -43,13 +43,14 @@ export type DeliverPromptResult =
    * "forbidden": refuse this user's prompt without closing the thread for others.
    * "channel_scope_denied": close the thread for everyone; its channel authority no longer matches.
    * "transient": the prompt send failed; the user should be told to retry.
-   * "no_images_delivered": an image-only request lost every image, so no
-   * prompt was sent — the user has already been notified.
+   * "harness_model_incompatible": the session's harness cannot run the prompt's model.
    */
-  | {
-      ok: false;
-      reason: "stale" | "forbidden" | "transient" | "no_images_delivered" | "channel_scope_denied";
-    };
+  | Exclude<SendPromptResult, { ok: true }>
+  /**
+   * An image-only request lost every image, so no prompt was sent — the user
+   * has already been notified.
+   */
+  | { ok: false; reason: "no_images_delivered" };
 
 /** Deliver one prompt and its image attachments to a session. */
 export async function deliverPrompt(

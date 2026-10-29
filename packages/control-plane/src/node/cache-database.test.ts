@@ -6,7 +6,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CACHE_ENTRIES_SCHEMA_SQL } from "../db/sql-cache-store";
 import type { Logger } from "../logger";
 import { CACHE_STORE_FILE, openNodeCacheDatabase } from "./cache-database";
 
@@ -24,6 +26,40 @@ afterEach(() => {
 });
 
 describe("openNodeCacheDatabase", () => {
+  it.each(["new", "existing"])("indexes expiry cleanup for %s cache files", async (state) => {
+    if (state === "existing") {
+      const legacy = new DatabaseSync(join(dataDir, CACHE_STORE_FILE));
+      try {
+        legacy.exec(CACHE_ENTRIES_SCHEMA_SQL);
+        legacy.prepare("INSERT INTO cache_entries (key, value) VALUES ('k', 'v')").run();
+      } finally {
+        legacy.close();
+      }
+    }
+
+    const db = openNodeCacheDatabase(dataDir);
+    try {
+      const plan = await db
+        .prepare("EXPLAIN QUERY PLAN DELETE FROM cache_entries WHERE expires_at <= ?")
+        .bind(0)
+        .all<{ detail: string }>();
+      expect(plan.results).toContainEqual(
+        expect.objectContaining({
+          detail: expect.stringContaining("USING INDEX cache_entries_expires_at_idx"),
+        })
+      );
+      if (state === "existing") {
+        expect(await db.prepare("SELECT value FROM cache_entries WHERE key = 'k'").first()).toEqual(
+          {
+            value: "v",
+          }
+        );
+      }
+    } finally {
+      db.close();
+    }
+  });
+
   it("creates the table, and reopening keeps what was written", async () => {
     const first = openNodeCacheDatabase(dataDir);
     await first

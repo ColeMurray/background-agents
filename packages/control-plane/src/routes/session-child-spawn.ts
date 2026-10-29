@@ -1,3 +1,4 @@
+import { HarnessAdmissionError, resolveChildHarnessSelection } from "../harness-admission";
 import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
 import { parseBody } from "./body";
 import { Hono } from "hono";
@@ -10,17 +11,15 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import {
-  getReasoningConfig,
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
-  resolveEnabledModel,
   type ValidModel,
   VALID_MODELS,
 } from "@open-inspect/shared/models";
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
+import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -232,28 +231,15 @@ export async function handleSpawnChild(
   if (body.model !== undefined && !enabledModels.includes(requestedModel)) {
     return error(`Model "${body.model}" is not enabled`, 400);
   }
-  const model = resolveEnabledModel({ model: requestedModel, enabledModels });
-  // The child runs on the parent's harness; the requested model must run there.
   const harness = spawnContext.harness;
-  const harnessIncompatibility = checkHarnessCompatibility(harness, model);
-  if (harnessIncompatibility) {
-    return error(harnessIncompatibility.message, 400);
+  let selection;
+  try {
+    selection = await resolveChildHarnessSelection(ctx.db, spawnContext, body, enabledModels);
+  } catch (cause) {
+    if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
+    throw cause;
   }
-  if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
-    const validEfforts = getReasoningConfig(model)?.efforts;
-    const suffix = validEfforts?.length
-      ? ` Valid efforts: ${validEfforts.join(", ")}`
-      : " This model does not support reasoning effort overrides.";
-    return error(
-      `Invalid reasoning effort "${body.reasoningEffort}" for model "${model}".${suffix}`,
-      400
-    );
-  }
-  const requestedReasoningEffort = body.reasoningEffort ?? spawnContext.reasoningEffort;
-  const reasoningEffort =
-    requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
-      ? requestedReasoningEffort
-      : null;
+  const { model, reasoningEffort } = selection;
 
   let providerAuth;
   try {
@@ -300,6 +286,12 @@ export async function handleSpawnChild(
     spawnContext.repoName,
     parentEnvironmentId
   );
+  // The account the spawning prompt was queued under: the parent owner's personal memory carries
+  // over only on their own prompt, and the child's first prompt counts as that prompt did.
+  const promptAccountUserId = spawnContext.promptAccountUserId ?? null;
+  const inheritedEstimatedTokens = await new SessionMemorySelectionStore(
+    ctx.db
+  ).inheritedEstimatedTokens(parentId, promptAccountUserId);
 
   const input: SessionInitInput = {
     ownerTeamId: teamId,
@@ -334,7 +326,12 @@ export async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkills: inheritedPin(parentId),
-    memory: inheritedPin(parentId),
+    memory: {
+      kind: "inherited",
+      parentSessionId: parentId,
+      promptAuthorUserId: promptAccountUserId,
+      estimatedTokens: inheritedEstimatedTokens,
+    },
     providerAuth: providerAuth.map((auth) => ({
       ...auth,
       inheritedFromSessionId: parentId,
@@ -354,6 +351,7 @@ export async function handleSpawnChild(
     await initializeSession(env, input, ctx);
   } catch (e) {
     await sessionStore.releaseChildAdmissionLease(admissionLease);
+    if (e instanceof HarnessAdmissionError) return error(e.message, e.status);
     logger.error("Failed to initialize child session", {
       error: e instanceof Error ? e.message : String(e),
       parent_id: parentId,
@@ -370,6 +368,7 @@ export async function handleSpawnChild(
       content: body.prompt,
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
+      promptAccountUserId,
       source: "agent",
     } satisfies EnqueuePromptRequest;
 

@@ -5,7 +5,7 @@ import { isAutomationExecutionAuthorized } from "../../src/automation/authorizat
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { AutomationStore } from "../../src/db/automation-store";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { Scheduler } from "../../src/scheduler/scheduler";
+import { createScheduler as createAutomationScheduler } from "../../src/scheduler/factory";
 import { cleanD1Tables } from "./cleanup";
 import { queryDO, seedActiveUser, serviceFetch, sqlDatabase } from "./helpers";
 import { fetchRuns } from "./run-helpers";
@@ -40,7 +40,7 @@ function authorized(automationId: string, executionUserId?: string) {
 }
 
 function createScheduler() {
-  return new Scheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
+  return createAutomationScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
 }
 
 async function expectNoLaunch(automationId: string) {

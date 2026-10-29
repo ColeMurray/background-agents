@@ -41,7 +41,7 @@ export const MEMORY_TOOLS = {
   },
   memory_write: {
     description:
-      "Remember non-obvious, durable knowledge. The server infers the session environment or sole repository; for multi-repository sessions, specify both repoOwner and repoName. Write a directive only when the user asks you to remember a preference. Never store credentials. Shared memories and directives require approval; the result states active or proposed. Respect the user's personal-memory opt-out.",
+      "Save what a future session can't learn from the repository and would otherwise get wrong: something the user asked you to remember, a user correction or standing preference, a non-obvious approach the user confirmed, or a verified, hard-won fact the repository doesn't record. Most sessions need no write; skip work summaries, status, fixes now in the code, sandbox quirks, guesses and duplicates. Check memory_search first and use supersedesMemoryId to update an existing fact. The server infers the session environment or sole repository; for multi-repository sessions, specify both repoOwner and repoName. Write a directive only when the user asks you to remember a preference. Never store credentials. Shared memories and directives require approval; the result states active or proposed. If proposed, tell the user it awaits review in Settings > Memories (personal) or Settings > Shared memories. Respect the user's personal-memory opt-out.",
     input: sandboxMemoryWriteSchema,
     method: "POST",
     path: "/sandbox-memory",
@@ -63,6 +63,9 @@ export function harnessMemoryToolName(harness: HarnessId, tool: MemoryToolName):
     case "claude":
       // Claude receives runtime tools through the in-process `oi` MCP server.
       return `mcp__oi__${tool}`;
+    case "codex":
+      // Codex receives the same tools in the `oi` dynamic-tool namespace.
+      return tool;
     default: {
       const exhaustive: never = harness;
       throw new Error(`Unknown harness: ${String(exhaustive)}`);

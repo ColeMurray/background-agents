@@ -6,8 +6,12 @@ import {
   checkHarnessCompatibility,
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
-import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
-import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
+import { HarnessAdmissionError, resolveHarnessSelection } from "../harness-admission";
+import type {
+  CreateSessionInput,
+  CreateSessionResponse,
+} from "@open-inspect/shared/types/session-api";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import {
@@ -51,6 +55,25 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
+
+/**
+ * Whether a new session includes its owner's personal memory; undefined leaves it to their saved
+ * default. People choose per session. Sessions an integration starts answer in places others read,
+ * so they go without, except a Slack direct message, which is as private as a web session.
+ */
+function personalMemoryInclusion(
+  spawnSource: SpawnSource | undefined,
+  body: Pick<CreateSessionInput, "includePersonalMemories" | "directMessage">
+): boolean | undefined {
+  switch (spawnSource) {
+    case "user":
+      return body.includePersonalMemories;
+    case "slack-bot":
+      return body.directMessage ? body.includePersonalMemories : false;
+    default:
+      return false;
+  }
+}
 
 async function extractSessionActorProfileClaims(
   request: Request,
@@ -231,13 +254,18 @@ export async function handleCreateSession(
 
   // Validate harness, model and reasoning effort once for both DO init and D1 index
   const harness = getValidHarnessOrDefault(body.harness);
-  const model = getValidModelOrDefault(body.model);
-  const harnessModelIncompatibility = checkHarnessCompatibility(harness, model);
-  if (harnessModelIncompatibility) return error(harnessModelIncompatibility.message, 400);
-  const reasoningEffort =
-    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
-      ? body.reasoningEffort
-      : null;
+  let selection;
+  try {
+    selection = await resolveHarnessSelection(ctx.db, {
+      harness,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+    });
+  } catch (cause) {
+    if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
+    throw cause;
+  }
+  const { model, reasoningEffort } = selection;
 
   // Session-scoped integration settings resolve from the primary member (design
   // §6.2). In list mode that is repositories[0]; otherwise the scalar pair — the
@@ -290,7 +318,7 @@ export async function handleCreateSession(
     principal: { userId: resolvedUserId, ownerTeamId: teamId },
     repositories: scopeMembers,
     environmentId,
-    includePersonalMemories: body.includePersonalMemories,
+    includePersonalMemories: personalMemoryInclusion(spawnSource, body),
   });
 
   const input: SessionInitInput = {
@@ -327,6 +355,7 @@ export async function handleCreateSession(
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (e instanceof HarnessAdmissionError) return error(e.message, e.status);
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,

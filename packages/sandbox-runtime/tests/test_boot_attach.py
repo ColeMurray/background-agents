@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -44,6 +45,69 @@ def complete_boot(attach):
     attach.boot_relay.path.write_text(
         json.dumps({"seq": 1, "kind": "phase", "phase": "harness", "status": "completed"}) + "\n"
     )
+
+
+@pytest.mark.parametrize("ready_sent", [False, True])
+async def test_attach_timing_is_local_and_not_repeated_on_reconnect(
+    coordinator, monkeypatch, ready_sent
+):
+    attach = coordinator()
+    attach._send_event.return_value = ready_sent
+    clock = MagicMock(side_effect=[10.0, 12.5])
+    monkeypatch.setattr("sandbox_runtime.boot_attach.time", SimpleNamespace(monotonic=clock))
+    complete_boot(attach)
+
+    await attach._relay_boot_events_once()
+    await attach._relay_boot_events_once()
+    await attach.on_connect()
+    await attach.on_connect()
+
+    attach.log.info.assert_called_once_with(
+        "bridge.harness_attach",
+        harness=attach.harness.id.value,
+        outcome="success",
+        duration_seconds=2.5,
+        ready_sent=ready_sent,
+    )
+    assert not attach.booting
+    assert clock.call_count == 2
+
+
+@pytest.mark.parametrize("stage", ["factory", "open", "resume", "signing", "send"])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_attach_timing_preserves_failures_and_cancellation(
+    coordinator, monkeypatch, stage, cancelled
+):
+    attach = coordinator()
+    harness = attach._harness_factory.return_value
+    error = asyncio.CancelledError() if cancelled else RuntimeError("failed")
+    operation = {
+        "factory": attach._harness_factory,
+        "open": AsyncMock(),
+        "resume": attach._load_session_id,
+        "signing": attach.git_signing.initialize,
+        "send": attach._send_event,
+    }[stage]
+    if stage == "open":
+        harness.open = operation
+    operation.side_effect = error
+    monkeypatch.setattr(
+        "sandbox_runtime.boot_attach.time",
+        SimpleNamespace(monotonic=MagicMock(side_effect=[10.0, 13.0])),
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await attach._attach_harness()
+
+    assert raised.value is error
+    attach.log.info.assert_called_once_with(
+        "bridge.harness_attach",
+        harness=None if stage == "factory" else harness.id.value,
+        outcome="cancelled" if cancelled else "error",
+        duration_seconds=3.0,
+        ready_sent=False,
+    )
+    assert attach.booting
 
 
 async def test_early_start_defers_work_and_releases_waiters_only_after_ready(coordinator):

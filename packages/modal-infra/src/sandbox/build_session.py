@@ -91,9 +91,10 @@ class ModalBuildSessionService:
         sandbox_backend: ModalBackend = "modal",
     ) -> BuildSessionLaunch:
         start_time = time.time()
-        docker = parse_launch(sandbox_backend, sandbox_settings)
-        if sandbox_backend == "modal":
-            docker = parse_launch(sandbox_backend, None)  # Preserve standard build sizing.
+        # Standard builds retain provider sizing and ignore session resource settings.
+        docker = parse_launch(
+            sandbox_backend, sandbox_settings if sandbox_backend == "modal-vm" else None
+        )
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
         for name in RESERVED_USER_ENV_KEYS:

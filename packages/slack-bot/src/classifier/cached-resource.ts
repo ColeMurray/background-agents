@@ -12,11 +12,7 @@
 
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { Env } from "../types";
-import {
-  ControlPlaneRequestError,
-  KV_CACHE_TTL_SECONDS,
-  LOCAL_CACHE_TTL_MS,
-} from "./control-plane";
+import { ControlPlaneRequestError, KV_CACHE_TTL_MS, LOCAL_CACHE_TTL_MS } from "./control-plane";
 import { createLogger } from "../logger";
 
 export interface CachedResourceOptions<T> {
@@ -79,7 +75,7 @@ export function createCachedResource<T>(options: CachedResourceOptions<T>): Cach
 
       try {
         await createKvCacheStore(env.SLACK_KV).put(kvKey, JSON.stringify(value), {
-          expirationTtl: KV_CACHE_TTL_SECONDS,
+          ttlMs: KV_CACHE_TTL_MS,
         });
       } catch (e) {
         log.warn("kv.put", {

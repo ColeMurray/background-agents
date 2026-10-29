@@ -11,6 +11,7 @@ import {
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
 import { SettingsCardSection } from "./settings-card-section";
+import { AddRepositoryOverride } from "./add-repository-override";
 import {
   getScmRepoSettingsPath,
   SCM_GLOBAL_SETTINGS_KEY,
@@ -26,16 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
@@ -301,21 +293,14 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
         )}
       </div>
 
-      <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
-            <AlertDialogDescription>
-              Reset the global pull/merge request defaults? Per-repository overrides will not be
-              affected.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmReset}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmationDialog
+        open={showResetDialog}
+        onOpenChange={setShowResetDialog}
+        title="Reset to defaults"
+        description="Reset the global pull/merge request defaults? Per-repository overrides will not be affected."
+        actionLabel="Reset"
+        onConfirm={handleConfirmReset}
+      />
     </SettingsCardSection>
   );
 }
@@ -382,23 +367,12 @@ function RepoOverridesSection({
         </p>
       )}
 
-      <div className="flex items-center gap-2">
-        <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1" aria-label="Select a repository">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {availableForOverride.map((repo) => (
-              <SelectItem key={repo.fullName} value={repo.fullName.toLowerCase()}>
-                {repo.fullName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button onClick={handleAdd} disabled={!addingRepo}>
-          Add Override
-        </Button>
-      </div>
+      <AddRepositoryOverride
+        repositories={availableForOverride}
+        value={addingRepo}
+        onValueChange={setAddingRepo}
+        onAdd={handleAdd}
+      />
     </div>
   );
 }

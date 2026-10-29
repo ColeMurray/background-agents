@@ -20,6 +20,8 @@ export interface ProviderIdentity {
   avatarUrl?: string;
 }
 
+export type EnrollmentAdmission = (identity: Readonly<ProviderIdentity>) => void | Promise<void>;
+
 /**
  * Ingress providers whose attributed emails are platform-verified mailboxes
  * fetched server-side by first-party bots: Slack confirms every address at
@@ -35,6 +37,31 @@ const EMAIL_ATTESTING_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new
   "slack",
   "linear",
 ]);
+
+export function isEmailAttestingProvider(provider: ProviderIdentity["provider"]): boolean {
+  return EMAIL_ATTESTING_PROVIDERS.has(provider);
+}
+
+/**
+ * Ingress providers whose unknown actors are enrolled only with an attested
+ * email. An actor links to an existing user by email only at enrollment and
+ * is never relinked, and every new user gets the default role, so an
+ * email-less enrollment would give someone a second account free of the
+ * suspension or role restrictions on their existing one.
+ *
+ * Known limitation: a Slack user whose profile email the bot cannot read,
+ * typically an external Slack Connect user, cannot be enrolled and so cannot
+ * use the bot. Linear's catalog reads are actorless; its session-creation
+ * request carries the enrolling actor's email.
+ */
+const ENROLLMENT_EMAIL_REQUIRED_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
+  "slack",
+  "linear",
+]);
+
+export function requiresEnrollmentEmail(provider: ProviderIdentity["provider"]): boolean {
+  return ENROLLMENT_EMAIL_REQUIRED_PROVIDERS.has(provider);
+}
 
 export interface ResolvedUser {
   id: string;
@@ -218,15 +245,20 @@ export class UserStore {
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
    * given provider identity, with automatic email-based cross-provider linking.
+   * Admission receives the normalized identity before a new user is inserted;
+   * existing identities and email links retain their existing account access.
    *
    * On UNIQUE constraint violation (concurrent race), retries the lookup once.
    */
-  async resolveOrCreateUser(identity: ProviderIdentity): Promise<ResolvedUser> {
+  async resolveOrCreateUser(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     try {
-      return await this.doResolveOrCreate(identity);
+      return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
     } catch (err) {
       if (isUniqueConstraintError(err)) {
-        return await this.doResolveOrCreate(identity);
+        return await this.doResolveOrCreate(identity, requireEnrollmentAdmission);
       }
       throw err;
     }
@@ -334,6 +366,34 @@ export class UserStore {
     };
   }
 
+  /**
+   * Set a display name or avatar the user lacks (NULL or blank) and never
+   * overwrite one it has. Each field is a single guarded UPDATE, so a value
+   * another writer stores first always wins. Blank inputs are ignored.
+   */
+  async fillMissingProfile(
+    userId: string,
+    profile: { displayName?: string; avatarUrl?: string }
+  ): Promise<void> {
+    const now = Date.now();
+    const fill = (column: "display_name" | "avatar_url", value: string | undefined) => {
+      const trimmed = value?.trim();
+      return trimmed
+        ? this.db
+            .prepare(
+              `UPDATE users SET ${column} = ?, updated_at = ?
+               WHERE id = ? AND (${column} IS NULL OR TRIM(${column}) = '')`
+            )
+            .bind(trimmed, now, userId)
+        : null;
+    };
+    const statements = [
+      fill("display_name", profile.displayName),
+      fill("avatar_url", profile.avatarUrl),
+    ].filter((statement) => statement !== null);
+    if (statements.length > 0) await this.db.batch(statements);
+  }
+
   async updateUser(userId: string, updates: UserUpdate): Promise<void> {
     const sets: string[] = [];
     const values: (string | number | null)[] = [];
@@ -371,7 +431,10 @@ export class UserStore {
 
   // ── Private ─────────────────────────────────────────────────────
 
-  private async doResolveOrCreate(identity: ProviderIdentity): Promise<ResolvedUser> {
+  private async doResolveOrCreate(
+    identity: ProviderIdentity,
+    requireEnrollmentAdmission: EnrollmentAdmission
+  ): Promise<ResolvedUser> {
     const normalizedEmail = normalizeEmail(identity.providerEmail);
 
     // Step 1: Look up by provider identity
@@ -460,6 +523,7 @@ export class UserStore {
     // Step 4: Brand new user — batch user + identity creation so a UNIQUE
     // failure on the identity INSERT rolls back the user INSERT, preventing
     // orphaned user rows under concurrent requests.
+    await requireEnrollmentAdmission({ ...identity, providerEmail: normalizedEmail ?? undefined });
     const userId = generateId();
     const identityId = generateId();
     const now = Date.now();

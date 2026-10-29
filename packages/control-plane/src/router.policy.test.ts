@@ -39,15 +39,28 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(231);
+    expect(routes).toHaveLength(239);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(175);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(231);
+    expect(new Set(paths).size).toBe(182);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(239);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
+    });
+  });
+
+  it("gates member merges on the merge grant, with member reads for previews", () => {
+    expect(routeFor("POST", "/members/merge/preview")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ permission: "workspace.members.merge" }, { permission: "workspace.members.read" }],
+      service: { kind: "deny" },
+    });
+    expect(routeFor("POST", "/members/merge")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ permission: "workspace.members.merge" }],
+      service: { kind: "deny" },
     });
   });
 
@@ -283,7 +296,7 @@ describe("route policy table", () => {
       ],
     ],
     ["GET", "/integration-settings/slack/watched-channels", [{ service: "slack-bot" }]],
-    ["GET", "/model-preferences", [{ service: "slack-bot" }]],
+    ["GET", "/model-preferences", [{ service: "slack-bot" }, { service: "github-bot" }]],
     ["GET", "/automations", [{ service: "slack-bot" }]],
     ["GET", "/automations/auto-1", [{ service: "slack-bot" }]],
     ["GET", "/automations/auto-1/invocations", [{ service: "slack-bot" }]],
@@ -374,7 +387,10 @@ describe("route policy table", () => {
     });
     expect(routeFor("GET", "/model-preferences")?.authorization).toMatchObject({
       kind: "active-global",
-      service: { kind: "actor", actorlessGrants: [{ service: "slack-bot" }] },
+      service: {
+        kind: "actor",
+        actorlessGrants: [{ service: "slack-bot" }, { service: "github-bot" }],
+      },
     });
     expect(routeFor("GET", "/sessions")?.authorization).toMatchObject({
       kind: "active-user",
@@ -382,6 +398,11 @@ describe("route policy table", () => {
       service: { kind: "actor" },
     });
     expect(routeFor("GET", "/sessions/inbox")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ kind: "permission", permission: "sessions.read" }],
+      service: { kind: "deny" },
+    });
+    expect(routeFor("POST", "/sessions/inbox/read-state")?.authorization).toMatchObject({
       kind: "active-user",
       allOf: [{ kind: "permission", permission: "sessions.read" }],
       service: { kind: "deny" },
@@ -487,6 +508,7 @@ describe("route policy table", () => {
     ["GET", "/health", "public"],
     ["POST", "/webhooks/sentry/automation-1", "handler-authenticated"],
     ["POST", "/webhooks/automation/automation-1", "handler-authenticated"],
+    ["GET", "/webhooks/automation/automation-1/invocations/invocation-1", "handler-authenticated"],
     ["POST", "/image-builds/build-complete", "handler-authenticated"],
     ["POST", "/image-builds/build-failed", "handler-authenticated"],
     ["GET", "/api/auth/get-session", "web-service"],
@@ -559,6 +581,7 @@ describe("route policy table", () => {
   it.each([
     ["GET", "/sessions/session-1"],
     ["GET", "/sessions/inbox"],
+    ["POST", "/sessions/inbox/read-state"],
     ["POST", "/sessions/batch-archive"],
     ["GET", "/sessions/session-1/sandbox-access"],
     ["PATCH", "/sessions/session-1/read-state"],

@@ -5,6 +5,12 @@ from unittest.mock import Mock
 import modal
 import pytest
 
+from src.sandbox.launch_policy import (
+    MAX_RESOURCE_UINT32,
+    InvalidDockerSettingsError,
+    launch_kwargs,
+    parse_launch,
+)
 from tests.modal_sdk_contract import (
     sandbox_create_request,
     sandbox_exec_request,
@@ -96,6 +102,42 @@ def test_create_uses_sdk_resource_conversion(
     assert definition.experimental_options == {"vm_runtime": True}
     assert definition.name == "test-allocation"
     assert [(tag.tag_name, tag.tag_value) for tag in request.tags] == [("kind", "test")]
+
+
+@pytest.mark.parametrize("backend", ["modal", "modal-vm"])
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"cpuCores": 0.0001, "cpuLimitCores": 0.0009},
+        {"cpuLimitCores": 1e308},
+        {"cpuCores": 10**400},
+        {"cpuLimitCores": (MAX_RESOURCE_UINT32 + 1) / 1000},
+        {"memoryMib": MAX_RESOURCE_UINT32 + 1},
+        {"memoryLimitMib": MAX_RESOURCE_UINT32 + 1},
+    ],
+)
+def test_launch_rejects_resources_outside_sdk_wire_domain(backend, settings):
+    with pytest.raises(InvalidDockerSettingsError):
+        parse_launch(backend, settings)
+
+
+@pytest.mark.parametrize("backend", ["modal", "modal-vm"])
+@pytest.mark.parametrize(
+    "cpu_millicores, memory_mib", [(1, 1), (MAX_RESOURCE_UINT32, MAX_RESOURCE_UINT32)]
+)
+def test_launch_domain_boundaries_serialize_with_real_sdk(backend, cpu_millicores, memory_mib):
+    settings = {
+        "cpuCores": cpu_millicores / 1000,
+        "cpuLimitCores": cpu_millicores / 1000,
+        "memoryMib": memory_mib,
+        "memoryLimitMib": memory_mib,
+    }
+    request = sandbox_create_request(
+        "python", timeout=30, **launch_kwargs(parse_launch(backend, settings))
+    )
+    resources = request.definition.resources
+    assert resources.milli_cpu == resources.milli_cpu_max == cpu_millicores
+    assert resources.memory_mb == resources.memory_mb_max == memory_mib
 
 
 @pytest.mark.parametrize("timeout", [55, 55.0, 55.5])

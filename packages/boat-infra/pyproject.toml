@@ -1,0 +1,9 @@
+[project]
+name = "open-inspect-boat"
+version = "0.1.0"
+description = "Boat base snapshot build for Open-Inspect coding agent"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false

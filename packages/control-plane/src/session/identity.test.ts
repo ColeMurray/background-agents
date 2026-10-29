@@ -5,6 +5,7 @@ import {
   resolveCurrentGitHubAccessToken,
   resolveGitAuthorIdentity,
   resolveGitHubEnrichment,
+  resolveGitHubEnrichmentForCanonicalUser,
   resolveGitHubEnrichmentForRequest,
 } from "./identity";
 
@@ -127,13 +128,18 @@ function fakeStore(
   user?: { id: string; displayName?: string | null; email?: string | null }
 ): UserStore {
   return {
-    getIdentitiesForUser: async () => identities,
+    getIdentitiesForUser: async () =>
+      identities.map((identity) => ({
+        id: `${identity.provider}-account-${identity.providerUserId}`,
+        ...identity,
+      })),
     getUserById: async () => user ?? null,
   } as unknown as UserStore;
 }
 
 const GITHUB_ACCOUNT_INFO = {
-  user: { id: "42" },
+  account: { id: "github-account-42", providerId: "github", accountId: "42" },
+  user: { name: "Ada Lovelace" },
   data: {
     provider: "github",
     issuer: "https://github.com",
@@ -210,7 +216,7 @@ describe("resolveGitHubEnrichmentForRequest", () => {
     await expect(
       resolveGitHubEnrichmentForRequest(store, "user-1", {
         kind: "browser_session",
-        githubAccount: { subject: "42", resolveProfile },
+        githubAccount: { id: "github-account-42", subject: "42", resolveProfile },
       })
     ).resolves.toMatchObject({ scmUserId: "42", scmLogin: "ada" });
     expect(resolveProfile).not.toHaveBeenCalled();
@@ -224,6 +230,7 @@ describe("resolveGitHubEnrichmentForRequest", () => {
         {
           kind: "browser_session",
           githubAccount: {
+            id: "github-account-42",
             subject: "42",
             resolveProfile: vi.fn(async () => GITHUB_ACCOUNT_INFO),
           },
@@ -245,6 +252,7 @@ describe("resolveGitHubEnrichmentForRequest", () => {
         {
           kind: "browser_session",
           githubAccount: {
+            id: "github-account-42",
             subject: "42",
             resolveProfile: vi.fn(async () => null),
           },
@@ -265,6 +273,7 @@ describe("resolveGitHubEnrichmentForRequest", () => {
       resolveGitHubEnrichmentForRequest(store, "user-1", {
         kind: "browser_session",
         githubAccount: {
+          id: "github-account-7",
           subject: "7",
           resolveProfile: vi.fn(async () => GITHUB_ACCOUNT_INFO),
         },
@@ -281,6 +290,52 @@ describe("resolveGitHubEnrichmentForRequest", () => {
         githubAccount: null,
       })
     ).rejects.toThrow("GitHub account authority is corrupt");
+  });
+
+  it.each([{ id: "other-account" }, { providerId: "google" }, { accountId: "7" }])(
+    "rejects substituted browser profile account metadata: %j",
+    async (account) => {
+      await expect(
+        resolveGitHubEnrichmentForRequest(
+          fakeStore([{ provider: "github", providerUserId: "42" }]),
+          "user-1",
+          {
+            kind: "browser_session",
+            githubAccount: {
+              id: "github-account-42",
+              subject: "42",
+              resolveProfile: async () => ({
+                ...GITHUB_ACCOUNT_INFO,
+                account: { ...GITHUB_ACCOUNT_INFO.account, ...account },
+              }),
+            },
+          }
+        )
+      ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
+    }
+  );
+});
+
+describe("resolveGitHubEnrichmentForCanonicalUser", () => {
+  it("uses the canonical local account row ID for unattended attribution", async () => {
+    const accountClient = {
+      listUserAccounts: vi.fn(async () => []),
+      getAccessToken: vi.fn(async () => ({ accessToken: "grant" })),
+      refreshToken: vi.fn(async () => null),
+      accountInfo: vi.fn(async () => GITHUB_ACCOUNT_INFO),
+    };
+
+    await expect(
+      resolveGitHubEnrichmentForCanonicalUser(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        "user-1",
+        () => accountClient
+      )
+    ).resolves.toMatchObject({ scmUserId: "42", scmLogin: "ada" });
+    const selection = { accountId: "github-account-42", userId: "user-1" };
+    expect(accountClient.getAccessToken).toHaveBeenCalledWith({ body: selection });
+    expect(accountClient.accountInfo).toHaveBeenCalledWith({ query: selection });
+    expect(accountClient.listUserAccounts).not.toHaveBeenCalled();
   });
 });
 
@@ -316,7 +371,7 @@ describe("resolveCurrentGitHubAccessToken", () => {
         null
       )
     ).resolves.toBe("current-access-token");
-    const selection = { providerId: "github", accountId: "42", userId: "prompt-author" };
+    const selection = { accountId: "github-account-42", userId: "prompt-author" };
     expect(getAccessToken).toHaveBeenCalledWith({ body: selection });
     expect(accountInfo).toHaveBeenCalledWith({ query: selection });
   });
@@ -399,7 +454,7 @@ describe("resolveCurrentGitHubAccessToken", () => {
       )
     ).resolves.toBe("refreshed-access-token");
     expect(refreshToken).toHaveBeenCalledWith({
-      body: { providerId: "github", accountId: "42", userId: "user-1" },
+      body: { accountId: "github-account-42", userId: "user-1" },
     });
     expect(accountInfo).toHaveBeenCalledOnce();
   });
@@ -489,7 +544,7 @@ describe("resolveCurrentGitHubAccessToken", () => {
       )
     ).resolves.toBe("current-access-token");
     expect(accountClient.getAccessToken).toHaveBeenCalledWith({
-      body: { providerId: "github", accountId: "42", userId: "user-1" },
+      body: { accountId: "github-account-42", userId: "user-1" },
     });
   });
 
@@ -499,7 +554,8 @@ describe("resolveCurrentGitHubAccessToken", () => {
       const substitutedClient = {
         ...accountClient,
         accountInfo: vi.fn(async () => ({
-          user: { id: "7" },
+          ...GITHUB_ACCOUNT_INFO,
+          account: { ...GITHUB_ACCOUNT_INFO.account, accountId: "7" },
           data: { ...GITHUB_ACCOUNT_INFO.data, subject: "7", login: "mallory" },
         })),
       };
@@ -529,5 +585,41 @@ describe("resolveCurrentGitHubAccessToken", () => {
         "42"
       )
     ).rejects.toThrow();
+  });
+
+  it("rejects a legacy profile response without account ownership metadata", async () => {
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => ({
+          ...accountClient,
+          accountInfo: vi.fn(async () => ({
+            user: { id: "42" },
+            data: GITHUB_ACCOUNT_INFO.data,
+          })),
+        }),
+        "user-1",
+        "42"
+      )
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    { account: { ...GITHUB_ACCOUNT_INFO.account, id: "other-account" } },
+    { account: { ...GITHUB_ACCOUNT_INFO.account, providerId: "google" } },
+    { account: { ...GITHUB_ACCOUNT_INFO.account, accountId: "7" } },
+    { data: { ...GITHUB_ACCOUNT_INFO.data, subject: "7" } },
+  ])("rejects account or provider subject substitution independently: %j", async (profile) => {
+    await expect(
+      resolveCurrentGitHubAccessToken(
+        fakeStore([{ provider: "github", providerUserId: "42" }]),
+        () => ({
+          ...accountClient,
+          accountInfo: vi.fn(async () => ({ ...GITHUB_ACCOUNT_INFO, ...profile })),
+        }),
+        "user-1",
+        "42"
+      )
+    ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
   });
 });

@@ -31,6 +31,7 @@ export function makeRunRow(
     repo_id: null,
     base_branch: null,
     environment_id: null,
+    first_prompt_pending: 0,
     ...overrides,
   };
 }

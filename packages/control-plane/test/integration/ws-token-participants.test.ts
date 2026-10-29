@@ -10,6 +10,7 @@ import {
   seedSandboxAuth,
   serviceRequestHeaders,
   waitForSandboxStatus,
+  closeWebSocket,
 } from "./helpers";
 
 function wsTokenBody(body: Record<string, unknown>): string {
@@ -244,8 +245,8 @@ describe("browser Git author attribution", () => {
                 },
         });
       } finally {
-        client.close();
-        sandbox!.close();
+        await closeWebSocket(client, { bestEffort: true });
+        await closeWebSocket(sandbox!, { bestEffort: true });
       }
     }
   );

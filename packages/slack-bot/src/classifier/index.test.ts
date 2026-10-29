@@ -47,7 +47,8 @@ vi.mock("./environments", async (importOriginal) => ({
   getEnvironmentById: vi.fn(),
 }));
 
-import { RepoClassifier } from "./index";
+import Anthropic from "@anthropic-ai/sdk";
+import { createClassifier, RepoClassifier } from "./index";
 
 const TEST_REPOS: RepoConfig[] = [
   {
@@ -112,6 +113,52 @@ describe("RepoClassifier", () => {
     mockBuildRepoDescriptions.mockReturnValue("- acme/prod\n- acme/web");
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("validates the payload returned by an injected model caller without constructing the SDK", async () => {
+    const callModel = vi.fn().mockResolvedValue({
+      targetId: " acme/web ",
+      confidence: " HIGH ",
+      reasoning: " Mentions the web app. ",
+      alternatives: [],
+    });
+    const classifier = new RepoClassifier(TEST_ENV, callModel);
+
+    const result = await classifier.classify("fix the web app");
+
+    expect(callModel).toHaveBeenCalledExactlyOnceWith(
+      {
+        protocol: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "test-api-key",
+        model: "claude-haiku-4-5",
+      },
+      expect.stringContaining("fix the web app")
+    );
+    expect(result).toEqual({
+      target: { kind: "repository", repo: TEST_REPOS[1] },
+      confidence: "high",
+      reasoning: "Mentions the web app.",
+      alternatives: undefined,
+      needsClarification: false,
+      source: "llm",
+    });
+
+    callModel.mockResolvedValue({ targetId: "acme/web" });
+    expect(await classifier.classify("fix the web app")).toMatchObject({
+      target: null,
+      confidence: "low",
+      needsClarification: true,
+      source: "llm",
+    });
+    expect(Anthropic).not.toHaveBeenCalled();
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+  });
+
   it("uses tool output when provider returns valid structured classification", async () => {
     mockMessagesCreate.mockResolvedValue({
       content: [
@@ -129,7 +176,7 @@ describe("RepoClassifier", () => {
       ],
     });
 
-    const classifier = new RepoClassifier(TEST_ENV);
+    const classifier = createClassifier(TEST_ENV);
     const result = await classifier.classify("please fix prod slack alerts", undefined, "trace-1");
 
     expect(classifiedRepoFullName(result)).toBe("acme/prod");
@@ -137,17 +184,41 @@ describe("RepoClassifier", () => {
     expect(result.needsClarification).toBe(false);
     expect(mockMessagesCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        temperature: 0,
-        tool_choice: expect.objectContaining({
-          type: "tool",
-          name: "classify_target",
-        }),
         tools: [expect.objectContaining({ name: "classify_target" })],
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
     const prompt = mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
     expect(prompt).toContain("## Available Repositories\n- acme/prod\n- acme/web");
+  });
+
+  it("sends a request that Claude Opus 4.7 and later accept", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "classify_target",
+          input: {
+            targetId: "acme/prod",
+            confidence: "high",
+            reasoning: "The message explicitly mentions prod.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
+
+    const classifier = createClassifier(TEST_ENV);
+    await classifier.classify("please fix prod slack alerts");
+
+    const request = mockMessagesCreate.mock.calls[0][0];
+    // Opus 4.7 and later reject a non-default temperature, and Opus 5.5 rejects
+    // a forced tool call, each with HTTP 400.
+    expect(request).not.toHaveProperty("temperature");
+    expect(request.tool_choice).toEqual({ type: "auto", disable_parallel_tool_use: true });
+    // Under tool_choice auto the system prompt is what makes the model call the tool.
+    expect(request.system).toEqual(expect.stringContaining("classify_target"));
   });
 
   it("asks for clarification when tool payload is invalid", async () => {
@@ -167,7 +238,7 @@ describe("RepoClassifier", () => {
       ],
     });
 
-    const classifier = new RepoClassifier(TEST_ENV);
+    const classifier = createClassifier(TEST_ENV);
     const result = await classifier.classify("please update prod deployment config");
 
     expect(result.target).toBeNull();
@@ -187,7 +258,7 @@ describe("RepoClassifier", () => {
       ],
     });
 
-    const classifier = new RepoClassifier(TEST_ENV);
+    const classifier = createClassifier(TEST_ENV);
     const result = await classifier.classify("frontend UI issue in web app");
 
     expect(result.target).toBeNull();
@@ -214,7 +285,7 @@ describe("RepoClassifier", () => {
       ],
     });
 
-    const classifier = new RepoClassifier(TEST_ENV);
+    const classifier = createClassifier(TEST_ENV);
     const result = await classifier.classify("please fix the app");
 
     expect(result.target).toBeNull();
@@ -241,7 +312,7 @@ describe("RepoClassifier", () => {
       ],
     });
 
-    const classifier = new RepoClassifier(TEST_ENV);
+    const classifier = createClassifier(TEST_ENV);
     const result = await classifier.classify("please fix prod");
 
     expect(result.target).toBeNull();
@@ -258,7 +329,7 @@ describe("RepoClassifier", () => {
         { keyword: "frontend", target: "acme/web" },
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify(
         "please fix the frontend nav bug",
         { teamId: "team-a", channelId: "C1", userId: "U123" },
@@ -281,7 +352,7 @@ describe("RepoClassifier", () => {
         { keyword: "prod", target: "acme/prod" },
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("fix the frontend on prod");
 
       expect(result.target).toBeNull();
@@ -298,7 +369,7 @@ describe("RepoClassifier", () => {
         { keyword: "ui", target: "acme/web" },
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("frontend ui cleanup");
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
@@ -324,7 +395,7 @@ describe("RepoClassifier", () => {
         ],
       });
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("frontend issue");
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
@@ -349,7 +420,7 @@ describe("RepoClassifier", () => {
         ],
       });
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("update the deployment config");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
@@ -364,7 +435,7 @@ describe("RepoClassifier", () => {
       ]);
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("frontend tweak", { channelId: "C123" });
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
@@ -377,7 +448,7 @@ describe("RepoClassifier", () => {
       ]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("fullstack login flow", undefined, "t");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
@@ -395,7 +466,7 @@ describe("RepoClassifier", () => {
         { ...TEST_ENVIRONMENT, name: "<!channel> & co" },
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("deploy the app");
 
       expect(result.reasoning).toContain("&lt;!channel&gt; &amp; co");
@@ -405,7 +476,7 @@ describe("RepoClassifier", () => {
     it("loads the channel catalog exactly once even without a team binding", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       await classifier.classify(
         "frontend tweak",
         { teamId: null, channelId: "C123", userId: "U123" },
@@ -419,14 +490,14 @@ describe("RepoClassifier", () => {
     });
 
     it("routes an environment rule even when only one repository is available", async () => {
-      // The single-repo shortcut must not shadow an explicit environment rule.
+      // A sole repository must not shadow an explicit environment rule.
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
       mockGetRoutingRules.mockResolvedValue([
         { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
       ]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("fullstack login flow");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
@@ -440,7 +511,7 @@ describe("RepoClassifier", () => {
       ]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("frontend or fullstack?");
 
       expect(result.target).toBeNull();
@@ -473,7 +544,7 @@ describe("RepoClassifier", () => {
         ],
       });
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("fullstack web app issue");
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
@@ -488,7 +559,7 @@ describe("RepoClassifier", () => {
         TEST_REPOS[1],
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
@@ -501,7 +572,7 @@ describe("RepoClassifier", () => {
       const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
       mockGetAvailableEnvironments.mockResolvedValue([environment]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(result.target).toEqual({ kind: "environment", environment });
@@ -515,7 +586,7 @@ describe("RepoClassifier", () => {
         { ...TEST_ENVIRONMENT, name: "<!channel> & co", channelAssociations: ["C123"] },
       ]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(result.reasoning).toContain("&lt;!channel&gt; &amp; co");
@@ -523,12 +594,12 @@ describe("RepoClassifier", () => {
     });
 
     it("routes an environment association even when only one repository is available", async () => {
-      // The single-repo shortcut must not shadow the channel's environment.
+      // A sole repository must not shadow the channel's environment.
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
       const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
       mockGetAvailableEnvironments.mockResolvedValue([environment]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(result.target).toEqual({ kind: "environment", environment });
@@ -541,7 +612,7 @@ describe("RepoClassifier", () => {
       const environment = { ...TEST_ENVIRONMENT, channelAssociations: ["C123"] };
       mockGetAvailableEnvironments.mockResolvedValue([environment]);
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(result.target).toBeNull();
@@ -554,8 +625,8 @@ describe("RepoClassifier", () => {
     });
 
     it("falls through to the LLM when several repositories share the channel", async () => {
-      // The LLM sees channel associations as a prompt signal and can arbitrate
-      // between repositories — only environments force a clarification.
+      // Multiple repository associations fall through to the LLM; a set that
+      // includes an environment instead requires deterministic clarification.
       mockGetAvailableRepos.mockResolvedValue(
         TEST_REPOS.map((repo) => ({ ...repo, channelAssociations: ["C123"] }))
       );
@@ -575,7 +646,7 @@ describe("RepoClassifier", () => {
         ],
       });
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("web app issue", { channelId: "C123" });
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
@@ -612,7 +683,7 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("update login across web and prod");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
@@ -632,7 +703,7 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       await classifier.classify("web app issue");
 
       expect(sentPrompt()).not.toContain("## Available Environments");
@@ -649,13 +720,13 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("work on full-stack");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
     });
 
-    it("suppresses the single-repo shortcut when environments exist", async () => {
+    it("classifies among environments and a sole repository", async () => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
       mockMessagesCreate.mockResolvedValue(
@@ -667,7 +738,7 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("touch everything");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
@@ -685,7 +756,7 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("anything at all");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
@@ -703,7 +774,7 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("deploy the service");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
@@ -727,10 +798,50 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("work on full-stack");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
+    });
+
+    it("asks for confirmation when the LLM picks no repository with high confidence", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "The question doesn't need a repository.",
+          alternatives: ["acme/web"],
+        })
+      );
+
+      const classifier = createClassifier(TEST_ENV);
+      const result = await classifier.classify("can you look into this?", {
+        channelId: "C123",
+        threadTs: "1700000000.000100",
+      });
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.confidence).toBe("high");
+      expect(result.alternatives).toEqual([{ kind: "repository", repo: TEST_REPOS[1] }]);
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("asks for confirmation when the LLM picks no repository without alternatives", async () => {
+      mockMessagesCreate.mockResolvedValue(
+        llmResponse({
+          targetId: "__no_repository__",
+          confidence: "high",
+          reasoning: "General question.",
+          alternatives: [],
+        })
+      );
+
+      const classifier = createClassifier(TEST_ENV);
+      const result = await classifier.classify("what is a monad?");
+
+      expect(result.target).toEqual({ kind: "none" });
+      expect(result.alternatives).toBeUndefined();
+      expect(result.needsClarification).toBe(true);
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
@@ -743,20 +854,152 @@ describe("RepoClassifier", () => {
         })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("web app issue");
 
       expect(result.reasoning).toBe("Mentions &lt;!channel&gt; &amp; the web app.");
     });
   });
 
-  describe("provider selection", () => {
-    // These tests stub the global fetch; restore it so anything added after
-    // this block doesn't inherit a stale stub.
-    afterEach(() => {
-      vi.unstubAllGlobals();
+  describe.each([
+    { provider: "Anthropic", env: TEST_ENV },
+    {
+      provider: "Bedrock",
+      env: {
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        BEDROCK_API_KEY: "test-bedrock-key",
+      } as Env,
+    },
+    {
+      provider: "OpenAI",
+      env: {
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "gpt-5.4-mini",
+        OPENAI_API_KEY: "test-openai-key",
+      } as Env,
+    },
+  ])("$provider behavior", ({ provider, env }) => {
+    function mockPayload(payload: unknown) {
+      if (provider === "OpenAI") {
+        vi.stubGlobal(
+          "fetch",
+          vi
+            .fn()
+            .mockResolvedValue(
+              new Response(
+                JSON.stringify({ choices: [{ message: { content: JSON.stringify(payload) } }] })
+              )
+            )
+        );
+      } else {
+        mockMessagesCreate.mockResolvedValue({
+          content: [{ type: "tool_use", name: "classify_target", input: payload }],
+        });
+      }
+    }
+
+    it.each([
+      { field: "targetId", value: 123 },
+      { field: "confidence", value: "certain" },
+      { field: "reasoning", value: " \n " },
+      { field: "alternatives", value: [" "] },
+      { field: "alternatives", value: undefined },
+    ])("offers the picker for invalid $field: $value", async ({ field, value }) => {
+      mockPayload({
+        targetId: "acme/prod",
+        confidence: "high",
+        reasoning: "Mentions prod.",
+        alternatives: [],
+        [field]: value,
+      });
+
+      const result = await createClassifier(env).classify("please fix prod");
+
+      expect(result).toEqual({
+        target: null,
+        confidence: "low",
+        reasoning:
+          "Could not classify a target from structured model output. Please pick one below.",
+        alternatives: undefined,
+        needsClarification: true,
+        source: "llm",
+      });
     });
 
+    it("trims IDs and reasoning, lowercases confidence, and deduplicates alternatives", async () => {
+      mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
+      mockPayload({
+        targetId: " env_abc123 ",
+        confidence: " MeDiUm ",
+        reasoning: " \n Mentions <!channel> & full-stack. \t ",
+        alternatives: [" acme/web ", "acme/web", "ACME/WEB", " env_abc123 ", "env_gone"],
+      });
+
+      const result = await createClassifier(env).classify("update full-stack");
+
+      expect(result).toEqual({
+        target: { kind: "environment", environment: TEST_ENVIRONMENT },
+        confidence: "medium",
+        reasoning: "Mentions &lt;!channel&gt; &amp; full-stack.",
+        alternatives: [{ kind: "repository", repo: TEST_REPOS[1] }],
+        needsClarification: true,
+        source: "llm",
+      });
+    });
+
+    it.each(["routing_rule", "channel_association"])(
+      "uses %s without provider keys or SDK construction",
+      async (source) => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+        if (source === "routing_rule") {
+          mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+        } else {
+          mockGetAvailableRepos.mockResolvedValue([
+            TEST_REPOS[0],
+            { ...TEST_REPOS[1], channelAssociations: ["C123"] },
+          ]);
+        }
+        const classifier = createClassifier({
+          ...env,
+          ANTHROPIC_API_KEY: undefined,
+          BEDROCK_API_KEY: undefined,
+          OPENAI_API_KEY: undefined,
+        });
+
+        const result = await classifier.classify("frontend issue", { channelId: "C123" });
+
+        expect(classifiedRepoFullName(result)).toBe("acme/web");
+        expect(result).toMatchObject({ confidence: "high", needsClarification: false, source });
+        expect(Anthropic).not.toHaveBeenCalled();
+        expect(mockMessagesCreate).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    );
+
+    if (provider !== "OpenAI") {
+      it("constructs the SDK lazily and reuses it across classifications", async () => {
+        mockPayload({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "Mentions prod.",
+          alternatives: [],
+        });
+        const classifier = createClassifier(env);
+        expect(Anthropic).not.toHaveBeenCalled();
+
+        expect(classifiedRepoFullName(await classifier.classify("fix prod"))).toBe("acme/prod");
+        expect(Anthropic).toHaveBeenCalledOnce();
+
+        expect(classifiedRepoFullName(await classifier.classify("update prod"))).toBe("acme/prod");
+        expect(Anthropic).toHaveBeenCalledOnce();
+        expect(mockMessagesCreate).toHaveBeenCalledTimes(2);
+      });
+    }
+  });
+
+  describe("provider selection", () => {
     function openAiEnv(overrides: Partial<Env> = {}): Env {
       return {
         ...TEST_ENV,
@@ -784,10 +1027,11 @@ describe("RepoClassifier", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
 
-      const classifier = new RepoClassifier(openAiEnv());
+      const classifier = createClassifier(openAiEnv());
       const result = await classifier.classify("please fix prod slack alerts");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(Anthropic).not.toHaveBeenCalled();
       expect(mockMessagesCreate).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledOnce();
 
@@ -808,6 +1052,11 @@ describe("RepoClassifier", () => {
       expect(body.max_completion_tokens).toBe(OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS);
       // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
       expect(body).not.toHaveProperty("max_tokens");
+      // The Anthropic-only "call the tool" instruction must not leak into the
+      // prompt shared with this path; the response_format schema does that job.
+      expect(body.messages).toEqual([
+        { role: "user", content: expect.not.stringContaining("classify_target") },
+      ]);
 
       const jsonSchema = body.response_format.json_schema;
       expect(jsonSchema.name).toBe("classify_target");
@@ -833,7 +1082,7 @@ describe("RepoClassifier", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
 
-      const classifier = new RepoClassifier(openAiEnv({ CLASSIFICATION_REASONING_EFFORT: "low" }));
+      const classifier = createClassifier(openAiEnv({ CLASSIFICATION_REASONING_EFFORT: "low" }));
       await classifier.classify("please fix prod slack alerts");
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -846,7 +1095,7 @@ describe("RepoClassifier", () => {
         vi.fn().mockResolvedValue(new Response("rate limited", { status: 429 }))
       );
 
-      const classifier = new RepoClassifier(openAiEnv());
+      const classifier = createClassifier(openAiEnv());
       const result = await classifier.classify("please fix prod slack alerts");
 
       expect(result.target).toBeNull();
@@ -861,7 +1110,7 @@ describe("RepoClassifier", () => {
         Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" })
       );
 
-      const classifier = new RepoClassifier(TEST_ENV);
+      const classifier = createClassifier(TEST_ENV);
       const result = await classifier.classify("please fix prod slack alerts");
 
       expect(result.target).toBeNull();
@@ -874,11 +1123,45 @@ describe("RepoClassifier", () => {
       expect(options?.signal).toBe(timeoutSpy.mock.results[0]?.value);
     });
 
+    it("configures the Messages client for Claude in Amazon Bedrock with the Bedrock key", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_bedrock",
+            name: "classify_target",
+            input: {
+              targetId: "acme/prod",
+              confidence: "high",
+              reasoning: "Mentions prod.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = createClassifier({
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        BEDROCK_API_KEY: "test-bedrock-key",
+      } as Env);
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(Anthropic).toHaveBeenCalledExactlyOnceWith({
+        apiKey: "test-bedrock-key",
+        baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+      });
+      expect(mockMessagesCreate.mock.calls[0][0].model).toBe(
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+      );
+    });
+
     it("degrades to the picker for an unrecognized model prefix without calling either provider", async () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
-      const classifier = new RepoClassifier({
+      const classifier = createClassifier({
         ...TEST_ENV,
         CLASSIFICATION_MODEL: "mistral-large-latest",
       } as Env);
@@ -902,13 +1185,18 @@ describe("RepoClassifier", () => {
         model: "claude-haiku-4-5",
         overrides: { ANTHROPIC_API_KEY: undefined },
       },
+      {
+        binding: "BEDROCK_API_KEY",
+        model: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        overrides: { BEDROCK_API_KEY: undefined, ANTHROPIC_API_KEY: "anthropic-key" },
+      },
     ])(
       "degrades to the picker without calling out when $model is selected but $binding is unbound",
       async ({ model, overrides }) => {
         const fetchMock = vi.fn();
         vi.stubGlobal("fetch", fetchMock);
 
-        const classifier = new RepoClassifier({
+        const classifier = createClassifier({
           ...TEST_ENV,
           CLASSIFICATION_MODEL: model,
           ...overrides,

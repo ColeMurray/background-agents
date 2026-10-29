@@ -26,7 +26,8 @@ from claude_agent_sdk import (
 )
 
 from .base import TurnOutcome
-from .claude_tools import OI_TOOL_SERVER_NAME
+from .tool_results import content_text
+from .tools import OI_TOOL_SERVER_NAME
 
 if TYPE_CHECKING:
     from claude_agent_sdk import Message, MessageOrigin
@@ -122,18 +123,6 @@ def _canonical_tool_name(name: str) -> str:
     if name.startswith(OI_TOOL_PREFIX):
         return name[len(OI_TOOL_PREFIX) :]
     return name
-
-
-def _tool_result_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            parts.append(str(item.get("text", "")))
-    return "\n".join(parts)
 
 
 def _usage_tokens(usage: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -373,7 +362,7 @@ class ClaudeTranslator:
                             records,
                             call_id=block.tool_use_id,
                             status="error" if block.is_error else "completed",
-                            output=_tool_result_text(block.content),
+                            output=content_text(block.content),
                             parent_tool_use_id=message.parent_tool_use_id,
                         )
                     )

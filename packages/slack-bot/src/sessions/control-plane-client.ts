@@ -5,19 +5,41 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
+import { enrollActor as enrollServiceActor } from "@open-inspect/shared/actor-enrollment";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { signedControlPlaneFetch, type ControlPlaneEnv } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import type { SlackActorIdentity } from "../user-identity";
+import { z } from "zod";
 
 const log = createLogger("handler");
+
+// Each field is read independently, so one malformed field does not discard the others.
+const optionalString = z.string().optional().catch(undefined);
+const controlPlaneErrorBodySchema = z.object({
+  error: optionalString,
+  code: optionalString,
+  reason_code: optionalString,
+  repository: optionalString,
+});
+
+type ControlPlaneErrorBody = z.infer<typeof controlPlaneErrorBodySchema>;
+
+async function readErrorBody(response: Response): Promise<ControlPlaneErrorBody> {
+  const parsed = controlPlaneErrorBodySchema.safeParse(await response.json().catch(() => null));
+  return parsed.success ? parsed.data : {};
+}
 
 interface CreateSessionOptions {
   target: SlackSessionTarget;
   teamId?: string | null;
+  harness: HarnessId;
   model: string;
   reasoningEffort?: string;
   branch?: string;
@@ -25,11 +47,15 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
+  /** A one-to-one conversation with the actor, the only Slack origin that uses personal memory. */
+  directMessage?: boolean;
 }
 
 export type SendPromptResult =
   | { ok: true; data: SendPromptResponse }
-  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" };
+  | { ok: false; reason: "stale" | "forbidden" | "transient" | "channel_scope_denied" }
+  /** The session's harness cannot run the prompt's model; `message` is the control plane's explanation. */
+  | { ok: false; reason: "harness_model_incompatible"; message: string };
 
 export interface CreateSessionFailure {
   error: { status: number; code?: string; reasonCode?: string; repository?: string };
@@ -74,6 +100,42 @@ export async function requirePublicationAccess(
     );
 }
 
+/**
+ * Present the actor's Slack profile before any other request that carries the
+ * actor. The control plane links a new actor to an existing user by email
+ * only when it enrolls the actor, and refuses a new Slack actor that has no
+ * email (`email_required`); a known actor enrolls with or without one.
+ * Callers stop on any other outcome rather than send requests carrying an
+ * actor the control plane has not linked.
+ */
+export async function enrollActor(
+  env: ControlPlaneEnv,
+  actor: SlackActorIdentity,
+  traceId?: string
+): Promise<ActorEnrollmentOutcome> {
+  const result = await enrollServiceActor(
+    "slack-bot",
+    env,
+    {
+      actor: `slack:${actor.userId}`,
+      profile: { displayName: actor.displayName, email: actor.email },
+      traceId,
+    },
+    AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS)
+  );
+  if (result.outcome !== "enrolled") {
+    log.warn("control_plane.enroll_actor", {
+      trace_id: traceId,
+      slack_user_id: actor.userId,
+      outcome: result.outcome,
+      http_status: result.httpStatus,
+      error_code: result.errorCode,
+      error: result.error,
+    });
+  }
+  return result.outcome;
+}
+
 export async function createSession(
   env: ControlPlaneEnv,
   options: CreateSessionOptions
@@ -81,6 +143,7 @@ export async function createSession(
   const {
     target,
     teamId,
+    harness,
     model,
     reasoningEffort,
     branch,
@@ -88,11 +151,13 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
+    directMessage,
   } = options;
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
     target_id: targetId(target),
+    harness,
     model,
     reasoning_effort: reasoningEffort,
     branch,
@@ -103,10 +168,12 @@ export async function createSession(
     const body = JSON.stringify({
       ...buildSessionTargetRequestFields(target, branch),
       teamId,
+      harness,
       model,
       reasoningEffort,
       actorDisplayName,
       actorEmail,
+      ...(directMessage ? { directMessage } : {}),
     });
     const response = await signedControlPlaneFetch(
       env,
@@ -126,15 +193,13 @@ export async function createSession(
         http_status: response.status,
         duration_ms: Date.now() - startTime,
       });
-      const details: unknown = await response.json().catch(() => null);
-      const body =
-        details && typeof details === "object" ? (details as Record<string, unknown>) : {};
+      const body = await readErrorBody(response);
       return {
         error: {
           status: response.status,
-          code: typeof body.code === "string" ? body.code : undefined,
-          reasonCode: typeof body.reason_code === "string" ? body.reason_code : undefined,
-          repository: typeof body.repository === "string" ? body.repository : undefined,
+          code: body.code,
+          reasonCode: body.reason_code,
+          repository: body.repository,
         },
       };
     }
@@ -219,26 +284,25 @@ export async function sendPrompt(
       { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
     if (!response.ok) {
+      const body = await readErrorBody(response);
       log.error("control_plane.send_prompt", {
         ...base,
         outcome: "error",
         http_status: response.status,
+        error_code: body.code,
         duration_ms: Date.now() - startTime,
       });
-      const details = await response.json().catch(() => null);
+      if (body.code === "slack_channel_scope_denied") {
+        return { ok: false, reason: "channel_scope_denied" };
+      }
+      // The control plane always explains this refusal; the reply relays its message.
+      if (response.status === 400 && body.code === "HARNESS_MODEL_INCOMPATIBLE" && body.error) {
+        return { ok: false, reason: "harness_model_incompatible", message: body.error };
+      }
       return {
         ok: false,
         reason:
-          details !== null &&
-          typeof details === "object" &&
-          "code" in details &&
-          details.code === "slack_channel_scope_denied"
-            ? "channel_scope_denied"
-            : response.status === 404
-              ? "stale"
-              : response.status === 403
-                ? "forbidden"
-                : "transient",
+          response.status === 404 ? "stale" : response.status === 403 ? "forbidden" : "transient",
       };
     }
     const result = sendPromptResponseSchema.safeParse(await response.json());

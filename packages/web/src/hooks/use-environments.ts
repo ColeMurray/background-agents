@@ -24,7 +24,10 @@ export function environmentsKey({ teamId, ownerTeamId }: EnvironmentListScope = 
 }
 
 /** An empty scope lists every environment the viewer can read. */
-export function useEnvironments(scope: EnvironmentListScope = {}): {
+export function useEnvironments(
+  scope: EnvironmentListScope = {},
+  enabled = true
+): {
   environments: Environment[];
   loading: boolean;
   error: unknown;
@@ -32,14 +35,14 @@ export function useEnvironments(scope: EnvironmentListScope = {}): {
   const { data: session, status } = useAuthSession();
 
   const { data, isLoading, error } = useSWR<ListEnvironmentsResponse>(
-    session ? environmentsKey(scope) : null
+    enabled && session ? environmentsKey(scope) : null
   );
 
   return {
     environments: usableFetchData(data, error)?.environments ?? [],
     // The fetch is gated on the auth session, so the list is still loading
     // while the session itself resolves — don't report an authoritative [].
-    loading: status === "loading" || isLoading,
+    loading: enabled && (status === "loading" || isLoading),
     error,
   };
 }

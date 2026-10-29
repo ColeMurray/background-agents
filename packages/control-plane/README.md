@@ -63,6 +63,41 @@ not pass through Hono.
 | --------- | ------ | ------------ |
 | `/health` | GET    | Health check |
 
+### Actors
+
+| Endpoint     | Method | Description                                                       |
+| ------------ | ------ | ----------------------------------------------------------------- |
+| `/actors/me` | POST   | Enroll the signed bot actor with its attested name, email, avatar |
+
+A new bot actor links to an existing user only by the email it presents when it is enrolled, and a
+known actor is never relinked. The first request that enrolls an actor must include its attested
+email. Slack sends `POST /actors/me` before any other request that carries the actor; Linear
+includes profile claims during session creation and enrolls follow-up and stop authors explicitly.
+
+A new Slack or Linear actor is enrolled only with an attested email: any request that would enroll
+one without it, including a claim-less read, is refused with 403 `actor_email_required` and writes
+nothing. A known actor is admitted with or without one. This keeps an email-less enrollment from
+giving someone a second account with the default role and none of their existing account's
+restrictions. Known limitation: new Slack users whose profile email the bot cannot read, typically
+external Slack Connect users, cannot start using the bot; Slack users it already knows keep working.
+Linear's catalog reads are actorless and session creation carries its actor's email. Follow-up
+authors try enrollment without profile claims first; only `actor_email_required` triggers a profile
+lookup and retry. Stops go directly to the control plane and use the same fallback when needed.
+
+Before creating a new canonical user, bot enrollment applies the same deployment admission policy as
+web sign-in. An attested Slack or Linear email must match `ALLOWED_EMAILS` or
+`ALLOWED_EMAIL_DOMAINS`; otherwise the response is 403 `actor_admission_denied`, with no user,
+identity, or default role written. `UNSAFE_ALLOW_ALL_USERS` permits new users only when all
+allowlists are empty, as on the web. GitHub bot profile emails are not attested and cannot admit a
+new user. Bots cannot prove GitHub username or organization admission: on deployments using only
+`ALLOWED_USERS` or `ALLOWED_GITHUB_ORGS`, people must sign in on the web first, then use the bot
+with that account's email (or its GitHub identity).
+
+Existing actors and new actors linking by attested email to an existing account do not repeat
+admission. Their existing role and suspension still apply. Newly admitted users retain the Member
+default. These rules do not identify two different emails as one person: if both pass admission,
+separate accounts remain possible and require an administrator to merge them.
+
 ### Sessions
 
 | Endpoint                        | Method    | Description                          |
@@ -217,8 +252,28 @@ history. See [docs/MULTI_REPO_AUTOMATIONS.md](../../docs/MULTI_REPO_AUTOMATIONS.
 decisions.
 
 An invocation's status is **derived from its child runs, never stored**: no children → `skipped`;
-any child starting/running → `starting`/`running`; all terminal → `completed` (none failed),
-`failed` (none completed), `partial_failed` (a mix), or `skipped` (all skipped).
+any child starting/running → `starting`/`running`; otherwise any child waiting to relaunch →
+`retrying`; all terminal → `completed` (none failed), `failed` (none completed), `partial_failed` (a
+mix), or `skipped` (all skipped).
+
+A scheduled automation's `maxRetries` (0–5, default 0) lets a run whose launch fails before its
+prompt is sent wait as `retrying` and relaunch in place, with exponential backoff; manual and event
+runs are never retried.
+
+#### Webhook triggers
+
+Webhook automations are called with their API key (`Authorization: Bearer <key>`) instead of a user
+session:
+
+| Endpoint                                             | Method | Description                                                                            |
+| ---------------------------------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `/webhooks/automation/:id`                           | POST   | Fire with a JSON body → `{ok, triggered, skipped, steered, invocationId}`              |
+| `/webhooks/automation/:id/invocations/:invocationId` | GET    | Status of a webhook firing → `{invocationId, status, runs: [{id, status, sessionId}]}` |
+
+`invocationId` is `null` when nothing was recorded (conditions did not match, the automation is
+paused, or execution was denied before admission). A retry with the same `idempotencyKey` returns
+the original firing's ID, even while it is still running. The status endpoint serves only
+invocations this webhook caused, and never exposes session content.
 
 ### Audit Events
 
@@ -367,11 +422,12 @@ Automations:
   unique per `(automation_id, environment_id)`).
 - `automation_repositories`: the live repository selection (0–10 rows per automation), unique per
   `(automation_id, repo_owner, repo_name)`.
-- `automation_invocations`: one thin row per firing — source, firing-scoped `trigger_key` (event
-  dedup, UNIQUE per automation) and `concurrency_key`, `skip_reason` for childless skips, and the
-  `failure_counted_at` compare-and-set stamp that makes auto-pause accounting exactly-once. Status
-  is **not** stored; it is derived from child runs (`DERIVED_INVOCATION_STATUS_SQL` in
-  `src/db/automation-store.ts` is the single definition).
+- `automation_invocations`: one thin row per firing — source, `actor_kind` (who authored the
+  triggering action: `person`, `bot`, `system` or `unknown`; the Slack bot-message limit counts
+  `bot`), firing-scoped `trigger_key` (event dedup, UNIQUE per automation) and `concurrency_key`,
+  `skip_reason` for childless skips, and the `failure_counted_at` compare-and-set stamp that makes
+  auto-pause accounting exactly-once. Status is **not** stored; it is derived from child runs
+  (`DERIVED_INVOCATION_STATUS_SQL` in `src/db/automation-store.ts` is the single definition).
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
@@ -398,6 +454,37 @@ unsafe allow-all), while GitHub may also use username or organization admission.
 runtime constructs Better Auth and the immutable provider list from the same configuration.
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
+
+### Better Auth 1.7 Upgrade
+
+The upgrade from 1.6.25 to 1.7.14 follows the upstream
+[1.7 upgrade guide](https://www.better-auth.com/docs/guides/1-7-upgrade-guide) and
+[release changelog](https://github.com/better-auth/better-auth/blob/v1.7.14/packages/better-auth/CHANGELOG.md).
+
+- Provider profile `user` contains only mutable attributes. Our provider-profile plugin keeps the
+  built-in GitHub/Google OAuth transports. Both resolvers return `VerifiedProviderIdentity` as
+  profile data; the SDK account-subject resolver and canonical email claims read the same typed
+  `data.subject`.
+- `getAccessToken`, `refreshToken`, and `accountInfo` select the local `user_identities.id` through
+  `accountId`, plus the canonical `userId` for trusted server calls. They no longer accept
+  `providerId` or a provider subject as the selector. Profile integrity checks read
+  `account.accountId`, not `user.id`.
+- No database migration or issuer backfill is needed for this integration. The account schema is
+  unchanged from 1.6 in 1.7.3 and later; the existing unique `(provider, provider_user_id)` index
+  already prevents ambiguous account keys. Keep our application-owned `provider_issuer` column and
+  indexes. The mandatory issuer schema in 1.7.0 through 1.7.2 was reverted.
+- The custom adapter retains native atomic `consumeOne`. `incrementOne` is optional in 1.7.14;
+  Better Auth supplies guarded conditional-update fallbacks. We use memory rate limiting, not a
+  custom rate-limit or secondary-storage implementation.
+
+**Deployment cutover:** upgrade all control-plane instances sharing verification storage together.
+The [1.7.7 security change](https://github.com/better-auth/better-auth/pull/11494) namespaces
+database-backed OAuth state with `auth-state:` before hashing, so sign-ins started before the
+upgrade must restart. Do not add a legacy-state fallback or run mixed old/new auth nodes against the
+same storage. Existing browser sessions and encrypted OAuth credentials remain usable with the same
+`BROWSER_AUTH_SECRET`; do not rotate it as part of this upgrade. A rollback also requires restarting
+pending sign-ins. The web BFF does not install a Better Auth SDK and needs no matching package
+upgrade.
 
 ## Credential Encryption
 

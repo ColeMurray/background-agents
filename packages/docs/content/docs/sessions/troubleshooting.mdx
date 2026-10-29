@@ -4,7 +4,7 @@ description: Symptom-keyed fixes for starting sessions, running them, reviewing 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-26"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
@@ -52,7 +52,7 @@ Cause: the model is not enabled in saved model preferences or is not available o
 
 Check, in order:
 
-1. The Claude Agent harness lists Anthropic models only; OpenCode lists every family. See [Agent harnesses](/models/agent-harnesses).
+1. The Claude Agent harness lists Anthropic models only, Codex lists only the OpenAI models that support it, and OpenCode lists every family. See [Agent harnesses](/models/agent-harnesses).
 2. Enable the model or its opt-in group under Settings › Models if it appears in the shared catalog.
 3. Check account or API-key availability separately under Settings › Accounts and Settings › Secrets; rebuilding the image does not change the picker.
 
@@ -98,7 +98,7 @@ Check, in order:
 
 <Accordions>
 <Accordion title="A follow-up was ignored">
-Cause: follow-ups are queued, not injected. Both harnesses hold a follow-up until the running turn completes, and a parent's follow-up never interrupts a child's running turn.
+Cause: follow-ups are queued, not injected. Every harness holds a follow-up until the running turn completes, and a parent's follow-up never interrupts a child's running turn.
 
 Check, in order:
 

@@ -19,8 +19,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 type SettingsPermissionPredicate = PermissionId | { allOf: readonly PermissionId[] };
 type SettingsVisibilityPredicate =
-  | SettingsPermissionPredicate
-  | { teamCapability: "canEditMetadata" };
+  SettingsPermissionPredicate | { teamCapability: "canEditMetadata" };
 type SettingsVisibility = { public: true } | { anyOf: readonly SettingsVisibilityPredicate[] };
 export type SettingsCapability = "unarchiveSessions";
 
@@ -155,8 +154,8 @@ export const SETTINGS_GROUPS = [
       {
         id: "workspace",
         label: "Workspace access",
-        description: "Manage members and roles",
-        keywords: "rbac permissions users access",
+        description: "Manage sign-in rules, members and roles",
+        keywords: "rbac permissions users access allowlist sign-in email domain GitHub onboarding",
         icon: DataControlsIcon,
         visibility: anyOf("workspace.members.read", "workspace.roles.read"),
         panel: lazyPanel(() =>

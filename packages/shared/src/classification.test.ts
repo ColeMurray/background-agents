@@ -1,36 +1,129 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLASSIFICATION_REQUEST_TIMEOUT_MS,
-  DEFAULT_CLASSIFICATION_MODEL,
+  MESSAGES_CLASSIFICATION_MAX_TOKENS,
   OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
+  buildClassificationMessagesRequest,
   callOpenAIStructured,
+  extractClassificationToolInput,
   openAiChatCompletionEnvelopeSchema,
-  resolveClassificationProvider,
+  parseClassificationModel,
+  resolveClassificationTarget,
+  type OpenAIChatTarget,
 } from "./classification";
+import { z } from "zod";
+import modelIdFixtures from "../test-fixtures/classification-model-ids.json";
 
 const SCHEMA = {
   name: "classify",
   schema: { type: "object", properties: {}, required: [], additionalProperties: false },
 };
 
-describe("resolveClassificationProvider", () => {
+const OPENAI_TARGET: OpenAIChatTarget = {
+  protocol: "openai-chat",
+  provider: "openai",
+  apiKey: "sk-test",
+  model: "gpt-5.4-mini",
+};
+
+// Terraform's classifier_provider.tftest.hcl reads the same file, so both
+// grammars must agree on every id in it.
+const MODEL_ID_FIXTURES = z
+  .array(
+    z.strictObject({
+      id: z.string(),
+      parsed: z
+        .discriminatedUnion("provider", [
+          z.strictObject({ provider: z.literal("anthropic"), model: z.string() }),
+          z.strictObject({ provider: z.literal("openai"), model: z.string() }),
+          z.strictObject({ provider: z.literal("bedrock"), region: z.string(), model: z.string() }),
+        ])
+        .nullable(),
+    })
+  )
+  .parse(modelIdFixtures);
+
+describe("parseClassificationModel", () => {
+  it.each(MODEL_ID_FIXTURES.filter((f) => f.parsed))("parses $id", ({ id, parsed }) => {
+    expect(parseClassificationModel(id)).toEqual(parsed);
+  });
+
+  it.each(MODEL_ID_FIXTURES.filter((f) => !f.parsed))("rejects $id", ({ id }) => {
+    expect(() => parseClassificationModel(id)).toThrow(`Unrecognized classification model: ${id}`);
+  });
+});
+
+describe("resolveClassificationTarget", () => {
+  const KEYS = {
+    ANTHROPIC_API_KEY: "anthropic-key",
+    OPENAI_API_KEY: "openai-key",
+    BEDROCK_API_KEY: "bedrock-key",
+  };
+
+  it("targets the Anthropic API with the Anthropic key by default", () => {
+    expect(resolveClassificationTarget(KEYS)).toEqual({
+      protocol: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "anthropic-key",
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  it("targets Claude in Amazon Bedrock in the model's region with the Bedrock key", () => {
+    expect(
+      resolveClassificationTarget({
+        ...KEYS,
+        CLASSIFICATION_MODEL: "bedrock/eu-west-1/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      })
+    ).toEqual({
+      protocol: "anthropic-messages",
+      provider: "bedrock",
+      baseUrl: "https://bedrock-runtime.eu-west-1.amazonaws.com/anthropic",
+      apiKey: "bedrock-key",
+      model: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+    });
+  });
+
+  it("targets OpenAI chat completions with the OpenAI key", () => {
+    expect(
+      resolveClassificationTarget({ ...KEYS, CLASSIFICATION_MODEL: "openai/gpt-5.4-mini" })
+    ).toEqual({
+      protocol: "openai-chat",
+      provider: "openai",
+      apiKey: "openai-key",
+      model: "gpt-5.4-mini",
+    });
+  });
+
   it.each([
-    ["anthropic/claude-haiku-4-5", "anthropic", "claude-haiku-4-5"],
-    ["claude-haiku-4-5", "anthropic", "claude-haiku-4-5"],
-    ["openai/gpt-5.4-mini", "openai", "gpt-5.4-mini"],
-    ["gpt-5.4-mini", "openai", "gpt-5.4-mini"],
-  ])("routes %s to %s and strips the prefix", (modelId, provider, model) => {
-    expect(resolveClassificationProvider(modelId)).toEqual({ provider, model });
-  });
+    { model: "claude-haiku-4-5", binding: "ANTHROPIC_API_KEY" },
+    { model: "gpt-5.4-mini", binding: "OPENAI_API_KEY" },
+    {
+      model: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      binding: "BEDROCK_API_KEY",
+    },
+  ])("throws naming $binding when $model is selected without it", ({ model, binding }) => {
+    const env = { ...KEYS, CLASSIFICATION_MODEL: model, [binding]: undefined };
 
-  it("routes the default model to Anthropic", () => {
-    expect(resolveClassificationProvider(DEFAULT_CLASSIFICATION_MODEL).provider).toBe("anthropic");
-  });
-
-  it("throws on an unrecognised id rather than silently defaulting to Anthropic", () => {
-    expect(() => resolveClassificationProvider("mistral/mistral-large")).toThrow(
-      /Unrecognized classification model/
+    expect(() => resolveClassificationTarget(env)).toThrow(
+      `Classification model "${model}" requires ${binding} to be set`
     );
+  });
+
+  it("does not serve a Bedrock model with the Anthropic key", () => {
+    expect(() =>
+      resolveClassificationTarget({
+        CLASSIFICATION_MODEL: "bedrock/us-east-1/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        ANTHROPIC_API_KEY: "anthropic-key",
+      })
+    ).toThrow(/requires BEDROCK_API_KEY/);
+  });
+
+  it("throws on an unrecognized model rather than defaulting to Anthropic", () => {
+    expect(() =>
+      resolveClassificationTarget({ ...KEYS, CLASSIFICATION_MODEL: "mistral/mistral-large" })
+    ).toThrow(/Unrecognized classification model/);
   });
 });
 
@@ -48,8 +141,79 @@ describe("openAiChatCompletionEnvelopeSchema", () => {
   });
 });
 
+describe("buildClassificationMessagesRequest", () => {
+  it("preserves the caller's tool and constructs a compatible request", () => {
+    const tool = { name: "classify", description: "Choose a target", input_schema: SCHEMA.schema };
+    const request = buildClassificationMessagesRequest("claude-haiku-4-5", "prompt", tool);
+
+    expect(request).toEqual({
+      model: "claude-haiku-4-5",
+      max_tokens: MESSAGES_CLASSIFICATION_MAX_TOKENS,
+      system: "Answer by calling the classify tool exactly once. Do not reply in plain text.",
+      tools: [tool],
+      tool_choice: { type: "auto" },
+      messages: [{ role: "user", content: "prompt" }],
+    });
+    expect(request.tools[0]).toBe(tool);
+    expect(request).not.toHaveProperty("temperature");
+  });
+});
+
+describe("extractClassificationToolInput", () => {
+  it("selects the first matching tool, ignoring text and other tools", () => {
+    expect(
+      extractClassificationToolInput(
+        {
+          content: [
+            { type: "text", text: "not structured output" },
+            { type: "tool_use", name: "other", input: { wrong: true } },
+            { type: "tool_use", name: "classify", input: { first: true } },
+            { type: "tool_use", name: "classify", input: { first: false } },
+          ],
+        },
+        "classify"
+      )
+    ).toEqual({ first: true });
+  });
+
+  it.each([undefined, null, "invalid", 42, {}, { confidence: "certain" }])(
+    "leaves domain validation to the caller for %j",
+    (input) => {
+      expect(
+        extractClassificationToolInput(
+          { content: [{ type: "tool_use", name: "classify", input }] },
+          "classify"
+        )
+      ).toEqual(input);
+    }
+  );
+
+  it.each([null, {}, { content: null }, { content: [null] }, { content: [{ type: 1 }] }])(
+    "rejects a malformed envelope: %j",
+    (response) => {
+      expect(() => extractClassificationToolInput(response, "classify")).toThrow(
+        "Malformed Messages API response"
+      );
+    }
+  );
+
+  it.each([
+    { content: [] },
+    { content: [{ type: "text", text: '{"targetId":"acme/prod"}' }] },
+    { content: [{ type: "tool_use", name: "other", input: {} }] },
+    { content: [{ type: "text", name: "classify", input: {} }] },
+  ])("requires the named tool, not JSON-looking text: %j", ({ content }) => {
+    expect(() => extractClassificationToolInput({ content }, "classify")).toThrow(
+      "No classification tool_use block in Messages API response"
+    );
+  });
+});
+
 describe("callOpenAIStructured", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   function stubFetch(impl: typeof fetch) {
     const fetchMock = vi.fn(impl);
@@ -62,7 +226,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: '{"ok":true}' } }] })
     );
 
-    const result = await callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA);
+    const result = await callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA);
 
     expect(result).toEqual({ ok: true });
     const [url, init] = fetchMock.mock.calls[0];
@@ -87,7 +251,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: "{}" } }] })
     );
 
-    await callOpenAIStructured("sk-test", "gpt-6.1-sol", "prompt", SCHEMA, "low");
+    await callOpenAIStructured({ ...OPENAI_TARGET, model: "gpt-6.1-sol" }, "prompt", SCHEMA, "low");
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
     expect(body.reasoning_effort).toBe("low");
@@ -100,7 +264,7 @@ describe("callOpenAIStructured", () => {
       Response.json({ choices: [{ message: { content: "{}" } }] })
     );
 
-    await callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA);
+    await callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA);
 
     expect(timeoutSpy).toHaveBeenCalledWith(CLASSIFICATION_REQUEST_TIMEOUT_MS);
     expect(fetchMock.mock.calls[0][1]!.signal).toBe(fakeSignal);
@@ -141,15 +305,13 @@ describe("callOpenAIStructured", () => {
   ])("throws on $label", async ({ respond, message }) => {
     stubFetch(async () => respond());
 
-    await expect(callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA)).rejects.toThrow(
-      message
-    );
+    await expect(callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA)).rejects.toThrow(message);
   });
 
   it("truncates a long error body", async () => {
     stubFetch(async () => new Response("x".repeat(2000), { status: 400 }));
 
-    await expect(callOpenAIStructured("sk-test", "gpt-5.4-mini", "prompt", SCHEMA)).rejects.toThrow(
+    await expect(callOpenAIStructured(OPENAI_TARGET, "prompt", SCHEMA)).rejects.toThrow(
       `OpenAI API error 400: ${"x".repeat(500)}`
     );
   });

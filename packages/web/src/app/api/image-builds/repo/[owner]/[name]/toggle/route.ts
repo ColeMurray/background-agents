@@ -1,25 +1,21 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
+import { rejectMissingBrowserSessionCookie } from "@/lib/browser-session-guard";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { REPO_IMAGES_UNSUPPORTED_MESSAGE, supportsRepoImages } from "@/lib/sandbox-provider";
+import { rejectUnsupportedRepoImages } from "@/lib/repo-images-unsupported";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ owner: string; name: string }> }
 ) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  if (!supportsRepoImages()) {
-    return NextResponse.json({ error: REPO_IMAGES_UNSUPPORTED_MESSAGE }, { status: 501 });
-  }
-
-  const { owner, name } = await params;
-
   try {
+    const rejection = await rejectUnsupportedRepoImages();
+    if (rejection) return rejection;
+
+    const authRejection = rejectMissingBrowserSessionCookie(request);
+    if (authRejection) return authRejection;
+
+    const { owner, name } = await params;
     const body = await request.json();
 
     const response = await controlPlaneUserFetch(

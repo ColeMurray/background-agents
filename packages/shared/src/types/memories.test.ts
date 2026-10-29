@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   createMemorySchema,
   allowedMemoryActions,
+  bulkMemoryActionSchema,
+  MEMORY_BULK_ACTION_MAX_RECORDS,
   memoryScopeFromSearchParams,
   memoryScopeToSearchParams,
+  memoryListSearchFromInput,
+  memoryListSearchSchema,
   memorySearchSchema,
   MEMORY_TRANSITIONS,
   sandboxMemoryWriteSchema,
@@ -162,6 +166,31 @@ describe("memory action bodies", () => {
     expect(memoryActionBodySchemas.approve.safeParse({ archiveNote: "x" }).success).toBe(false);
     expect(memoryActionBodySchemas.restore.safeParse({ archiveNote: "x" }).success).toBe(false);
   });
+  it("bounds bulk actions to distinct reviewed records and archiving notes", () => {
+    const memories = [
+      { id: "mem_a", revisionId: "rev_a" },
+      { id: "mem_b", revisionId: "rev_b" },
+    ];
+    expect(
+      bulkMemoryActionSchema.parse({ action: "archive", memories, archiveNote: " Stale " })
+    ).toEqual({ action: "archive", memories, archiveNote: "Stale" });
+    expect(bulkMemoryActionSchema.safeParse({ action: "approve", memories }).success).toBe(true);
+    for (const invalid of [
+      { action: "approve", memories, archiveNote: "x" },
+      { action: "approve", memories: [] },
+      { action: "approve", memories: [memories[0], memories[0]] },
+      { action: "approve", memories: [{ id: "mem_a" }] },
+      { action: "delete", memories },
+      {
+        action: "approve",
+        memories: Array.from({ length: MEMORY_BULK_ACTION_MAX_RECORDS + 1 }, (_, i) => ({
+          id: `mem_${i}`,
+          revisionId: `rev_${i}`,
+        })),
+      },
+    ])
+      expect(bulkMemoryActionSchema.safeParse(invalid).success).toBe(false);
+  });
 });
 
 describe("memory scope query encoding", () => {
@@ -207,5 +236,34 @@ describe("memory lifecycle table", () => {
       status: "archived",
       archiveKind: "manual",
     });
+  });
+});
+
+describe("management list search", () => {
+  it("allows blank as no filter and applies agent search's bounds otherwise", () => {
+    const parse = (query: string) => memoryListSearchSchema.safeParse(query);
+    expect(parse("   ")).toMatchObject({ success: true, data: "" });
+    expect(parse(" ab ")).toMatchObject({ success: true, data: "ab" });
+    expect(parse("a").error?.issues[0].message).toBe("Use at least 2 characters.");
+    expect(parse("x".repeat(257)).error?.issues[0].message).toBe("Use at most 256 characters.");
+    expect(parse("a1 b2 c3 d4 e5 f6 g7 h8 i9").error?.issues[0].message).toBe(
+      "Use at most 8 search terms."
+    );
+    expect(parse("a1 b2 c3 d4 e5 f6 g7 h8").success).toBe(true);
+  });
+
+  it("treats typing under the minimum as no search yet and explains over-limit queries", () => {
+    expect(memoryListSearchFromInput("")).toEqual({ search: "" });
+    expect(memoryListSearchFromInput(" r ")).toEqual({ search: "" });
+    expect(memoryListSearchFromInput(" rspec ")).toEqual({ search: "rspec" });
+    expect(memoryListSearchFromInput("a1 b2 c3 d4 e5 f6 g7 h8 i9")).toEqual({
+      problem: "Use at most 8 search terms.",
+    });
+  });
+
+  it("gives agent search the same limits", () => {
+    expect(memorySearchSchema.safeParse({ query: "a" }).error?.issues[0].message).toBe(
+      "Use at least 2 characters."
+    );
   });
 });

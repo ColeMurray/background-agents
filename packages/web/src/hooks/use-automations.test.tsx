@@ -6,10 +6,14 @@ import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutomationListItem, ListAutomationsResponse } from "@open-inspect/shared";
 import { SwrFetchError } from "@/lib/swr-fetch-error";
-import { useAutomations } from "./use-automations";
+import { useAutomation, useAutomations } from "./use-automations";
 
+let authSession: { data: { user: { id: string } } | null; status: string } = {
+  data: { user: { id: "user-1" } },
+  status: "authenticated",
+};
 vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+  useAuthSession: () => authSession,
 }));
 
 function automation(id: string, name: string): AutomationListItem {
@@ -20,12 +24,14 @@ function automation(id: string, name: string): AutomationListItem {
     harness: "opencode",
     triggerType: "schedule",
     scheduleCron: "0 9 * * *",
+    scheduleOnceAt: null,
     scheduleTz: "UTC",
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
     enabled: true,
     nextRunAt: null,
     consecutiveFailures: 0,
+    maxRetries: 0,
     createdBy: "user-1",
     userId: "11111111111111111111111111111111",
     createdAt: 1,
@@ -86,13 +92,11 @@ describe("useAutomations", () => {
   });
 
   it("replaces loaded pages when the search changes", async () => {
-    const fetcher = vi.fn(
-      async (path: string): Promise<ListAutomationsResponse> => ({
-        automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => ({
+      automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result, rerender } = renderHook(({ search }) => useAutomations(search), {
       initialProps: { search: "Daily" },
       wrapper: wrapper(fetcher),
@@ -201,13 +205,11 @@ describe("useAutomations", () => {
   });
 
   it("does not request another page after the final page", async () => {
-    const fetcher = vi.fn(
-      async (): Promise<ListAutomationsResponse> => ({
-        automations: [firstAutomation],
-        hasMore: false,
-        nextCursor: null,
-      })
-    );
+    const fetcher = vi.fn(async (): Promise<ListAutomationsResponse> => ({
+      automations: [firstAutomation],
+      hasMore: false,
+      nextCursor: null,
+    }));
     const { result } = renderHook(() => useAutomations(""), {
       wrapper: wrapper(fetcher),
     });
@@ -260,5 +262,34 @@ describe("useAutomations", () => {
 
     await waitFor(() => expect(result.current.error).toBe(failure));
     expect(result.current.automations).toEqual(expected);
+  });
+});
+
+describe("useAutomation", () => {
+  beforeEach(() => {
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+  });
+
+  it("reports a requested automation as loading while the auth session resolves", async () => {
+    authSession = { data: null, status: "loading" };
+    const fetcher = vi.fn(async () => ({ automation: firstAutomation }));
+    const { result, rerender } = renderHook(() => useAutomation("auto-2"), {
+      wrapper: wrapper(fetcher),
+    });
+    expect(result.current).toMatchObject({ automation: null, loading: true });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    authSession = { data: { user: { id: "user-1" } }, status: "authenticated" };
+    rerender();
+    await waitFor(() => expect(result.current.automation?.id).toBe("auto-2"));
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("is not loading without an id", () => {
+    authSession = { data: null, status: "loading" };
+    const { result } = renderHook(() => useAutomation(undefined), {
+      wrapper: wrapper(vi.fn()),
+    });
+    expect(result.current.loading).toBe(false);
   });
 });

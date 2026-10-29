@@ -4,8 +4,7 @@ export interface CreatedAtCursor {
 }
 
 export type ParseCreatedAtCursorResult =
-  | { ok: true; cursor: CreatedAtCursor | null }
-  | { ok: false; error: "Invalid cursor" };
+  { ok: true; cursor: CreatedAtCursor | null } | { ok: false; error: "Invalid cursor" };
 
 export function encodeCreatedAtCursor(cursor: CreatedAtCursor): string {
   return `${cursor.createdAt}:${encodeURIComponent(cursor.id)}`;

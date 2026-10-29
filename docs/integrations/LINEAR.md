@@ -172,15 +172,16 @@ remain the responsibility of Linear's GitHub integration and the team's PR autom
 
 Open the web app and go to **Settings > Integrations > Linear** to configure the Linear Agent.
 
-| Setting                        | What it controls                                                  |
-| ------------------------------ | ----------------------------------------------------------------- |
-| Default model and effort       | Model and reasoning depth for Linear-started sessions             |
-| Repository Scope               | Whether Linear can run in all accessible repos or selected repos  |
-| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                   |
-| Allow user model preferences   | Whether admin-managed user preferences can override the model     |
-| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                  |
-| Tool progress activities       | Whether Linear shows intermediate file and command activity       |
-| Repository Overrides           | Per-repository defaults for model, reasoning, and Linear behavior |
+| Setting                        | What it controls                                                 |
+| ------------------------------ | ---------------------------------------------------------------- |
+| Agent harness                  | OpenCode (default) or Claude Agent for new Linear sessions       |
+| Default model and effort       | Model and reasoning depth for Linear-started sessions            |
+| Repository Scope               | Whether Linear can run in all accessible repos or selected repos |
+| Issue Session Instructions     | Extra guidance appended to Linear issue prompts                  |
+| Allow user model preferences   | Whether admin-managed user preferences can override the model    |
+| Allow model labels (`model:*`) | Whether Linear issue labels can choose the model                 |
+| Tool progress activities       | Whether Linear shows intermediate file and command activity      |
+| Repository Overrides           | Per-repository harness, model, reasoning, and Linear behavior    |
 
 If no Linear settings are configured, all accessible repositories are in scope, user preferences and
 model labels are allowed, and tool progress is enabled.
@@ -191,6 +192,23 @@ Model selection uses this priority, highest to lowest:
 2. Linear user preference, when allowed.
 3. Repository override or global Linear default.
 4. Deployment default model.
+
+The configured **Agent harness** is preserved. If it cannot run the resolved model, the bot posts an
+error activity in Linear and creates no coding session instead of switching to OpenCode. Claude
+Agent runs Anthropic models only, so a `model:gpt-*` label is refused on that harness. Choose a
+compatible `model:*` label, user preference, or default model, or change the Linear integration
+harness, then delegate again. Labels and user preferences apply only when allowed.
+
+Omitted repository harness and model fields inherit individually from the global settings. If
+neither level sets a harness, it is OpenCode. Explicitly choosing a restricted harness such as
+**Claude Agent** requires a compatible default model at that same settings level (global or
+repository), not an inherited model. The settings form and control plane reject a missing model or
+an incompatible pair at that level. Save validation does not check the merged global/repository
+pair; a cross-level mismatch is refused at launch.
+
+For successful launches, the "Creating coding session" activity names the harness. On Claude Agent,
+Linear sessions follow the provider's **Automated authentication** policy and may use a connected
+Claude account; see [Claude Agent](../CLAUDE_AGENT.md#linear-sessions).
 
 Linear user preferences are currently admin/API-managed, not set from a self-service Linear screen.
 
@@ -211,6 +229,8 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
   Linear-started sessions.
 - Linear issue titles, descriptions, comments, and agent prompts may be sent to the coding agent. Do
   not include secrets.
+- Linear-started sessions never include personal memories, whatever the request asks; the control
+  plane decides this from the calling service. Repository and environment memories still apply.
 
 ---
 
@@ -270,7 +290,10 @@ the rejected API request once. A reinstall is not normally required.
 ### The wrong model was used
 
 Check **Settings > Integrations > Linear**. Repository overrides, user preferences, and `model:*`
-labels can affect model selection. Changes apply to new Linear-started sessions.
+labels can affect model selection. A model the configured harness cannot run is refused with an
+error activity and no coding session. Choose a compatible label, user preference, or default model,
+or change the integration harness, then delegate again. Changes apply to new Linear-started
+sessions.
 
 ### The wrong repository was used
 

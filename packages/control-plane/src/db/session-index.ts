@@ -1,5 +1,5 @@
 import { DEFAULT_HARNESS, type HarnessId } from "@open-inspect/shared/harnesses";
-import type { SessionMemorySelection } from "../memory/types";
+import type { SessionMemoryPin } from "../memory/types";
 import {
   type PullRequestSummary,
   type SessionReadAction,
@@ -35,6 +35,7 @@ import { attachSessionListMetadata } from "./session-list-metadata";
 import { buildSessionListPredicates, type SessionListFilters } from "./session-list-predicates";
 import {
   SessionInboxStore,
+  type InboxFilterOptions,
   type ListSessionInboxOptions,
   type ListSessionInboxResult,
   type ListSessionInboxSnapshotResult,
@@ -121,7 +122,7 @@ export interface SessionEntry {
 /** Declarative fields used only when creating a session index row. */
 export interface CreateSessionCommand extends SessionEntry {
   /** Memory selection to pin atomically with the session row. */
-  memory?: Pinned<SessionMemorySelection>;
+  memory?: SessionMemoryPin;
   /** Managed-skill manifest to pin atomically with the session row. */
   managedSkills?: Pinned<SessionSkillManifestInput>;
   /** Complete immutable model-provider authentication snapshot. */
@@ -598,6 +599,11 @@ export class SessionIndexStore {
     options: Omit<ListSessionInboxOptions, "category" | "cursor">
   ): Promise<ListSessionInboxSnapshotResult> {
     return new SessionInboxStore(this.db).snapshot(options);
+  }
+
+  /** Mark every unread session in the viewer's filtered inbox, or one of its hierarchies, as read. */
+  async markInboxRead(options: InboxFilterOptions, rootSessionId?: string): Promise<number> {
+    return new SessionInboxStore(this.db).markAllRead(options, rootSessionId);
   }
 
   private async attachListMetadata<T extends { id: string }>(sessions: T[]): Promise<T[]> {

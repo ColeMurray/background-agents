@@ -23,8 +23,7 @@ export interface ConnectedClient {
  * authoritative (see `SocketRegistry.isActiveSandbox`).
  */
 export type ConnectionClassification =
-  | { kind: "sandbox"; sandboxId?: string; socketId?: string }
-  | { kind: "client"; wsId?: string };
+  { kind: "sandbox"; sandboxId?: string; socketId?: string } | { kind: "client"; wsId?: string };
 
 /** Wall and monotonic time sources used by session application code. */
 export interface Clock {

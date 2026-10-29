@@ -9,24 +9,23 @@ import {
   type GitHubGlobalConfig,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
-import type { ModelCategory } from "@open-inspect/shared/models";
+import { isValidModel, type ModelCategory } from "@open-inspect/shared/models";
+import {
+  DEFAULT_HARNESS,
+  getHarnessCapabilities,
+  getHarnessLabel,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import { filterModelOptionsForHarness, shouldClearModelForHarness } from "@/lib/session-harness";
+import { HarnessSelect } from "./harness-select";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
 import { GitHubAutoReviewDeprecationNotice } from "./github-auto-review-deprecation-notice";
 import {
@@ -34,6 +33,7 @@ import {
   IntegrationSettingsSection,
 } from "./integration-settings-section";
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
+import { RepositoryScopeSelector } from "./repository-scope-selector";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 
@@ -48,6 +48,7 @@ export function GlobalSettingsSection({
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
+  const [harness, setHarness] = useState<HarnessId>(settings?.defaults?.harness ?? DEFAULT_HARNESS);
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -84,6 +85,7 @@ export function GlobalSettingsSection({
       if (settings) {
         setModel(settings.defaults?.model ?? "");
         setEffort(settings.defaults?.reasoningEffort ?? "");
+        setHarness(settings.defaults?.harness ?? DEFAULT_HARNESS);
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -103,6 +105,27 @@ export function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
+
+  // The model picker only offers models the selected harness can run. A model
+  // the new harness cannot run is cleared, mirroring the composer behavior.
+  const visibleModelOptions = filterModelOptionsForHarness(harness, enabledModelOptions);
+  const harnessNeedsModel = getHarnessCapabilities(harness).modelFamilies !== "any";
+  const invalidModelSelection =
+    (harnessNeedsModel && !model) ||
+    (model !== "" && (!isValidModel(model) || shouldClearModelForHarness(harness, model)));
+
+  const handleHarnessChange = (next: HarnessId | undefined) => {
+    const value = next ?? DEFAULT_HARNESS;
+    setHarness(value);
+    if (shouldClearModelForHarness(value, model)) {
+      setModel("");
+      setEffort("");
+    } else if (model && effort && !isValidHarnessReasoningEffort(value, model, effort)) {
+      setEffort("");
+    }
+    setDirty(true);
+    setError("");
+  };
   const handleReset = () => {
     setShowResetDialog(true);
   };
@@ -118,6 +141,7 @@ export function GlobalSettingsSection({
         mutate(GLOBAL_SETTINGS_KEY);
         setModel("");
         setEffort("");
+        setHarness(DEFAULT_HARNESS);
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -142,6 +166,7 @@ export function GlobalSettingsSection({
   };
 
   const handleSave = async () => {
+    if (invalidModelSelection) return;
     setSaving(true);
     setError("");
 
@@ -149,6 +174,7 @@ export function GlobalSettingsSection({
       defaults: {
         autoReviewOnOpen,
         ...(model ? { model } : {}),
+        ...(harness !== DEFAULT_HARNESS ? { harness } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
@@ -211,8 +237,10 @@ export function GlobalSettingsSection({
 
       <ModelReasoningDefaultsFields
         model={model}
+        harness={harness}
         reasoningEffort={effort}
-        modelOptions={enabledModelOptions}
+        modelOptions={visibleModelOptions}
+        modelRequired={harnessNeedsModel}
         onChange={(nextModel, nextEffort) => {
           setModel(nextModel);
           setEffort(nextEffort);
@@ -220,6 +248,11 @@ export function GlobalSettingsSection({
           setError("");
         }}
       />
+      {invalidModelSelection && (
+        <p className="text-xs text-destructive mb-4">
+          Choose a default model {getHarnessLabel(harness)} can run.
+        </p>
+      )}
 
       <div className="mb-4">
         <label
@@ -248,68 +281,35 @@ export function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
-        <div className="grid sm:grid-cols-2 gap-2 mb-3">
-          <RadioCard
-            name="repo-scope"
-            checked={repoScopeMode === "all"}
-            onChange={() => {
-              setRepoScopeMode("all");
-              setDirty(true);
-              setError("");
-            }}
-            label="All repositories"
-            description="Bot responds in every accessible repository."
-          />
-          <RadioCard
-            name="repo-scope"
-            checked={repoScopeMode === "selected"}
-            onChange={() => {
-              setRepoScopeMode("selected");
-              setDirty(true);
-              setError("");
-            }}
-            label="Selected repositories"
-            description="Bot only responds in the allowlisted repositories."
-          />
-        </div>
-
-        {repoScopeMode === "selected" && (
-          <>
-            {availableRepos.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-4 py-3 border border-border rounded-sm">
-                Repository filtering is unavailable because no repositories are accessible.
-              </p>
-            ) : (
-              <div className="border border-border max-h-56 overflow-y-auto rounded-sm">
-                {availableRepos.map((repo) => {
-                  const fullName = repo.fullName.toLowerCase();
-                  const isChecked = enabledRepos.includes(fullName);
-
-                  return (
-                    <label
-                      key={repo.fullName}
-                      className="flex items-center gap-2 px-4 py-2 hover:bg-muted/50 transition cursor-pointer text-sm"
-                    >
-                      <Checkbox
-                        checked={isChecked}
-                        onCheckedChange={() => toggleRepo(repo.fullName)}
-                      />
-                      <span className="text-foreground">{repo.fullName}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-
-            {enabledRepos.length === 0 && availableRepos.length > 0 && (
-              <p className="text-xs text-warning mt-1">
-                No repositories selected. The bot will not respond to webhooks.
-              </p>
-            )}
-          </>
-        )}
+        <label htmlFor="github-harness" className="block text-sm font-medium text-foreground mb-1">
+          Agent harness
+        </label>
+        <HarnessSelect
+          id="github-harness"
+          className="w-full"
+          value={harness}
+          onChange={handleHarnessChange}
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Harness that runs GitHub-triggered sessions. It decides which models are available above.
+        </p>
       </div>
+
+      <RepositoryScopeSelector
+        name="repo-scope"
+        mode={repoScopeMode}
+        onModeChange={(mode) => {
+          setRepoScopeMode(mode);
+          setDirty(true);
+          setError("");
+        }}
+        availableRepos={availableRepos}
+        enabledRepos={enabledRepos}
+        onToggleRepo={toggleRepo}
+        allRepositoriesDescription="Bot responds in every accessible repository."
+        selectedRepositoriesDescription="Bot only responds in the allowlisted repositories."
+        emptySelectionWarning="No repositories selected. The bot will not respond to webhooks."
+      />
 
       <div className="mb-4 border-t border-border pt-4">
         <p className="text-sm font-medium text-foreground mb-1">PR Feedback Autofix</p>
@@ -466,7 +466,7 @@ export function GlobalSettingsSection({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button onClick={handleSave} disabled={saving || !dirty}>
+        <Button onClick={handleSave} disabled={saving || !dirty || invalidModelSelection}>
           {saving ? "Saving..." : "Save"}
         </Button>
 
@@ -477,21 +477,14 @@ export function GlobalSettingsSection({
         )}
       </div>
 
-      <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
-            <AlertDialogDescription>
-              Reset all GitHub bot settings to defaults? The bot will respond to all repos with
-              auto-review enabled.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirmReset}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmationDialog
+        open={showResetDialog}
+        onOpenChange={setShowResetDialog}
+        title="Reset to defaults"
+        description="Reset all GitHub bot settings to defaults? The bot will respond to all repos with auto-review enabled."
+        actionLabel="Reset"
+        onConfirm={handleConfirmReset}
+      />
     </IntegrationSettingsSection>
   );
 }

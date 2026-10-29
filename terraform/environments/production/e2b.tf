@@ -6,7 +6,7 @@
 # build-template.py stages the WHOLE sandbox_runtime tree into the image (not just
 # *.py/.ts — skill prompts, assets, etc.), so hash every file under the runtime and
 # the e2b-infra builder, excluding only generated/cache dirs. Exclude-only policy,
-# mirroring the opencomputer builder, so a skill-only change still rebuilds the template.
+# so a skill-only change still rebuilds the template.
 data "external" "e2b_source_hash" {
   count = local.use_e2b_backend ? 1 : 0
 

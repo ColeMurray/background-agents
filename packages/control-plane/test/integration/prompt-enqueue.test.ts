@@ -11,6 +11,7 @@ import {
   queryDO,
   seedSandboxAuth,
   serviceRequestHeaders,
+  closeWebSocket,
 } from "./helpers";
 import { hostContract } from "../conformance/session-core-conformance";
 
@@ -219,7 +220,7 @@ describe("POST /internal/prompt", () => {
       ["execution_complete", firstId],
       ["user_message", secondId],
     ]);
-    sandboxWs!.close();
+    await closeWebSocket(sandboxWs!);
   });
 
   hostContract("host.concurrent-prompt-claim", async () => {
@@ -252,7 +253,7 @@ describe("POST /internal/prompt", () => {
     expect(rows.map(({ status }) => status).sort()).toEqual(["pending", "processing"]);
     expect(prompts[0].messageId).toBe(rows.find(({ status }) => status === "processing")?.id);
 
-    sandboxWs!.close();
+    await closeWebSocket(sandboxWs!);
   });
 
   it("stores attachments as JSON", async () => {

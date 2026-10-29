@@ -8,11 +8,18 @@ import type {
   SlackActionsBlock,
   SlackButtonElement,
   SlackContextBlock,
+  SlackMarkdownBlock,
   SlackSectionBlock,
 } from "../slack-blocks";
-import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
+import {
+  escapeMrkdwnText,
+  MARKDOWN_BLOCK_MAX_CHARS,
+  splitIntoSlackSections,
+  stripBroadcastMentions,
+} from "@open-inspect/shared/slack";
 
-type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
+type CompletionSlackBlock =
+  SlackMarkdownBlock | SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 
 /**
  * Status emoji constants.
@@ -28,6 +35,29 @@ const STATUS_EMOJI = {
 const ERROR_FOOTER_LIMIT = 200;
 
 /**
+ * The agent's reply as the message's only `markdown` block. Agents write standard
+ * Markdown, which a mrkdwn section shows as literal `##` and `**`; a `markdown`
+ * block renders it as written.
+ *
+ * Every reply, whatever its length, gets the same treatment:
+ * - It is cut to one fence-balanced block of at most MARKDOWN_BLOCK_MAX_CHARS that
+ *   ends with a pointer to the session. More `markdown` blocks would not help, since
+ *   they share that cap.
+ * - Broadcast mentions are stripped, the same always-on strip `sanitizeAgentText`
+ *   applies to agent notifications. Slack resolves `<!here>` and `<!channel>` inside
+ *   a `markdown` block to real broadcasts (checked by posting one and reading back the
+ *   stored rich_text), while a Markdown link such as `[x](!here)` stays a plain link.
+ * - User mentions (`<@U…>`) pass through unchanged. The notify route's configurable
+ *   user-mention policy lives in integration settings this path does not read, so it
+ *   is out of scope here.
+ */
+function buildResponseBlock(text: string): SlackMarkdownBlock | SlackSectionBlock {
+  const [body] = splitIntoSlackSections(stripBroadcastMentions(text), MARKDOWN_BLOCK_MAX_CHARS, 1);
+  if (!body) return { type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } };
+  return { type: "markdown", text: body };
+}
+
+/**
  * Build Slack blocks for completion message.
  */
 export function buildCompletionBlocks(
@@ -38,15 +68,8 @@ export function buildCompletionBlocks(
 ): CompletionSlackBlock[] {
   const blocks: CompletionSlackBlock[] = [];
 
-  // 1. Response text, split across as many section blocks as it needs
-  const sections = splitIntoSlackSections(response.textContent);
-  if (sections.length === 0) {
-    blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
-  } else {
-    for (const section of sections) {
-      blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
-    }
-  }
+  // 1. Response text
+  blocks.push(buildResponseBlock(response.textContent));
 
   // 2. Artifacts (PRs, branches)
   if (response.artifacts.length > 0) {

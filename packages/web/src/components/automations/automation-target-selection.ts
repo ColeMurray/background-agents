@@ -19,7 +19,7 @@ export type AutomationSessionTarget = Extract<SessionTarget, { kind: "repo" | "e
 export type SelectionMode = "single" | "multiple";
 
 /** Selection key for a repository: the lowercase full name, as the API stores it. */
-function repositoryKey(repoOwner: string, repoName: string): string {
+export function repositoryKey(repoOwner: string, repoName: string): string {
   return formatRepositoryFullName({ repoOwner, repoName }).toLowerCase();
 }
 
@@ -32,15 +32,14 @@ export function hydrateTargets(
   initialEnvironmentIds: string[]
 ): AutomationSessionTarget[] {
   return [
-    ...initialRepositories.map(
-      (repository): AutomationSessionTarget => ({
-        kind: "repo",
-        repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
-      })
-    ),
-    ...initialEnvironmentIds.map(
-      (environmentId): AutomationSessionTarget => ({ kind: "environment", environmentId })
-    ),
+    ...initialRepositories.map((repository): AutomationSessionTarget => ({
+      kind: "repo",
+      repoFullName: repositoryKey(repository.repoOwner, repository.repoName),
+    })),
+    ...initialEnvironmentIds.map((environmentId): AutomationSessionTarget => ({
+      kind: "environment",
+      environmentId,
+    })),
   ];
 }
 
@@ -74,6 +73,21 @@ function sameStringList(a: string[], b: string[]): boolean {
 /** Environment link order is not persisted. */
 export function sameEnvironmentIds(a: readonly string[], b: readonly string[]): boolean {
   return sameStringList([...a].sort(), [...b].sort());
+}
+
+/** Repository order is not persisted either; names compare case-insensitively, base branches exactly. */
+export function sameRepositories(
+  a: readonly AutomationRepositoryInput[],
+  b: readonly AutomationRepositoryInput[]
+): boolean {
+  const entries = (repositories: readonly AutomationRepositoryInput[]) =>
+    repositories
+      .map(
+        (repository) =>
+          `${repositoryKey(repository.repoOwner, repository.repoName)}@${repository.baseBranch ?? ""}`
+      )
+      .sort();
+  return sameStringList(entries(a), entries(b));
 }
 
 function sameTarget(a: AutomationSessionTarget, b: AutomationSessionTarget): boolean {

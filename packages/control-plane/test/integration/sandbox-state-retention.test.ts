@@ -206,16 +206,14 @@ describe("sandbox state retention", () => {
     async (kind, failure) => {
       const stub = await servingSession();
       await runInSessionDO(stub, async (instance, durableState) => {
-        const startup = vi.fn(
-          async (): Promise<RestoreResult> => ({
-            success: true,
-            sandboxId: "recovered-sandbox",
-            providerObjectId: "recovered-source",
-            lifetime: { kind: "none", observedAtMs: Date.now() },
-            codeServerUrl: "https://preview.test",
-            codeServerPassword: "preview-secret",
-          })
-        );
+        const startup = vi.fn(async (): Promise<RestoreResult> => ({
+          success: true,
+          sandboxId: "recovered-sandbox",
+          providerObjectId: "recovered-source",
+          lifetime: { kind: "none", observedAtMs: Date.now() },
+          codeServerUrl: "https://preview.test",
+          codeServerPassword: "preview-secret",
+        }));
         const provider = snapshotProvider({
           capabilities: {
             supportsSandboxTimeout: true,
@@ -471,10 +469,19 @@ describe("sandbox state retention", () => {
           socket: {} as WebSocket,
         });
         sandbox.setActiveSocketId("live-bridge");
-        await sandbox.updateSandboxAccess("codeServer", "https://preview.test", "preview-secret");
+        const { modal_sandbox_id: sandboxId, created_at: createdAt } = sandbox.getSandbox()!;
+        expect(
+          await sandbox.commitProviderAccess(
+            { sandboxId, createdAt },
+            {
+              providerObjectId: null,
+              codeServer: { url: "https://preview.test", password: "preview-secret" },
+            }
+          )
+        ).toBe(true);
         const before = sandbox.getSandbox()!;
         if (trigger === "fatal")
-          expect(await manager.terminateFailedSandbox("runtime crashed")).toBe(false);
+          expect(await manager.terminateFailedSandbox("runtime crashed")).toBe("no_action");
         else
           await expect(manager.terminateUnresponsiveSandbox("stop_send_failed")).rejects.toThrow(
             "retirement fence unavailable"

@@ -49,7 +49,7 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Opened",
     description: "A pull request was opened",
     shortLabel: "PR opened",
-    supportedConditions: ["branch", "target_branch", "label", "actor"],
+    supportedConditions: ["branch", "target_branch", "label", "actor", "draft"],
   },
   {
     event: "pull_request",
@@ -57,6 +57,14 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     displayName: "PR Updated",
     description: "New commits pushed to a pull request",
     shortLabel: "PR updated",
+    supportedConditions: ["branch", "target_branch", "label", "actor", "draft"],
+  },
+  {
+    event: "pull_request",
+    action: "ready_for_review",
+    displayName: "PR Ready for Review",
+    description: "A draft pull request was marked ready for review",
+    shortLabel: "PR ready for review",
     supportedConditions: ["branch", "target_branch", "label", "actor"],
   },
   {
@@ -150,6 +158,12 @@ const userSchema = z.object({
   login: z.string().optional(),
 });
 
+// "User", "Bot", "Organization" or "Mannequin". Read only to classify the
+// sender, so a malformed value is dropped rather than failing the payload.
+const senderSchema = userSchema.extend({
+  type: z.string().optional().catch(undefined),
+});
+
 const repositorySchema = z.object({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   name: z.string().optional(),
@@ -161,7 +175,7 @@ const labelArraySchema = z.array(z.object({ name: z.string().optional() }));
 const baseEventSchema = z.object({
   action: z.string(),
   repository: repositorySchema,
-  sender: userSchema.optional(),
+  sender: senderSchema.optional(),
 });
 
 // Repo identity on a PR's head/base. `id` is the stable provider repo id used

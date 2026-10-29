@@ -1,9 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
-import { extractAgentResponse } from "./extractor";
+import { extractAgentResponse, formatAgentResponse } from "./extractor";
 import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 
 describe("extractAgentResponse", () => {
+  it("does not turn stored file keys into Linear links or drop adjacent PR artifacts", async () => {
+    const key = "sessions/session-1/files/file-1";
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes("/events"))
+        return Response.json({
+          events: [
+            {
+              id: "done",
+              type: "execution_complete",
+              data: { success: true },
+              messageId: "m1",
+              createdAt: 20,
+            },
+          ],
+          hasMore: false,
+        });
+      return Response.json({
+        artifacts: [
+          { id: "file-1", type: "file", url: key, metadata: null, createdAt: 20 },
+          {
+            id: "pr-1",
+            type: "pr",
+            url: "https://github.com/acme/backend/pull/1",
+            metadata: { number: 1 },
+            createdAt: 20,
+          },
+        ],
+      });
+    });
+    const { kv } = createFakeKV();
+    const response = await extractAgentResponse(
+      makeLinearBotEnv(kv, { CONTROL_PLANE: { fetch } }),
+      "session-1",
+      "m1",
+      "external-team-1"
+    );
+    expect(response.artifacts).toHaveLength(1);
+    expect(formatAgentResponse(response)).toContain("https://github.com/acme/backend/pull/1");
+    expect(formatAgentResponse(response)).not.toContain(key);
+  });
+
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
   });

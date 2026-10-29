@@ -59,8 +59,7 @@ export async function seedEnvironment(
 export async function seedGrant(
   teamId: string,
   repository:
-    | "installation"
-    | Pick<EnvironmentRepositoryInsert, "repo_id" | "repo_owner" | "repo_name">
+    "installation" | Pick<EnvironmentRepositoryInsert, "repo_id" | "repo_owner" | "repo_name">
 ) {
   const repo = repository === "installation" ? null : repository;
   await env.DB.prepare(

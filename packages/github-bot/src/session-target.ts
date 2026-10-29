@@ -24,8 +24,7 @@ import type { ResolvedGitHubConfig } from "./utils/integration-config";
  * schema makes the two mutually exclusive.
  */
 export type SessionTargetFields =
-  | { repoOwner: string; repoName: string }
-  | { environmentId: string };
+  { repoOwner: string; repoName: string } | { environmentId: string };
 
 const metadataResponseSchema = z.object({
   metadata: z.object({ defaultEnvironmentId: z.string().optional() }).nullable(),

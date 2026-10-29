@@ -3,8 +3,11 @@
  * Extracted from index.ts for modularity.
  */
 
+import { abortable } from "@open-inspect/shared/abortable";
 import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
+import { ACTOR_EMAIL_REQUIRED_CODE } from "@open-inspect/shared/types/actors";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/prompts";
+import { checkHarnessCompatibility, getHarnessLabel } from "@open-inspect/shared/harnesses";
 import { z } from "zod";
 import type { Env, AgentSessionWebhook, AgentSessionWebhookIssue } from "./types";
 import {
@@ -17,9 +20,10 @@ import {
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
 import { signedControlPlaneFetch } from "./internal-auth";
+import { enrollLinearActor } from "./actor-enrollment";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
-import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
+import { extractModelFromLabels, resolveSessionAgentSettings } from "./model-resolution";
 import {
   resolveSessionTarget,
   resolveStoredSessionTarget,
@@ -38,6 +42,9 @@ import {
 import { buildFollowUpPrompt, buildPrompt, buildPromptContextPrompt } from "./prompts";
 
 const log = createLogger("handler");
+
+// Leave headroom for completion before the Worker waitUntil budget expires.
+export const STOP_TIMEOUT_MS = 25_000;
 
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
@@ -85,36 +92,83 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
   const issueId = webhook.agentSession.issue?.id;
+  const deadline = new AbortController();
+  const { signal } = deadline;
+  const timeoutId = setTimeout(
+    () => deadline.abort(new DOMException("Linear stop deadline exceeded", "TimeoutError")),
+    STOP_TIMEOUT_MS
+  );
+  let sessionId: string | undefined;
 
-  if (issueId) {
-    const existingSession = await lookupIssueSession(env, issueId);
-    if (existingSession) {
-      const stopUrl = new URL(`https://internal/sessions/${existingSession.sessionId}/stop`);
-      const actorUserId =
-        webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
-      if (!actorUserId) {
-        log.warn("Linear stop rejected because its author is missing", {
-          event: "agent_session.stop_author_missing",
-          agent_session_id: agentSessionId,
-          issue_id: issueId,
-          trace_id: traceId,
-        });
-        return;
-      }
-      // Older mappings lack a team coordinate; the actor's own authorization still governs them.
-      const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
-      if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
-      try {
-        const stopRes = await signedControlPlaneFetch(env, {
+  try {
+    if (issueId) {
+      const existingSession = await abortable(lookupIssueSession(env, issueId), signal);
+      if (existingSession) {
+        sessionId = existingSession.sessionId;
+        const stopUrl = new URL(`https://internal/sessions/${sessionId}/stop`);
+        const actorUserId =
+          webhook.agentActivity?.userId ?? webhook.agentSession.comment?.userId ?? undefined;
+        if (!actorUserId) {
+          log.warn("Linear stop rejected because its author is missing", {
+            event: "agent_session.stop_author_missing",
+            agent_session_id: agentSessionId,
+            issue_id: issueId,
+            trace_id: traceId,
+          });
+          return;
+        }
+        // Older mappings lack a team coordinate; the actor's own authorization still governs them.
+        const linearTeamId = webhook.agentSession.issue?.team?.id || existingSession.linearTeamId;
+        if (linearTeamId) stopUrl.searchParams.set("channel", `linear:${linearTeamId}`);
+        const stopRequest = {
           method: "POST",
           url: stopUrl.toString(),
           actor: `linear:${actorUserId}`,
           traceId,
-        });
+        };
+        // Known actors can stop without relying on Linear's API or token issuance.
+        signal.throwIfAborted();
+        let stopRes = await abortable(
+          signedControlPlaneFetch(env, stopRequest, { signal }),
+          signal
+        );
+        if (
+          stopRes.status === 403 &&
+          z.object({ code: z.literal(ACTOR_EMAIL_REQUIRED_CODE) }).safeParse(
+            await abortable(
+              stopRes.json().catch(() => null),
+              signal
+            )
+          ).success
+        ) {
+          signal.throwIfAborted();
+          const client = await abortable(
+            getLinearClientOrThrow(env, webhook.organizationId, webhook.appUserId),
+            signal
+          );
+          signal.throwIfAborted();
+          const refusal = await enrollLinearActor(env, client, actorUserId, traceId, signal);
+          // Enrollment reports failures as guidance, including an expired caller deadline.
+          signal.throwIfAborted();
+          if (refusal) {
+            await abortable(
+              emitAgentActivity(
+                client,
+                agentSessionId,
+                { type: "error", body: refusal },
+                undefined,
+                signal
+              ),
+              signal
+            );
+            return;
+          }
+          stopRes = await abortable(signedControlPlaneFetch(env, stopRequest, { signal }), signal);
+        }
         if (!stopRes.ok) {
           log.error("agent_session.stop_failed", {
             trace_id: traceId,
-            session_id: existingSession.sessionId,
+            session_id: sessionId,
             stop_status: stopRes.status,
           });
           return;
@@ -122,28 +176,30 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
         log.info("agent_session.stopped", {
           trace_id: traceId,
           agent_session_id: agentSessionId,
-          session_id: existingSession.sessionId,
+          session_id: sessionId,
           issue_id: issueId,
           stop_status: stopRes.status,
         });
-      } catch (e) {
-        log.error("agent_session.stop_failed", {
-          trace_id: traceId,
-          session_id: existingSession.sessionId,
-          error: e instanceof Error ? e : new Error(String(e)),
-        });
-        return;
+        await abortable(env.LINEAR_KV.delete(`issue:${issueId}`), signal);
       }
-      await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
-  }
 
-  log.info("agent_session.stop_handled", {
-    trace_id: traceId,
-    action: webhook.action,
-    agent_session_id: agentSessionId,
-    duration_ms: Date.now() - startTime,
-  });
+    log.info("agent_session.stop_handled", {
+      trace_id: traceId,
+      action: webhook.action,
+      agent_session_id: agentSessionId,
+      duration_ms: Date.now() - startTime,
+    });
+  } catch (e) {
+    // A missing response does not establish whether the control plane applied the stop.
+    log.error("agent_session.stop_failed", {
+      trace_id: traceId,
+      session_id: sessionId,
+      error: e instanceof Error ? e : new Error(String(e)),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -160,7 +216,7 @@ function getNewSessionInput(webhook: AgentSessionWebhook): {
   clarificationReply: { body: string } | undefined;
   actorUserId: string | undefined;
 } {
-  const instructionComment = webhook.agentSession.comment;
+  const instructionComment = webhook.agentSession.comment ?? undefined;
   const sessionActor = instructionComment?.userId ?? webhook.agentSession.creatorId ?? undefined;
   const replyBody =
     webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
@@ -297,6 +353,11 @@ async function handleFollowUp(
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
+  const refusal = await enrollLinearActor(env, client, followUp.actorUserId, traceId);
+  if (refusal) {
+    await emitAgentActivity(client, agentSessionId, { type: "error", body: refusal });
+    return;
+  }
   const scope = { linearTeamId: issue.team.id };
   let currentIntegration: TargetIntegration | null;
   try {
@@ -531,23 +592,23 @@ async function handleNewSession(
 
   let userModel: string | undefined;
   let userReasoningEffort: string | undefined;
-  let actorDisplayName: string | undefined;
-  let actorEmail: string | undefined;
   if (sessionActorUserId) {
     const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
-
-    const linearUser = await fetchUser(client, sessionActorUserId);
-    actorDisplayName = linearUser?.name;
-    actorEmail = linearUser?.email ?? undefined;
   }
+  // Automation-created delegations act as the installed app user; first-time
+  // enrollment needs that actor's profile too.
+  const linearUser = await fetchUser(client, launchActorUserId);
+  const actorDisplayName = linearUser?.name;
+  const actorEmail = linearUser?.email ?? undefined;
 
   const labelModel = extractModelFromLabels(labels);
-  const { model, reasoningEffort } = resolveSessionModelSettings({
+  const { harness, model, reasoningEffort } = resolveSessionAgentSettings({
     envDefaultModel: env.DEFAULT_MODEL,
+    configHarness: integrationConfig.harness,
     configModel: integrationConfig.model,
     configReasoningEffort: integrationConfig.reasoningEffort,
     allowUserPreferenceOverride: integrationConfig.allowUserPreferenceOverride,
@@ -557,7 +618,18 @@ async function handleNewSession(
     labelModel,
   });
 
+  const compatibilityError = checkHarnessCompatibility(harness, model, undefined, reasoningEffort);
+  if (compatibilityError) {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "error",
+      body: `No coding session was created. ${compatibilityError.message} Choose a compatible model label, user preference, or default model, or change the Linear integration harness, then delegate again.`,
+    });
+    return;
+  }
+
   // ─── Create session ───────────────────────────────────────────────────
+
+  const harnessLabel = getHarnessLabel(harness);
 
   await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
   await emitAgentActivity(
@@ -565,7 +637,7 @@ async function handleNewSession(
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${label} (model: ${model})...`,
+      body: `Creating coding session on ${label} (agent: ${harnessLabel}, model: ${model})...`,
     },
     true
   );
@@ -575,6 +647,7 @@ async function handleNewSession(
     target,
     {
       title: `${issue.identifier}: ${issue.title}`,
+      harness,
       model,
       reasoningEffort,
       actorUserId: launchActorUserId,
@@ -671,7 +744,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "thought",
-    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `Working on \`${label}\` with **${model}** (${harnessLabel}).\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -680,6 +753,8 @@ async function handleNewSession(
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
     target: targetId(target),
+    configured_harness: integrationConfig.harness,
+    harness,
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,

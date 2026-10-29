@@ -6,15 +6,10 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_LINEAR_UNBOUND_CHANNELS,
-  linearBotGlobalSettingsSchema,
-  type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
-  type GitHubBotSettings,
   type IntegrationId,
-  type SandboxSettings,
-  type VncSettings,
 } from "@open-inspect/shared/types/integrations";
-import { isValidReasoningEffort } from "@open-inspect/shared/models";
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -396,23 +391,19 @@ async function handleGetResolvedConfig(
 
   const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
-  const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 
+  // Resolve inside each branch so `id` is narrowed and `settings` is typed per integration.
   if (id === "github") {
-    const githubSettings = settings as GitHubBotSettings;
-    const reasoningEffort =
-      githubSettings.model &&
-      githubSettings.reasoningEffort &&
-      !isValidReasoningEffort(githubSettings.model, githubSettings.reasoningEffort)
-        ? null
-        : (githubSettings.reasoningEffort ?? null);
+    const { enabledRepos, settings: githubSettings } = await store.getResolvedConfig(id, repo);
+    const harness = getValidHarnessOrDefault(githubSettings.harness);
 
     return json({
       integrationId: id,
       repo,
       config: {
         model: githubSettings.model ?? null,
-        reasoningEffort,
+        harness,
+        reasoningEffort: githubSettings.reasoningEffort ?? null,
         autoReviewOnOpen: githubSettings.autoReviewOnOpen ?? true,
         enabledRepos,
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
@@ -423,20 +414,16 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "linear") {
-    const linearSettings = linearBotGlobalSettingsSchema.parse(settings);
-    const linearReasoningEffort =
-      linearSettings.model &&
-      linearSettings.reasoningEffort &&
-      !isValidReasoningEffort(linearSettings.model, linearSettings.reasoningEffort)
-        ? null
-        : (linearSettings.reasoningEffort ?? null);
+    const { enabledRepos, settings: linearSettings } = await store.getResolvedConfig(id, repo);
+    const harness = getValidHarnessOrDefault(linearSettings.harness);
 
     return json({
       integrationId: id,
       repo,
       config: {
+        harness,
         model: linearSettings.model ?? null,
-        reasoningEffort: linearReasoningEffort,
+        reasoningEffort: linearSettings.reasoningEffort ?? null,
         allowUserPreferenceOverride: linearSettings.allowUserPreferenceOverride ?? true,
         allowLabelModelOverride: linearSettings.allowLabelModelOverride ?? true,
         emitToolProgressActivities: linearSettings.emitToolProgressActivities ?? true,
@@ -448,7 +435,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "code-server") {
-    const codeServerSettings = settings as CodeServerSettings;
+    const { enabledRepos, settings: codeServerSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,
@@ -460,7 +447,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "vnc") {
-    const vncSettings = settings as VncSettings;
+    const { enabledRepos, settings: vncSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,
@@ -472,7 +459,7 @@ async function handleGetResolvedConfig(
   }
 
   if (id === "sandbox") {
-    const sandboxSettings = settings as SandboxSettings;
+    const { enabledRepos, settings: sandboxSettings } = await store.getResolvedConfig(id, repo);
     return json({
       integrationId: id,
       repo,
@@ -486,6 +473,8 @@ async function handleGetResolvedConfig(
         // null → use the provider's default reservation (no override configured).
         cpuCores: sandboxSettings.cpuCores ?? null,
         memoryMib: sandboxSettings.memoryMib ?? null,
+        cpuLimitCores: sandboxSettings.cpuLimitCores ?? null,
+        memoryLimitMib: sandboxSettings.memoryLimitMib ?? null,
         sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
         finalSnapshotBufferMs: sandboxSettings.finalSnapshotBufferMs ?? null,
         enabledRepos,

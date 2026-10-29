@@ -65,6 +65,7 @@ function automation(id: string, userId: string): AutomationRow {
     instructions: "Run tests",
     trigger_type: "schedule",
     schedule_cron: "0 9 * * *",
+    schedule_once_at: null,
     schedule_tz: "UTC",
     harness: "opencode",
     event_type: null,
@@ -230,8 +231,11 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
             ? await createReadySession()
             : fixtures.readonlySessionId;
       const url = `${BASE}${materialize(route, { id })}`;
+      // Observe the route itself, not wherever a redirect (e.g. a failed OAuth
+      // callback sending the browser to the web login page) points.
       const response = await serviceFetch(url, {
         method: route.method,
+        redirect: "manual",
         ...(isMutation(route) ? { body: "{}" } : {}),
       });
       const identity = `${route.method} ${route.path}`;

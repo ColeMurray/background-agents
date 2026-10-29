@@ -6,9 +6,11 @@ import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
 import { z } from "zod";
+import { DEFAULT_HARNESS, harnessIdSchema, type HarnessId } from "@open-inspect/shared/harnesses";
 
 export interface ResolvedGitHubConfig {
   model: string;
+  harness: HarnessId;
   reasoningEffort: string | null;
   autoReviewOnOpen: boolean;
   enabledRepos: string[] | null;
@@ -21,6 +23,8 @@ const resolvedGitHubConfigResponseSchema = z.object({
   config: z
     .object({
       model: z.string().nullable(),
+      // Control planes that predate the harness setting omit it.
+      harness: harnessIdSchema.default(DEFAULT_HARNESS),
       reasoningEffort: z.string().nullable(),
       autoReviewOnOpen: z.boolean(),
       enabledRepos: z.array(z.string()).nullable(),
@@ -32,6 +36,7 @@ const resolvedGitHubConfigResponseSchema = z.object({
 });
 
 const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
+  harness: DEFAULT_HARNESS,
   reasoningEffort: null,
   autoReviewOnOpen: false,
   enabledRepos: [],
@@ -43,13 +48,13 @@ const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
 export async function getGitHubConfig(
   env: Env,
   repo: string,
-  log?: Logger
+  log: Logger
 ): Promise<ResolvedGitHubConfig> {
   // Owners may be nested namespaces — split on the last slash and encode the
   // owner as a single route segment (see the repo-owner gotcha in AGENTS.md).
   const repository = parseRepositoryFullName(repo);
   if (!repository) {
-    log?.warn("config.invalid_repo", { repo, fallback: "fail_closed" });
+    log.warn("config.invalid_repo", { repo, fallback: "fail_closed" });
     return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
   }
   const url = `https://internal/integration-settings/github/resolved/${encodeRepositoryPathSegments(repository)}`;
@@ -58,7 +63,7 @@ export async function getGitHubConfig(
   try {
     response = await signedControlPlaneFetch(env, { method: "GET", url });
   } catch (err) {
-    log?.warn("config.fetch_error", {
+    log.warn("config.fetch_error", {
       repo,
       error: err instanceof Error ? err : new Error(String(err)),
       fallback: "fail_closed",
@@ -67,7 +72,7 @@ export async function getGitHubConfig(
   }
 
   if (!response.ok) {
-    log?.warn("config.fetch_failed", {
+    log.warn("config.fetch_failed", {
       repo,
       status: response.status,
       fallback: "fail_closed",
@@ -79,7 +84,7 @@ export async function getGitHubConfig(
   try {
     const parsed = resolvedGitHubConfigResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      log?.warn("config.invalid_response", {
+      log.warn("config.invalid_response", {
         repo,
         fallback: "fail_closed",
       });
@@ -87,7 +92,7 @@ export async function getGitHubConfig(
     }
     data = parsed.data;
   } catch (err) {
-    log?.warn("config.invalid_response", {
+    log.warn("config.invalid_response", {
       repo,
       error: err instanceof Error ? err : new Error(String(err)),
       fallback: "fail_closed",
@@ -98,6 +103,7 @@ export async function getGitHubConfig(
   if (!data.config) {
     return {
       model: env.DEFAULT_MODEL,
+      harness: DEFAULT_HARNESS,
       reasoningEffort: null,
       autoReviewOnOpen: true,
       enabledRepos: null,
@@ -109,6 +115,7 @@ export async function getGitHubConfig(
 
   return {
     model: data.config.model ?? env.DEFAULT_MODEL,
+    harness: data.config.harness,
     reasoningEffort: data.config.reasoningEffort,
     autoReviewOnOpen: data.config.autoReviewOnOpen,
     enabledRepos: data.config.enabledRepos,

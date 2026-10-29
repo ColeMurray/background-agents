@@ -25,6 +25,13 @@ describe("getSafeExternalUrl", () => {
     expect(getSafeExternalUrl("https://example.com/path?q=1")).toBe("https://example.com/path?q=1");
   });
 
+  it("keeps a provider access token in the query of a protected tunnel url", () => {
+    // Boat tunnel routes answer only with their `_token`; the link must carry it.
+    expect(getSafeExternalUrl("https://sub-3000.on.boat.dev?_token=abc")).toBe(
+      "https://sub-3000.on.boat.dev/?_token=abc"
+    );
+  });
+
   it("allows localhost http urls for local development", () => {
     expect(getSafeExternalUrl("http://localhost:3000/preview")).toBe(
       "http://localhost:3000/preview"

@@ -77,11 +77,12 @@ export const reviewCommentPayloadSchema = z.object({
   pull_request: pullRequestSchema.omit({ body: true, user: true }),
   comment: z.object({
     id: z.number(),
+    // Set on a reply: the thread's top-level comment, the only id GitHub's replies endpoint accepts.
+    in_reply_to_id: z.number().int().positive().optional().catch(undefined),
     body: z.string(),
     path: z.string(),
     diff_hunk: z.string(),
     user: githubUserSchema,
-    in_reply_to_id: z.number().int().positive().optional().catch(undefined),
     // Interpolated into shell commands in the prompt, so only a hex SHA is kept.
     commit_id: z
       .string()

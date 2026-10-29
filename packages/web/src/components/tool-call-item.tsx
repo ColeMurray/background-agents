@@ -3,8 +3,7 @@
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
-import { SlackNotifyEvent } from "./slack-notify-event";
-import { CreatePullRequestEvent } from "./create-pull-request-event";
+import { getToolRenderer } from "./tool-call-renderers";
 import { TimelineRowContent } from "./timeline-row-content";
 import {
   ChevronRightIcon,
@@ -18,7 +17,7 @@ import {
   GlobeIcon,
 } from "@/components/ui/icons";
 
-interface ToolCallItemProps {
+export interface ToolCallItemProps {
   event: Extract<SandboxEvent, { type: "tool_call" }>;
   isExpanded: boolean;
   onToggle: () => void;
@@ -108,25 +107,11 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
 }
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
-  if (event.tool?.toLowerCase() === "create-pull-request" && !event.truncated) {
+  const renderer = getToolRenderer(event);
+  const CustomItem = renderer?.Item;
+  if (CustomItem) {
     return (
-      <CreatePullRequestEvent
-        event={event}
-        isExpanded={isExpanded}
-        onToggle={onToggle}
-        showTime={showTime}
-      />
-    );
-  }
-
-  if (event.tool === "slack-notify" && !event.truncated) {
-    return (
-      <SlackNotifyEvent
-        event={event}
-        isExpanded={isExpanded}
-        onToggle={onToggle}
-        showTime={showTime}
-      />
+      <CustomItem event={event} isExpanded={isExpanded} onToggle={onToggle} showTime={showTime} />
     );
   }
 
@@ -156,7 +141,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
 
       {isExpanded && (
         <div className="mt-2 min-w-0 w-full max-w-full sm:ml-5 sm:w-[calc(100%_-_1.25rem)]">
-          <ToolCallDetails event={event} />
+          {renderer?.renderDetails?.(event) ?? <ToolCallDetails event={event} />}
         </div>
       )}
     </div>

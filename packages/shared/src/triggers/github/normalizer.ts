@@ -55,6 +55,17 @@ function getActor(payload: GitHubEventBase): string | undefined {
   return payload.sender?.login;
 }
 
+function getActorKind(payload: GitHubEventBase): GitHubAutomationEvent["actorKind"] {
+  switch (payload.sender?.type) {
+    case "User":
+      return "person";
+    case "Bot":
+      return "bot";
+    default:
+      return undefined;
+  }
+}
+
 function getPRLabels(pr: PullRequestPayload["pull_request"]): string[] | undefined {
   const names = pr.labels?.map((l) => l.name).filter((name): name is string => Boolean(name));
   return names?.length ? names : undefined;
@@ -69,7 +80,8 @@ function getIssueLabels(issue: IssuesPayload["issue"]): string[] | undefined {
 
 export function normalizeGitHubEvent(
   githubEventHeader: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  deliveryId?: string
 ): GitHubAutomationEvent | null {
   const action = payload.action;
 
@@ -85,7 +97,7 @@ export function normalizeGitHubEvent(
     case "pull_request": {
       const parsed = pullRequestEventSchema.safeParse(payload);
       if (!parsed.success) return null;
-      return normalizePullRequest(eventType, action, parsed.data);
+      return normalizePullRequest(eventType, action, parsed.data, deliveryId);
     }
 
     case "issue_comment": {
@@ -172,17 +184,21 @@ function getPullRequestFacts(
 function normalizePullRequest(
   eventType: string,
   action: string,
-  payload: PullRequestPayload
+  payload: PullRequestPayload,
+  deliveryId: string | undefined
 ): GitHubAutomationEvent {
   const pr = payload.pull_request;
   const headSha = pr.head?.sha;
   const branch = pr.head?.ref;
   const targetBranch = pr.base?.ref;
+  // A PR can go ready -> draft -> ready without a new commit. The delivery id
+  // tells those transitions apart; GitHub keeps it on redelivery, so retries still dedupe.
+  const occurrence = action === "ready_for_review" ? `:${deliveryId ?? "unknown"}` : "";
 
   return {
     source: "github",
     eventType,
-    triggerKey: `pr:${pr.number}:${action}:${headSha ?? "unknown"}`,
+    triggerKey: `pr:${pr.number}:${action}:${headSha ?? "unknown"}${occurrence}`,
     concurrencyKey: `pr:${pr.number}`,
     repositoryId: payload.repository.id,
     repoOwner: getRepoOwner(payload),
@@ -191,6 +207,7 @@ function normalizePullRequest(
     targetBranch,
     labels: getPRLabels(pr),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     pullRequest: getPullRequestFacts(pr),
     contextBlock: buildPullRequestContextBlock(eventType, payload),
     meta: {
@@ -217,6 +234,7 @@ function normalizeIssueComment(
     repoOwner: getRepoOwner(payload),
     repoName: getRepoName(payload),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildIssueCommentContextBlock(payload),
     meta: {
       commentId,
@@ -244,6 +262,7 @@ function normalizeReviewComment(
     branch: pr.head?.ref,
     targetBranch,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildReviewCommentContextBlock(payload),
     meta: {
       commentId,
@@ -267,6 +286,7 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
     repoName: getRepoName(payload),
     branch: checkSuite.head_branch ?? undefined,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     conclusion,
     checkConclusion: conclusion,
     contextBlock: buildCheckSuiteContextBlock(payload),
@@ -298,6 +318,7 @@ function normalizeWorkflowRun(
     repoName: getRepoName(payload),
     branch: run.head_branch ?? undefined,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     conclusion,
     workflowName: run.name,
     contextBlock: buildWorkflowRunContextBlock(payload),
@@ -327,6 +348,7 @@ function normalizeIssue(
     repoName: getRepoName(payload),
     labels: getIssueLabels(issue),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildIssueContextBlock(eventType, payload),
     meta: {
       issueNumber: issue.number,

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useCallback, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useIsMobile } from "@/hooks/use-media-query";
@@ -20,6 +20,7 @@ import { PRIMARY_APP_DESTINATIONS, SETTINGS_DESTINATION } from "@/components/app
 import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
+import { MarkAllReadButton } from "@/components/mark-all-read-button";
 import { UserMenu } from "@/components/sidebar-user-menu";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { buildSessionsHref } from "@/lib/session-discovery";
@@ -36,6 +37,41 @@ const DEFAULT_SESSION_GROUP_EXPANDED_STATE: Record<SessionGroupId, boolean> = {
   recent: true,
 };
 const SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX = "open-inspect-session-sidebar-expanded:";
+/** Varied title widths so the placeholder rows read as a list rather than a block. */
+const SESSION_SKELETON_TITLE_WIDTHS = [
+  "w-3/4",
+  "w-1/2",
+  "w-2/3",
+  "w-5/6",
+  "w-3/5",
+  "w-2/3",
+  "w-1/2",
+];
+
+/** Mirrors a group header followed by `SessionListItem` rows so loading doesn't shift the list. */
+function SessionListSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading sessions"
+      className="animate-pulse motion-reduce:animate-none"
+    >
+      <div className="flex min-h-10 items-center px-4">
+        <div className="h-3 w-24 rounded bg-muted" />
+      </div>
+      {SESSION_SKELETON_TITLE_WIDTHS.map((titleWidth, index) => (
+        <div key={index} className="border-l-2 border-l-transparent px-4 py-2.5">
+          <div className="flex h-5 items-center">
+            <div className={`h-3.5 rounded bg-muted ${titleWidth}`} />
+          </div>
+          <div className="mt-0.5 flex h-4 items-center">
+            <div className="h-3 w-32 rounded bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface SidebarActionButtonProps {
   onClick?: () => void;
@@ -90,7 +126,7 @@ export function SessionSidebar({
   const { labels } = useKeyboardShortcuts();
   const { data: authSession } = useAuthSession();
   const { hasPermission } = useCurrentUserAuthorization();
-  const { activeTeamId, scope } = useActiveTeam();
+  const { activeTeamId, scope, teams, loading: loadingTeams } = useActiveTeam();
   const teamQuery = { teamIds: activeTeamId ? [activeTeamId] : undefined, scope };
   const pathname = usePathname();
   const router = useRouter();
@@ -118,9 +154,11 @@ export function SessionSidebar({
 
   const {
     needsAttention,
+    attentionUnreadCount,
     inProgress,
     finished,
     childrenMap,
+    unreadDescendantRootIds,
     loading,
     sessionsError,
     refreshSnapshot,
@@ -129,7 +167,18 @@ export function SessionSidebar({
     setSessionCreatorFilter,
     handleSessionArchived,
     handleMarkLatestMessageRead,
+    handleMarkHierarchyRead,
+    handleMarkAllAttentionRead,
   } = useSidebarSessions();
+  const activeTeamName = teams.find((team) => team.id === activeTeamId)?.name;
+  const attentionScopeLabel =
+    [
+      sessionCreatorFilter === "mine" ? "Mine" : null,
+      activeTeamName ??
+        (scope === "workspace" ? "Workspace" : scope === "all" ? "All teams" : null),
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined;
 
   // Archiving the session on screen leaves nothing to show, so fall back to the home page.
   const handleArchivedSession = useCallback(
@@ -173,7 +222,8 @@ export function SessionSidebar({
       error?: unknown;
       retry: () => Promise<unknown>;
     },
-    emphasize = false
+    emphasize = false,
+    headerAction?: ReactNode
   ) => {
     if (groupSessions.length === 0 && !pagination.error) return null;
 
@@ -183,40 +233,45 @@ export function SessionSidebar({
 
     return (
       <section aria-labelledby={headingId}>
-        <h2 id={headingId}>
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-controls={contentId}
-            className={`flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium uppercase tracking-wider transition-colors hover:bg-muted hover:text-foreground ${
-              emphasize ? "text-foreground" : "text-secondary-foreground"
-            }`}
-            onClick={() => {
-              const nextExpanded = !expanded;
-              setExpandedGroups((previous) => ({
-                ...previous,
-                [groupId]: nextExpanded,
-              }));
-              try {
-                localStorage.setItem(
-                  `${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}${groupId}`,
-                  String(nextExpanded)
-                );
-              } catch {
-                // Continue with the in-memory preference when storage is unavailable.
-              }
-            }}
-          >
-            <span aria-hidden="true">
-              {expanded ? (
-                <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              )}
-            </span>
-            {title}
-          </button>
-        </h2>
+        <div className="group relative transition-colors hover:bg-muted">
+          <h2 id={headingId}>
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={contentId}
+              className={`flex min-h-10 w-full items-center gap-1.5 px-4 text-left text-xs font-medium uppercase tracking-wider transition-colors hover:text-foreground ${
+                emphasize ? "text-foreground" : "text-secondary-foreground"
+              } ${headerAction ? "pr-12" : ""}`}
+              onClick={() => {
+                const nextExpanded = !expanded;
+                setExpandedGroups((previous) => ({
+                  ...previous,
+                  [groupId]: nextExpanded,
+                }));
+                try {
+                  localStorage.setItem(
+                    `${SESSION_GROUP_EXPANDED_STORAGE_KEY_PREFIX}${groupId}`,
+                    String(nextExpanded)
+                  );
+                } catch {
+                  // Continue with the in-memory preference when storage is unavailable.
+                }
+              }}
+            >
+              <span aria-hidden="true">
+                {expanded ? (
+                  <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+              </span>
+              {title}
+            </button>
+          </h2>
+          {headerAction && (
+            <div className="absolute inset-y-0 right-3 flex items-center">{headerAction}</div>
+          )}
+        </div>
         <div id={contentId}>
           {expanded && (
             <>
@@ -230,11 +285,13 @@ export function SessionSidebar({
                       : undefined
                   }
                   childrenMap={childrenMap}
+                  hasUnreadDescendants={unreadDescendantRootIds.has(session.id)}
                   currentSessionId={currentSessionId}
                   isMobile={isMobile}
                   onArchive={handleArchivedSession}
                   onSessionSelect={onSessionSelect}
                   onMarkLatestMessageRead={handleMarkLatestMessageRead}
+                  onMarkHierarchyRead={handleMarkHierarchyRead}
                 />
               ))}
               {Boolean(pagination.error) && (
@@ -355,9 +412,7 @@ export function SessionSidebar({
       {/* Session List */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-          </div>
+          <SessionListSkeleton />
         ) : (
           <>
             {needsAttention.length === 0 && inProgress.length === 0 && finished.length === 0 ? (
@@ -380,7 +435,16 @@ export function SessionSidebar({
                   "Needs attention",
                   needsAttention,
                   sectionPagination.needsAttention,
-                  true
+                  true,
+                  // Rows can come from the stored selection before memberships confirm the
+                  // scope this confirmation names.
+                  needsAttention.length > 0 && !loadingTeams && (
+                    <MarkAllReadButton
+                      count={sectionPagination.needsAttention.hasMore ? null : attentionUnreadCount}
+                      scopeLabel={attentionScopeLabel}
+                      onConfirm={handleMarkAllAttentionRead}
+                    />
+                  )
                 )}
                 {renderSessionGroup(
                   "in-progress",

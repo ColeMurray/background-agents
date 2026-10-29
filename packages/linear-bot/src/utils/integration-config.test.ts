@@ -49,6 +49,29 @@ describe("getLinearConfig", () => {
     }
   );
 
+  it.each([
+    [{ harness: "claude" }, "claude"],
+    [{}, "opencode"],
+  ])("reads the resolved harness %j, defaulting when absent", async (harnessField, expected) => {
+    const config = {
+      model: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+      ...harnessField,
+    };
+    const env = {
+      SERVICE_AUTH_SECRET: "test-secret",
+      CONTROL_PLANE: { fetch: vi.fn(async () => Response.json({ config })) },
+    } as unknown as Env;
+
+    const resolved = await getLinearConfig(env, "acme/backend", { linearTeamId: "team-1" });
+    expect(resolved.harness).toBe(expected);
+  });
+
   it.each(["denied", "not-found", "unavailable", "network", "malformed", "invalid-json"])(
     "throws on a scoped %s config read instead of using defaults",
     async (failure) => {

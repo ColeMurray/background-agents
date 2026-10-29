@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS, ImageBuildReaper } from "./reaper";
+import { createModalClient } from "../sandbox/client";
+import { ModalSandboxProvider } from "../sandbox/providers/modal-provider";
+import { ModalImageBuildAdapter } from "./modal-adapter";
 
 const ctx = { trace_id: "t", request_id: "r" };
+
+afterEach(() => vi.unstubAllGlobals());
 
 function createStore() {
   return {
@@ -64,6 +69,47 @@ function reapableRow(id: string, providerImageId: string | null) {
 
 describe("ImageBuildReaper", () => {
   describe("cleanupImages", () => {
+    for (const provider of ["modal", "modal-vm"] as const) {
+      it.each(["failed", "superseded"] as const)(
+        `retains %s ${provider} artifacts while deletion is deferred`,
+        async (status) => {
+          const fetch = vi.fn().mockRejectedValue(new Error("Unexpected provider request"));
+          vi.stubGlobal("fetch", fetch);
+          const modalAdapter = new ModalImageBuildAdapter(
+            new ModalSandboxProvider(createModalClient("secret", "workspace"), provider, "github")
+          );
+          const store = createStore();
+          const row = { ...reapableRow("deferred", "im-retained"), provider };
+          const select =
+            status === "failed" ? store.getFailedImagesWithArtifacts : store.getSupersededImages;
+          select.mockResolvedValue([row]);
+          const adapter = createAdapter();
+          adapter.deleteImage.mockImplementation((input) => modalAdapter.deleteImage(input));
+          const { reaper } = createReaper({ store, adapter });
+
+          for (let tick = 0; tick < 2; tick += 1) {
+            await expect(reaper.cleanupImages(86_400_000, ctx)).resolves.toEqual({
+              deletedFailed: 0,
+              reapedFailed: 0,
+              reapedSuperseded: 0,
+            });
+          }
+          expect(adapter.deleteImage).toHaveBeenCalledTimes(2);
+
+          if (status === "superseded") {
+            await reaper.deleteReplacedImages(
+              provider,
+              [{ imageBuildId: row.id, image: { providerImageId: "im-retained" } }],
+              ctx
+            );
+          }
+          expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
+          expect(store.deleteSupersededImage).not.toHaveBeenCalled();
+          expect(fetch).not.toHaveBeenCalled();
+        }
+      );
+    }
+
     it("deletes old failed rows and reaps superseded artifacts", async () => {
       const store = createStore();
       store.deleteOldFailedBuilds.mockResolvedValue(3);

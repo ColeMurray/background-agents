@@ -5,6 +5,7 @@ import {
   type MemorySearchResult,
 } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "./partition";
+import type { MemorySearchField } from "./search-fields";
 
 /** A partition to search; `pinnedIn` restricts it to records pinned in that session. */
 export interface FactSearchPartition {
@@ -33,16 +34,15 @@ export interface FactHit {
 }
 
 /**
- * Ranking policy: each term scores its strongest matching field, and a hit's score is the sum
- * over terms. Ties fall back to the most recently updated, then ID. Engine adapters must
- * implement this ordering; listed strongest first.
+ * Ranking policy: each term scores its strongest matching field (see MEMORY_SEARCH_FIELDS), and a
+ * hit's score is the sum over terms. Ties fall back to the most recently updated, then ID. Engine
+ * adapters must implement this ordering.
  */
-export const FACT_SEARCH_FIELDS = [
-  { field: "title", weight: 5 },
-  { field: "description", weight: 3 },
-  { field: "content", weight: 1 },
-] as const;
-export type FactSearchField = (typeof FACT_SEARCH_FIELDS)[number]["field"];
+export const FACT_SEARCH_WEIGHTS = {
+  title: 5,
+  description: 3,
+  content: 1,
+} as const satisfies Record<MemorySearchField, number>;
 
 /** Searches current active facts. Implementations decide how; the query decides what. */
 export interface FactSearchIndex {

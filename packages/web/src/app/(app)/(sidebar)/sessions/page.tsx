@@ -24,9 +24,50 @@ import {
   parseSessionDiscoveryQuery,
   type SessionDiscoveryQuery,
 } from "@/lib/session-discovery";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 
-const SEARCH_DEBOUNCE_MS = 300;
 const MANAGE_ARCHIVED_SESSIONS_HREF = "/settings?tab=data-controls";
+/** Varied title widths so the placeholder rows read as a list rather than a block. */
+const SESSION_SKELETON_TITLE_WIDTHS = [
+  "w-2/3",
+  "w-1/2",
+  "w-3/4",
+  "w-2/5",
+  "w-3/5",
+  "w-1/2",
+  "w-2/3",
+  "w-2/5",
+];
+
+/**
+ * Mirrors `SessionDiscoveryResults` rows so loading doesn't shift the list. Hidden from
+ * assistive tech because the page's always-mounted status line announces loading.
+ */
+function SessionResultsSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="sessions-skeleton"
+      className="animate-pulse motion-reduce:animate-none divide-y divide-border-muted rounded-md border border-border-muted"
+    >
+      {SESSION_SKELETON_TITLE_WIDTHS.map((titleWidth, index) => (
+        <div key={index} className="px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex h-5 min-w-0 flex-1 items-center">
+              <div className={`h-3.5 rounded bg-muted ${titleWidth}`} />
+            </div>
+            <div className="h-5 w-14 shrink-0 rounded-sm bg-muted" />
+          </div>
+          <div className="mt-1 flex h-4 items-center gap-2">
+            <div className="h-3 w-32 rounded bg-muted" />
+            <div className="h-3 w-16 rounded bg-muted" />
+            <div className="h-3 w-12 rounded bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function SessionsPage() {
   return (
@@ -367,9 +408,7 @@ function SessionsContent() {
               ) : null}
 
               {invalidParams.length > 0 || teamError ? null : loading || teamLoading ? (
-                <div aria-hidden="true" className="flex justify-center py-12">
-                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
-                </div>
+                <SessionResultsSkeleton />
               ) : showEmptyState ? (
                 hasFilters ? (
                   <div className="rounded-md border border-dashed border-border-muted px-4 py-10 text-center">

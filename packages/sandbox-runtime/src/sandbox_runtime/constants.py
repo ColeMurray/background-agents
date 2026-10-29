@@ -1,7 +1,16 @@
 """Shared constants for sandbox modules."""
 
-# Provider-selected directory for standalone runtime commands. OpenComputer uses
-# the sandbox user's bin directory; providers with writable images use /usr/local/bin.
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+# Provider-selected directory for standalone runtime commands. Prebuilt sandbox
+# images use the sandbox user's bin directory; otherwise /usr/local/bin is used.
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 
 # Trusted launch signal: the provider sets it to "true" only for a sandbox it
@@ -57,6 +66,13 @@ EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
 # longer so deferred Queue finalization can snapshot it after this budget ends.
 IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"
 
+# Path of a file the supervisor creates once a session boot has completed
+# (checkout synced, setup run, harness up). Set by a provider that restarts the
+# runtime on the same disk (Boat's launcher), so its next start can tell a
+# completed first boot, which resumes in restored mode, from one that was
+# interrupted, which boots fresh again. Unset on every other provider.
+BOOT_COMPLETE_MARKER_ENV_VAR = "OI_BOOT_COMPLETE_MARKER"
+
 # Boot events appended by the supervisor (which has no control-plane event
 # channel) and relayed by the bridge: phase lines become `boot_progress`
 # sandbox events, warning lines become `warning` events. JSONL, one object per
@@ -68,9 +84,29 @@ BRIDGE_FATAL_ERROR_FILE_PATH = "/tmp/oi-bridge-fatal-error.txt"
 # Supervisor → bridge handoff for the Claude harness (workdir, config dir, MCP servers).
 CLAUDE_HARNESS_FILE_PATH = "/tmp/oi-claude-harness.json"
 
+# Runtime state that must outlive a boot of the same disk: the harness session
+# id and the repository manifest, which carries the session-start commits the
+# first boot discovered. By default it lives in the temp directory, which every
+# provider that restores a filesystem snapshot keeps. A provider that drops
+# /tmp between boots (Boat) points this at a persisted directory instead.
+STATE_DIR_ENV_VAR = "OPENINSPECT_STATE_DIR"
+REPO_MANIFEST_FILE_NAME = "oi-repo-manifest.json"
+
+
+def runtime_state_dir(default: str | Path, environment: Mapping[str, str] | None = None) -> Path:
+    """The directory for cross-boot runtime state: the provider's, else `default`."""
+    source = os.environ if environment is None else environment
+    configured = source.get(STATE_DIR_ENV_VAR)
+    return Path(configured) if configured else Path(default)
+
+
 # Canonical repository manifest written by the supervisor before any child
 # process starts, rewritten on every boot. Consumed by the bridge (push
 # targeting) and the JS create-pull-request tool so the /workspace checkout
 # layout has a single authority. JSON: {"repositories": [{owner, name, branch,
-# path}]}. Mirrored as a string literal in plugins/inspect-plugin.js.
-REPO_MANIFEST_FILE_PATH = "/tmp/oi-repo-manifest.json"
+# path, baseSha?}]}. plugins/inspect-plugin.js derives the same path from
+# STATE_DIR_ENV_VAR and REPO_MANIFEST_FILE_NAME.
+REPO_MANIFEST_FILE_PATH = str(runtime_state_dir("/tmp") / REPO_MANIFEST_FILE_NAME)
+
+# Supervisor-to-bridge decisions only; no credentials.
+CODEX_HARNESS_FILE_PATH = "/tmp/codex-harness.json"

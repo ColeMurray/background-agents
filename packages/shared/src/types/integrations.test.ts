@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
+  DEFAULT_MODAL_CPU_CORES,
+  DEFAULT_MODAL_MEMORY_MIB,
+  DEFAULT_MODAL_VM_CPU_CORES,
+  DEFAULT_MODAL_VM_MEMORY_MIB,
   INTERNAL_TTYD_PORT,
   INTERNAL_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
@@ -14,7 +18,9 @@ import {
   normalizeRoutingRules,
   omitUnsupportedSandboxSettings,
   resolveBuildTimeoutSeconds,
+  sandboxSettingCapabilities,
   supportsConfigurableSandboxResources,
+  supportsConfigurableSandboxResourceLimits,
   supportsConfigurableSandboxTimeout,
   scmGlobalConfigSchema,
   scmSettingsSchema,
@@ -27,8 +33,11 @@ import {
   integrationSettingsSchemas,
   slackIntegrationSettingsRoutingResponseSchema,
   validateSandboxChildSessionLimits,
+  validateSandboxResourceLimits,
   type LinearBotGlobalSettings,
   type LinearGlobalConfig,
+  type SandboxProviderName,
+  type SandboxResources,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -87,17 +96,129 @@ describe("Linear unbound channel policy", () => {
   });
 });
 
+describe("sandbox resource limit validation", () => {
+  it("requires a typed provider", () => {
+    expectTypeOf(validateSandboxResourceLimits).parameters.toEqualTypeOf<
+      [SandboxResources, SandboxProviderName]
+    >();
+  });
+
+  it.each(["modal", "modal-vm"] as const)("compares explicit requests for %s", (provider) => {
+    expect(validateSandboxResourceLimits({ cpuCores: 4, cpuLimitCores: 2 }, provider)).toContain(
+      "cpuLimitCores"
+    );
+    expect(
+      validateSandboxResourceLimits({ memoryMib: 8192, memoryLimitMib: 4096 }, provider)
+    ).toContain("memoryLimitMib");
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, cpuLimitCores: 4, memoryMib: 8192, memoryLimitMib: 8192 },
+        provider
+      )
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits({ cpuCores: 4, memoryMib: 8192 }, provider)
+    ).toBeUndefined();
+    expect(
+      validateSandboxResourceLimits(
+        { cpuCores: 4, memoryMib: 8192, cpuLimitCores: null, memoryLimitMib: null },
+        provider
+      )
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { provider: "modal", cpuCores: DEFAULT_MODAL_CPU_CORES, memoryMib: DEFAULT_MODAL_MEMORY_MIB },
+    {
+      provider: "modal-vm",
+      cpuCores: DEFAULT_MODAL_VM_CPU_CORES,
+      memoryMib: DEFAULT_MODAL_VM_MEMORY_MIB,
+    },
+  ] as const)(
+    "uses request defaults for absent and null $provider requests",
+    ({ provider, cpuCores, memoryMib }) => {
+      for (const request of [undefined, null]) {
+        expect(
+          validateSandboxResourceLimits(
+            { cpuCores: request, cpuLimitCores: cpuCores / 2 },
+            provider
+          )
+        ).toContain("cpuLimitCores");
+        expect(
+          validateSandboxResourceLimits(
+            { memoryMib: request, memoryLimitMib: memoryMib / 2 },
+            provider
+          )
+        ).toContain("memoryLimitMib");
+        expect(
+          validateSandboxResourceLimits(
+            {
+              cpuCores: request,
+              memoryMib: request,
+              cpuLimitCores: cpuCores,
+              memoryLimitMib: memoryMib,
+            },
+            provider
+          )
+        ).toBeUndefined();
+      }
+    }
+  );
+
+  it.each(["vercel", "daytona", "e2b", "boat"] as const)(
+    "does not compare unused caps for %s",
+    (provider) => {
+      expect(
+        validateSandboxResourceLimits(
+          { cpuCores: 4, cpuLimitCores: 2, memoryMib: 8192, memoryLimitMib: 4096 },
+          provider
+        )
+      ).toBeUndefined();
+    }
+  );
+});
+
 describe("sandbox provider settings capabilities", () => {
-  it.each(["modal", "vercel"])("allows resource overrides for %s", (provider) => {
+  it.each([
+    { provider: "modal", resources: true, resourceLimits: true, timeout: true },
+    { provider: "modal-vm", resources: true, resourceLimits: true, timeout: true },
+    { provider: "daytona", resources: false, resourceLimits: false, timeout: false },
+    { provider: "vercel", resources: true, resourceLimits: false, timeout: true },
+    { provider: "e2b", resources: false, resourceLimits: false, timeout: true },
+    { provider: "boat", resources: true, resourceLimits: false, timeout: true },
+  ])("resolves canonical capabilities for $provider", ({ provider, ...capabilities }) => {
+    expect(sandboxSettingCapabilities(provider)).toEqual(capabilities);
+    expect(sandboxSettingCapabilities(` ${provider.toUpperCase()} `)).toEqual(capabilities);
+    expect(supportsConfigurableSandboxResources(provider)).toBe(capabilities.resources);
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(capabilities.resourceLimits);
+    expect(supportsConfigurableSandboxTimeout(provider)).toBe(capabilities.timeout);
+  });
+
+  it.each(["modal", "modal-vm"])("preserves resource caps for %s", (provider) => {
+    const settings = { cpuLimitCores: 2, memoryLimitMib: null };
+    expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(true);
+    expect(omitUnsupportedSandboxSettings(settings, provider)).toEqual(settings);
+  });
+
+  it.each(["vercel", "daytona", "e2b", "boat", "test-provider"])(
+    "ignores resource caps for %s",
+    (provider) => {
+      expect(supportsConfigurableSandboxResourceLimits(provider)).toBe(false);
+      expect(
+        omitUnsupportedSandboxSettings(
+          { cpuLimitCores: 2, memoryLimitMib: null, terminalEnabled: true },
+          provider
+        )
+      ).toEqual({ terminalEnabled: true });
+    }
+  );
+  it.each(["modal", "vercel", "boat"])("allows resource overrides for %s", (provider) => {
     expect(supportsConfigurableSandboxResources(provider)).toBe(true);
   });
 
-  it.each(["daytona", "opencomputer", "e2b"])(
-    "does not expose resource overrides for %s",
-    (provider) => {
-      expect(supportsConfigurableSandboxResources(provider)).toBe(false);
-    }
-  );
+  it.each(["daytona", "e2b"])("does not expose resource overrides for %s", (provider) => {
+    expect(supportsConfigurableSandboxResources(provider)).toBe(false);
+  });
 
   it("does not expose session timeout overrides for Daytona", () => {
     expect(supportsConfigurableSandboxTimeout("daytona")).toBe(false);
@@ -105,7 +226,13 @@ describe("sandbox provider settings capabilities", () => {
   });
 
   it("uses the explicit permissive fallback for unvalidated provider names", () => {
+    expect(sandboxSettingCapabilities("test-provider")).toEqual({
+      resources: true,
+      resourceLimits: false,
+      timeout: true,
+    });
     expect(supportsConfigurableSandboxResources("test-provider")).toBe(true);
+    expect(supportsConfigurableSandboxResourceLimits("test-provider")).toBe(false);
     expect(supportsConfigurableSandboxTimeout("test-provider")).toBe(true);
   });
 
@@ -415,7 +542,12 @@ describe("integration settings schemas", () => {
 
   it("parses nullable sandbox resource settings", () => {
     expect(
-      integrationSettingsSchemas.sandbox.repo.safeParse({ cpuCores: null, memoryMib: null }).success
+      integrationSettingsSchemas.sandbox.repo.safeParse({
+        cpuCores: null,
+        memoryMib: null,
+        cpuLimitCores: null,
+        memoryLimitMib: null,
+      }).success
     ).toBe(true);
   });
 

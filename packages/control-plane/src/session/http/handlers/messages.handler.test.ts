@@ -57,6 +57,7 @@ describe("MessagesHandler", () => {
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
       messageId: "msg-1",
       status: "queued",
+      deduplicated: false,
     });
 
     const response = await handler.enqueuePrompt(
@@ -73,7 +74,11 @@ describe("MessagesHandler", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ messageId: "msg-1", status: "queued" });
+    expect(await response.json()).toEqual({
+      messageId: "msg-1",
+      status: "queued",
+      deduplicated: false,
+    });
     expect(messageService.enqueuePrompt).toHaveBeenCalledWith({
       content: "hello",
       authorId: "user-1",
@@ -86,6 +91,7 @@ describe("MessagesHandler", () => {
     vi.mocked(messageService.enqueuePrompt).mockResolvedValue({
       messageId: "msg-1",
       status: "queued",
+      deduplicated: false,
     });
 
     const body = {

@@ -150,33 +150,43 @@ function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlSt
 
     async first<T = Record<string, unknown>>(): Promise<T | null> {
       const start = Date.now();
-      const result = await stmt.first<T>();
-      metrics.sqlQueries.push({ query_ms: Date.now() - start });
-      return result;
+      try {
+        return await stmt.first<T>();
+      } finally {
+        metrics.sqlQueries.push({ query_ms: Date.now() - start });
+      }
     },
 
     async run<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
-      const result = await stmt.run<T>();
-      metrics.sqlQueries.push({
-        query_ms: Date.now() - start,
-        engine_ms: result.meta?.duration,
-        rows_read: result.meta?.rows_read,
-        rows_written: result.meta?.rows_written,
-      });
-      return result;
+      let result: SqlResult<T> | undefined;
+      try {
+        result = await stmt.run<T>();
+        return result;
+      } finally {
+        metrics.sqlQueries.push({
+          query_ms: Date.now() - start,
+          engine_ms: result?.meta?.duration,
+          rows_read: result?.meta?.rows_read,
+          rows_written: result?.meta?.rows_written,
+        });
+      }
     },
 
     async all<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
-      const result = await stmt.all<T>();
-      metrics.sqlQueries.push({
-        query_ms: Date.now() - start,
-        engine_ms: result.meta?.duration,
-        rows_read: result.meta?.rows_read,
-        rows_written: result.meta?.rows_written,
-      });
-      return result;
+      let result: SqlResult<T> | undefined;
+      try {
+        result = await stmt.all<T>();
+        return result;
+      } finally {
+        metrics.sqlQueries.push({
+          query_ms: Date.now() - start,
+          engine_ms: result?.meta?.duration,
+          rows_read: result?.meta?.rows_read,
+          rows_written: result?.meta?.rows_written,
+        });
+      }
     },
   };
 
@@ -203,24 +213,26 @@ export function instrumentSqlDatabase(db: SqlDatabase, metrics: RequestMetrics):
 
     async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
       const start = Date.now();
-      const results = await db.batch<T>(statements.map(unwrapStatement));
-      const elapsed = Date.now() - start;
-
-      // One record for the batch, each field the sum over the statements
-      // whose engine reported it.
-      const reported = results.map((r) => ({
-        engine_ms: r.meta?.duration,
-        rows_read: r.meta?.rows_read,
-        rows_written: r.meta?.rows_written,
-      }));
-      metrics.sqlQueries.push({
-        query_ms: elapsed,
-        engine_ms: reportedTotal(reported, "engine_ms"),
-        rows_read: reportedTotal(reported, "rows_read"),
-        rows_written: reportedTotal(reported, "rows_written"),
-      });
-
-      return results;
+      let results: SqlResult<T>[] | undefined;
+      try {
+        results = await db.batch<T>(statements.map(unwrapStatement));
+        return results;
+      } finally {
+        const elapsed = Date.now() - start;
+        // One record per batch attempt, including failures. Missing engine
+        // metadata is unknown, not zero (nor evidence of a rolled-back write).
+        const reported = (results ?? []).map((r) => ({
+          engine_ms: r.meta?.duration,
+          rows_read: r.meta?.rows_read,
+          rows_written: r.meta?.rows_written,
+        }));
+        metrics.sqlQueries.push({
+          query_ms: elapsed,
+          engine_ms: reportedTotal(reported, "engine_ms"),
+          rows_read: reportedTotal(reported, "rows_read"),
+          rows_written: reportedTotal(reported, "rows_written"),
+        });
+      }
     },
   };
 }

@@ -8,7 +8,11 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import type {
+  McpServerConfig,
+  SandboxResources,
+  SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
@@ -280,7 +284,7 @@ export interface SnapshotBuildSandboxRequest {
 }
 
 export interface CreateImageBuildSandboxRequest {
-  resources?: Pick<SandboxSettings, "cpuCores" | "memoryMib">;
+  resources?: SandboxResources;
   sandboxBackend?: ModalBackend;
   /** Scope kind ("repo" | "environment") — accepted by Modal for logging only. */
   scopeKind: ImageBuildScopeKind;
@@ -344,11 +348,7 @@ export function isAmbiguousModalVmLaunchError(error: ModalApiError): boolean {
 }
 
 export type ModalVmStartupOutcome =
-  | "unknown"
-  | "not_visible"
-  | "other_generation"
-  | "window_closed"
-  | "race_pending";
+  "unknown" | "not_visible" | "other_generation" | "window_closed" | "race_pending";
 
 export class ModalVmStartupError extends Error {
   constructor(

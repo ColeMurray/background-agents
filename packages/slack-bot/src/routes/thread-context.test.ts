@@ -22,7 +22,7 @@ vi.mock("@open-inspect/shared/slack", async () => {
 });
 
 import { threadContextRoutes } from "./thread-context";
-import { clearBotUserIdCache } from "../bot-identity";
+import { clearBotIdentityCache } from "../bot-identity";
 import type { ThreadContextRecord } from "../thread-context";
 
 const SECRET = "callback-secret";
@@ -69,7 +69,7 @@ function parsePayload(threadContext: string): ThreadContextRecord[] {
 describe("POST /internal/thread-context", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearBotUserIdCache();
+    clearBotIdentityCache();
     mockAuthTest.mockResolvedValue({ ok: true, user_id: "UBOT" });
     mockResolveUserNames.mockResolvedValue(new Map([["U111", "Quynh Nguyen"]]));
   });

@@ -4,10 +4,15 @@
 
 import type { TeamRepoMapping, StaticTargetConfig } from "./types";
 import {
-  getDefaultReasoningEffort,
+  DEFAULT_HARNESS,
+  getHarnessReasoningConfig,
+  HARNESS_IDS,
+  isValidHarnessReasoningEffort,
+  type HarnessId,
+} from "@open-inspect/shared/harnesses";
+import {
   getValidModelOrDefault,
   isValidModel,
-  isValidReasoningEffort,
   normalizeModelId,
   type ValidModel,
 } from "@open-inspect/shared/models";
@@ -62,8 +67,10 @@ export function extractModelFromLabels(labels: Array<{ name: string }>): ValidMo
   return null;
 }
 
-export interface ResolveSessionModelInput {
+export interface ResolveSessionAgentInput {
   envDefaultModel: string;
+  /** Configured harness preference; absent means the built-in harness. */
+  configHarness?: HarnessId;
   configModel: string | null;
   configReasoningEffort: string | null;
   allowUserPreferenceOverride: boolean;
@@ -73,7 +80,13 @@ export interface ResolveSessionModelInput {
   labelModel?: string | null;
 }
 
-export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
+/**
+ * Resolve the model (label → user preference → config → env default), its
+ * reasoning effort, and the configured harness. Compatibility is checked by
+ * the webhook handler before session creation.
+ */
+export function resolveSessionAgentSettings(input: ResolveSessionAgentInput): {
+  harness: HarnessId;
   model: string;
   reasoningEffort: string | undefined;
 } {
@@ -91,23 +104,41 @@ export function resolveSessionModelSettings(input: ResolveSessionModelInput): {
   }
 
   const normalizedModel = getValidModelOrDefault(model);
+  const harness = input.configHarness ?? DEFAULT_HARNESS;
+  return {
+    harness,
+    model: normalizedModel,
+    reasoningEffort: resolveReasoningEffort(input, harness, normalizedModel, modelSource),
+  };
+}
 
+function resolveReasoningEffort(
+  input: ResolveSessionAgentInput,
+  harness: HarnessId,
+  model: string,
+  modelSource: "config" | "env" | "user" | "label"
+): string | undefined {
   if (
     input.allowUserPreferenceOverride &&
     input.userReasoningEffort &&
-    isValidReasoningEffort(normalizedModel, input.userReasoningEffort)
+    isValidHarnessReasoningEffort(harness, model, input.userReasoningEffort)
   ) {
-    return { model: normalizedModel, reasoningEffort: input.userReasoningEffort };
+    return input.userReasoningEffort;
   }
 
+  // Preserve a recognized configured effort for launch admission to validate
+  // against the resolved harness; discard malformed or retired values.
+  const configuredEffort = input.configReasoningEffort;
   if (
     modelSource !== "user" &&
     modelSource !== "label" &&
-    input.configReasoningEffort &&
-    isValidReasoningEffort(normalizedModel, input.configReasoningEffort)
+    configuredEffort &&
+    HARNESS_IDS.some((candidate) =>
+      isValidHarnessReasoningEffort(candidate, model, configuredEffort)
+    )
   ) {
-    return { model: normalizedModel, reasoningEffort: input.configReasoningEffort };
+    return configuredEffort;
   }
 
-  return { model: normalizedModel, reasoningEffort: getDefaultReasoningEffort(normalizedModel) };
+  return getHarnessReasoningConfig(harness, model)?.default;
 }

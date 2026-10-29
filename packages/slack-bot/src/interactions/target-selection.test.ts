@@ -291,12 +291,15 @@ describe("handleTargetSelection", () => {
       inlinePromptOptions: { model: "openai/gpt-5.6-sol", reasoningEffort: "high" },
     });
     const launchSettings = {
+      modelSource: "app-home" as const,
       enabledModels: ["openai/gpt-5.6-sol" as const],
-      slackConfig: {},
+      slackConfig: { harness: "opencode" as const },
       userPreferences: {
         model: "anthropic/claude-sonnet-4-6",
+        modelOrigin: "app-home" as const,
         reasoningEffort: "max",
         branch: undefined,
+        harness: "opencode" as const,
       },
     };
     vi.mocked(loadAuthoritativeSlackLaunchSettings).mockResolvedValue(launchSettings);

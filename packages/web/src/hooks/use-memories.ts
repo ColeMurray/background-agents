@@ -1,6 +1,8 @@
 import useSWR from "swr";
 import type { z } from "zod";
 import {
+  bulkMemoryActionResponseSchema,
+  MEMORY_BULK_ACTION_MAX_RECORDS,
   MEMORY_LIST_PAGE_SIZE,
   memoryActionAcceptsNote,
   memoryListResponseSchema,
@@ -9,13 +11,15 @@ import {
   memoryRevisionsResponseSchema,
   memoryScopeToSearchParams,
   sessionMemorySelectionStatusSchema,
+  type BulkMemoryActionInput,
+  type BulkMemoryActionResponse,
   type CreateMemoryInput,
   type MemoryAction,
   type MemoryActionBody,
   type MemoryContent,
   type MemoryDto,
   type MemoryPreferences,
-  type MemoryScope,
+  type MemoryListScope,
   type MemoryStatus,
 } from "@open-inspect/shared/types/memories";
 import { useAuthSession } from "@/lib/auth-session";
@@ -36,24 +40,39 @@ function apiRequest<T>(path: BrowserApiPath, schema: z.ZodType<T>, init?: Reques
   return browserApiJson(path, schema, "Memory request failed", init);
 }
 
-function memoryListKey(scope: MemoryScope, status: MemoryStatus, offset: number): BrowserApiPath {
-  const query = memoryScopeToSearchParams(scope);
+function memoryListKey(
+  scope: MemoryListScope,
+  status: MemoryStatus,
+  offset: number,
+  search: string
+): BrowserApiPath {
+  const query =
+    scope === "shared"
+      ? new URLSearchParams({ scope: "shared" })
+      : memoryScopeToSearchParams(scope);
   query.set("status", status);
   query.set("offset", String(offset));
   query.set("limit", String(MEMORY_LIST_PAGE_SIZE));
+  if (search) query.set("search", search);
   return `${MEMORIES_KEY}?${query}`;
 }
 
-/** Cache each management page independently by scope, status, and offset. */
-export function useMemories(scope: MemoryScope, status: MemoryStatus, offset: number) {
+/** Cache each management page independently by scope, status, offset, and search text. */
+export function useMemories(
+  scope: MemoryListScope,
+  status: MemoryStatus,
+  offset: number,
+  search: string
+) {
   const { data: session, status: authStatus } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR(
-    session ? memoryListKey(scope, status, offset) : null,
+    session ? memoryListKey(scope, status, offset, search) : null,
     (path) => apiRequest(path, memoryListResponseSchema)
   );
   return {
     memories: data?.memories ?? [],
     nextOffset: data?.nextOffset ?? null,
+    truncated: data?.truncated ?? false,
     canCreate: data?.canCreate ?? false,
     loading: authStatus === "loading" || isLoading,
     error,
@@ -140,15 +159,19 @@ export async function reviseMemory(
   ).memory;
 }
 
+/** A trimmed archive note, sent only with actions that archive. */
+function actionNote(action: MemoryAction, archiveNote?: string): { archiveNote?: string } {
+  const note = archiveNote?.trim();
+  return note && memoryActionAcceptsNote(action) ? { archiveNote: note } : {};
+}
+
 /** Apply a lifecycle action; an archive note is sent only with actions that archive. */
 export async function applyMemoryAction(
   record: ReviewedMemory,
   action: MemoryAction,
   archiveNote?: string
 ): Promise<MemoryDto> {
-  const note = archiveNote?.trim();
-  const body: MemoryActionBody =
-    note && memoryActionAcceptsNote(action) ? { archiveNote: note } : {};
+  const body: MemoryActionBody = actionNote(action, archiveNote);
   return (
     await apiRequest(`${memoryPath(record.id)}/${action}`, memoryResponseSchema, {
       method: "POST",
@@ -156,6 +179,40 @@ export async function applyMemoryAction(
       body: JSON.stringify(body),
     })
   ).memory;
+}
+
+/**
+ * Apply one action to several reviewed records; the server decides each independently. Selections
+ * larger than one request allows go in sequential requests. A failed request stops the rest, and
+ * its records and the unsent ones are reported as failed so earlier results still count.
+ */
+export async function applyBulkMemoryAction(
+  records: readonly ReviewedMemory[],
+  action: MemoryAction,
+  archiveNote?: string
+): Promise<BulkMemoryActionResponse["results"]> {
+  const results: BulkMemoryActionResponse["results"] = [];
+  for (let start = 0; start < records.length; start += MEMORY_BULK_ACTION_MAX_RECORDS) {
+    const body: BulkMemoryActionInput = {
+      action,
+      memories: records
+        .slice(start, start + MEMORY_BULK_ACTION_MAX_RECORDS)
+        .map((record) => ({ id: record.id, revisionId: record.currentRevisionId })),
+      ...actionNote(action, archiveNote),
+    };
+    try {
+      const response = await apiRequest(`${MEMORIES_KEY}/bulk`, bulkMemoryActionResponseSchema, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      results.push(...response.results);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "Memory request failed";
+      results.push(...records.slice(start).map(({ id }) => ({ id, ok: false as const, error })));
+      break;
+    }
+  }
+  return results;
 }
 
 export async function setMemoryPreferences(input: MemoryPreferences): Promise<MemoryPreferences> {

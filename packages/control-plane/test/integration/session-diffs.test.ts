@@ -9,6 +9,7 @@ import {
   queryDO,
   seedSandboxAuth,
   serviceFetch,
+  closeWebSocket,
 } from "./helpers";
 
 async function reportReady(
@@ -344,6 +345,6 @@ describe("session diff routes", () => {
 
     expect(response.status).toBe(202);
     expect(await messages).toContainEqual({ type: "refresh_diff" });
-    ws!.close(1000, "done");
+    await closeWebSocket(ws!, { code: 1000, reason: "done" });
   });
 });

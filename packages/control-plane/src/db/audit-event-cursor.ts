@@ -6,8 +6,7 @@ export interface AuditEventCursor {
 }
 
 type ParseAuditEventCursorResult =
-  | { ok: true; cursor: AuditEventCursor | null }
-  | { ok: false; error: "Invalid cursor" };
+  { ok: true; cursor: AuditEventCursor | null } | { ok: false; error: "Invalid cursor" };
 
 export function encodeAuditEventCursor(cursor: AuditEventCursor): string {
   return `${cursor.occurredAt}:${encodeURIComponent(cursor.id)}`;

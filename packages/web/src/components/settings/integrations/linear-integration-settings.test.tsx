@@ -9,18 +9,34 @@ import type {
   LinearBotSettings,
   LinearGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
+import type { ModelCategory } from "@open-inspect/shared/models";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { LinearIntegrationSettings } from "./linear-integration-settings";
 
 expect.extend(matchers);
 
-const { authorization, useSWRMock, mutateMock, toastSuccess, toastError } = vi.hoisted(() => ({
-  authorization: { canManageGlobal: true },
-  useSWRMock: vi.fn(),
-  mutateMock: vi.fn(),
-  toastSuccess: vi.fn(),
-  toastError: vi.fn(),
-}));
+const { authorization, modelOptions, useSWRMock, mutateMock, toastSuccess, toastError } =
+  vi.hoisted(() => ({
+    authorization: { canManageGlobal: true },
+    modelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6", description: "" }],
+      },
+      {
+        category: "OpenAI",
+        models: [
+          { id: "openai/gpt-6-sol", name: "GPT 6 Sol", description: "" },
+          { id: "openai/gpt-5.6-sol", name: "GPT 5.6 Sol", description: "" },
+        ],
+      },
+    ] satisfies ModelCategory[],
+    useSWRMock: vi.fn(),
+    mutateMock: vi.fn(),
+    toastSuccess: vi.fn(),
+    toastError: vi.fn(),
+  }));
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
@@ -29,7 +45,7 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
   }),
 }));
 vi.mock("@/hooks/use-enabled-models", () => ({
-  useEnabledModels: () => ({ enabledModelOptions: [] }),
+  useEnabledModels: () => ({ enabledModelOptions: modelOptions }),
 }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: vi.fn() }));
 vi.mock("swr", () => ({ default: useSWRMock, mutate: mutateMock }));
@@ -41,6 +57,7 @@ const repoKey = "/api/integration-settings/linear/repos";
 function setupSWR(opts: {
   settings?: LinearGlobalConfig | null;
   overrides?: { repo: string; settings: LinearBotSettings }[];
+  availableRepos?: EnrichedRepository[];
 }) {
   useSWRMock.mockImplementation((key: string) => {
     if (key === globalKey) {
@@ -52,7 +69,7 @@ function setupSWR(opts: {
     if (key === repoKey) {
       return { data: { repos: opts.overrides ?? [] }, isLoading: false };
     }
-    return { data: { repos: [] }, isLoading: false };
+    return { data: { repos: opts.availableRepos ?? [] }, isLoading: false };
   });
 }
 
@@ -61,6 +78,87 @@ beforeEach(() => {
   authorization.canManageGlobal = true;
 });
 afterEach(cleanup);
+
+describe("LinearIntegrationSettings repository overrides", () => {
+  it("retains a failed repository addition for retry and clears it after success", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      availableRepos: [
+        {
+          id: 1,
+          owner: "Group/Subgroup",
+          name: "Repository",
+          fullName: "Group/Subgroup/Repository",
+          description: null,
+          private: false,
+          archived: false,
+          defaultBranch: "main",
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch)
+      .mockRejectedValueOnce(new Error("Offline"))
+      .mockResolvedValueOnce(new Response("{}"));
+    render(<LinearIntegrationSettings />);
+
+    const picker = screen.getByRole("combobox", { name: "Select a repository" });
+    const add = screen.getByRole("button", { name: "Add Override" });
+    expect(add).toBeDisabled();
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: "Group/Subgroup/Repository" }));
+    await user.click(add);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Failed to add override"));
+    expect(browserApiFetch).toHaveBeenCalledWith(
+      `${repoKey}/group%2Fsubgroup/repository`,
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ settings: {} }) })
+    );
+    expect(picker).toHaveTextContent("Group/Subgroup/Repository");
+    expect(add).toBeEnabled();
+    expect(mutateMock).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+
+    await user.click(add);
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Override added."));
+    expect(browserApiFetch).toHaveBeenCalledTimes(2);
+    expect(mutateMock).toHaveBeenCalledWith(repoKey);
+    expect(picker).toHaveTextContent("Select a repository...");
+    expect(add).toBeDisabled();
+  });
+});
+
+describe("LinearIntegrationSettings repository scope", () => {
+  it("saves the selected repository allowlist", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      availableRepos: [
+        {
+          id: 1,
+          owner: "Group/Subgroup",
+          name: "Repository",
+          fullName: "Group/Subgroup/Repository",
+          description: null,
+          private: false,
+          archived: false,
+          defaultBranch: "main",
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+
+    render(<LinearIntegrationSettings />);
+
+    await user.click(screen.getByRole("radio", { name: /Selected repositories/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Group/Subgroup/Repository" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings.enabledRepos).toEqual(["group/subgroup/repository"]);
+  });
+});
 
 describe("LinearIntegrationSettings unbound policy", () => {
   it("closes the open policy menu when permission is revoked without changing the value", async () => {
@@ -270,5 +368,360 @@ describe("LinearIntegrationSettings unbound policy", () => {
         },
       }),
     });
+  });
+});
+
+describe("LinearIntegrationSettings harness", () => {
+  async function optionNames(user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement) {
+    await user.click(trigger);
+    const names = screen.getAllByRole("option").map((option) => option.textContent);
+    await user.keyboard("{Escape}");
+    return names;
+  }
+
+  it("requires a compatible default model when switching the global harness to Claude Agent", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: { defaults: { model: "openai/gpt-6-sol", reasoningEffort: "high" } },
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    const harness = screen.getByRole("combobox", { name: "Agent harness" });
+    const model = screen.getByRole("combobox", { name: "Default model" });
+    expect(harness).toHaveTextContent("OpenCode");
+    expect(await optionNames(user, model)).toContain("GPT 6 Sol");
+
+    await user.click(harness);
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+
+    expect(model).toHaveTextContent("Choose a model");
+    expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6"]);
+    expect(screen.getByText(/Choose a default model Claude Agent can run/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Default reasoning effort" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(browserApiFetch).not.toHaveBeenCalled();
+
+    await user.click(model);
+    await user.click(await screen.findByRole("option", { name: "Claude Sonnet 4.6" }));
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings.defaults).toMatchObject({
+      harness: "claude",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(body.settings.defaults).not.toHaveProperty("reasoningEffort");
+  });
+
+  it("offers Codex reasoning efforts for global defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: {
+        defaults: {
+          harness: "codex",
+          model: "openai/gpt-5.6-sol",
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    render(<LinearIntegrationSettings />);
+
+    const reasoning = screen.getByRole("combobox", { name: "Default reasoning effort" });
+    expect(reasoning).toHaveTextContent("max");
+    await user.click(reasoning);
+    expect(screen.getByRole("option", { name: "max" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "none" })).not.toBeInTheDocument();
+  });
+
+  it("filters repository models by the inherited harness and saves an explicit override", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: {} }],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    const [harness, model] = within(row).getAllByRole("combobox");
+    expect(harness).toHaveTextContent("Inherit (Claude Agent)");
+    expect(await optionNames(user, model)).toEqual(["Use global model", "Claude Sonnet 4.6"]);
+
+    await user.click(harness);
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    await user.click(model);
+    await user.click(await screen.findByRole("option", { name: "GPT 6 Sol" }));
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(repoKey));
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings).toMatchObject({ harness: "opencode", model: "openai/gpt-6-sol" });
+  });
+
+  it.each([undefined, "anthropic/claude-sonnet-4-6", "openai/gpt-6-sol"])(
+    "requires a repo model with an explicit Claude harness despite global model=%s",
+    async (inheritedModel) => {
+      const user = userEvent.setup();
+      setupSWR({
+        settings: { defaults: { model: inheritedModel } },
+        overrides: [{ repo: "acme/web", settings: {} }],
+      });
+      vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+      render(<LinearIntegrationSettings />);
+      const row = screen.getByText("acme/web").parentElement!;
+      const harness = within(row).getByRole("combobox", { name: "Agent harness" });
+      const model = within(row).getByRole("combobox", { name: "Model" });
+      await user.click(harness);
+      await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+
+      expect(model).toHaveTextContent("Choose a model");
+      expect(await optionNames(user, model)).toEqual(["Claude Sonnet 4.6"]);
+      expect(within(row).getByText(/requires a model at the same level/)).toBeInTheDocument();
+      expect(within(row).getByRole("button", { name: "Save" })).toBeDisabled();
+      await user.click(within(row).getByRole("button", { name: "Save" }));
+      expect(browserApiFetch).not.toHaveBeenCalled();
+
+      await user.click(model);
+      await user.click(await screen.findByRole("option", { name: "Claude Sonnet 4.6" }));
+      await user.click(within(row).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(repoKey));
+      const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+      expect(body.settings).toMatchObject({
+        harness: "claude",
+        model: "anthropic/claude-sonnet-4-6",
+      });
+    }
+  );
+
+  it.each([
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: undefined, warns: false },
+    { globalModel: undefined, repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-5", repoModel: undefined, warns: false },
+    { globalModel: "openai/gpt-6-sol", repoModel: undefined, warns: true },
+    { globalModel: "anthropic/claude-sonnet-4-6", repoModel: "openai/gpt-6-sol", warns: true },
+  ])("warns without blocking sparse saves: %j", async (selection) => {
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: selection.globalModel } },
+      overrides: [{ repo: "acme/web", settings: { model: selection.repoModel } }],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    expect(within(row).queryByText(/requires a model at the same level/)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/will fall back to OpenCode/)).not.toBeInTheDocument();
+    const warning = within(row).queryByText(/Sessions using this default model will be refused/);
+    if (selection.warns) {
+      expect(warning).toHaveTextContent("cannot run on the Claude Agent harness");
+    } else {
+      expect(warning).not.toBeInTheDocument();
+    }
+    fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
+    expect(within(row).getByRole("button", { name: "Save" })).toBeEnabled();
+    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(repoKey));
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings).toEqual({
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: false,
+      ...(selection.repoModel ? { model: selection.repoModel } : {}),
+    });
+  });
+
+  it("updates the non-blocking warning when the global harness changes", async () => {
+    setupSWR({
+      settings: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: { model: "openai/gpt-6-sol" } }],
+    });
+    const { rerender } = render(<LinearIntegrationSettings />);
+    expect(screen.queryByText(/Sessions using this default model will be refused/)).toBeNull();
+
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: { model: "openai/gpt-6-sol" } }],
+    });
+    rerender(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    expect(
+      within(row).getByText(/Sessions using this default model will be refused/)
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    expect(within(row).queryByText(/Sessions using this default model will be refused/)).toBeNull();
+    expect(within(row).getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("keeps a sparse effort visible when the inherited harness makes it incompatible", async () => {
+    setupSWR({
+      settings: { defaults: { model: "openai/gpt-5.6-sol" } },
+      overrides: [
+        {
+          repo: "acme/web",
+          settings: { model: "openai/gpt-5.6-sol", reasoningEffort: "none" },
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    const view = render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    const reasoning = within(row).getByRole("combobox", { name: "Reasoning effort" });
+    expect(reasoning).toHaveTextContent("none");
+    expect(within(row).queryByText(/Sessions using this default model will be refused/)).toBeNull();
+
+    setupSWR({
+      settings: { defaults: { harness: "codex", model: "openai/gpt-5.6-sol" } },
+      overrides: [
+        {
+          repo: "acme/web",
+          settings: { model: "openai/gpt-5.6-sol", reasoningEffort: "none" },
+        },
+      ],
+    });
+    view.rerender(<LinearIntegrationSettings />);
+
+    expect(reasoning).toHaveTextContent("none");
+    expect(
+      within(row).getByText(/Sessions using this default model will be refused/)
+    ).toHaveTextContent(
+      'Reasoning effort "none" cannot run on openai/gpt-5.6-sol with the Codex harness.'
+    );
+
+    fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mutateMock).toHaveBeenCalledWith(repoKey));
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "none",
+    });
+  });
+
+  it("requires a model for saved global Claude settings and describes launch refusal, not fallback", () => {
+    setupSWR({
+      settings: { defaults: { harness: "claude" } },
+      overrides: [{ repo: "acme/web", settings: {} }],
+    });
+    render(<LinearIntegrationSettings />);
+    expect(screen.getAllByText(/Choose a default model Claude Agent can run/)).toHaveLength(1);
+    expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
+      "Choose a model"
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Allow user model preferences" }));
+    expect(screen.getAllByRole("button", { name: "Save" })[0]).toBeDisabled();
+    expect(screen.getByText(/Linear refuses to launch a session/)).toBeInTheDocument();
+    expect(screen.queryByText(/will fall back to OpenCode/)).toBeNull();
+  });
+
+  it.each([undefined, "openai/gpt-6-sol", "anthropic/unknown-model"])(
+    "blocks a missing, incompatible, or impossible stored explicit model at both levels: %s",
+    (model) => {
+      setupSWR({
+        settings: { defaults: { harness: "claude", model } },
+        overrides: [{ repo: "acme/web", settings: { harness: "claude", model } }],
+      });
+      render(<LinearIntegrationSettings />);
+      fireEvent.click(screen.getByRole("checkbox", { name: "Allow user model preferences" }));
+      const row = screen.getByText("acme/web").parentElement!;
+      fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
+      for (const save of screen.getAllByRole("button", { name: "Save" })) {
+        expect(save).toBeDisabled();
+        fireEvent.click(save);
+      }
+      expect(browserApiFetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("clears an incompatible repo model and effort when selecting Claude Agent", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      overrides: [
+        {
+          repo: "acme/web",
+          settings: { harness: "opencode", model: "openai/gpt-6-sol", reasoningEffort: "high" },
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Agent" }));
+    expect(within(row).getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "Choose a model"
+    );
+    expect(within(row).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(within(row).getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "Claude Sonnet 4.6" }));
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings).toMatchObject({
+      harness: "claude",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(body.settings).not.toHaveProperty("reasoningEffort");
+  });
+
+  it("allows a repo to inherit the Claude harness and model after removing explicit selections", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [
+        { repo: "acme/web", settings: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    const row = screen.getByText("acme/web").parentElement!;
+    await user.click(within(row).getByRole("combobox", { name: "Agent harness" }));
+    await user.click(await screen.findByRole("option", { name: "Inherit (Claude Agent)" }));
+    await user.click(within(row).getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "Use global model" }));
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings).not.toHaveProperty("harness");
+    expect(body.settings).not.toHaveProperty("model");
+  });
+
+  it("keeps global system defaults and repo model inheritance available for OpenCode", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: { defaults: { harness: "claude", model: "anthropic/claude-sonnet-4-6" } },
+      overrides: [{ repo: "acme/web", settings: { harness: "opencode" } }],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValue(Response.json({ ok: true }));
+    render(<LinearIntegrationSettings />);
+    await user.click(screen.getAllByRole("combobox", { name: "Agent harness" })[0]);
+    await user.click(await screen.findByRole("option", { name: "OpenCode" }));
+    const model = screen.getByRole("combobox", { name: "Default model" });
+    expect(await optionNames(user, model)).toEqual([
+      "Use system default",
+      "Claude Sonnet 4.6",
+      "GPT 6 Sol",
+      "GPT 5.6 Sol",
+    ]);
+    await user.click(model);
+    await user.click(await screen.findByRole("option", { name: "Use system default" }));
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]);
+    const globalBody = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(globalBody.settings.defaults).not.toHaveProperty("harness");
+    expect(globalBody.settings.defaults).not.toHaveProperty("model");
+
+    const row = screen.getByText("acme/web").parentElement!;
+    expect(await optionNames(user, within(row).getByRole("combobox", { name: "Model" }))).toEqual([
+      "Use global model",
+      "Claude Sonnet 4.6",
+      "GPT 6 Sol",
+      "GPT 5.6 Sol",
+    ]);
+    fireEvent.click(within(row).getByRole("checkbox", { name: "Tool updates" }));
+    await user.click(within(row).getByRole("button", { name: "Save" }));
+    const repoBody = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[1][1]?.body));
+    expect(repoBody.settings).toMatchObject({ harness: "opencode" });
+    expect(repoBody.settings).not.toHaveProperty("model");
   });
 });

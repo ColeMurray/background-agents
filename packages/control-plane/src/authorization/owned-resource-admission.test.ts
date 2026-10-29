@@ -10,7 +10,13 @@ import {
   authorizeEnvironmentTarget,
   authorizeSessionTarget,
 } from "../routes/session-target-authorization";
-import { admittedEnvironment, evaluateOwnedResourceAdmission } from "./owned-resource-admission";
+import {
+  admittedEnvironment,
+  EnvironmentAdmissionEvaluator,
+  evaluateEnvironmentAdmission,
+  evaluateOwnedResourceAdmission,
+} from "./owned-resource-admission";
+import * as resourceViewers from "./resource-viewer";
 
 // Full row validation is covered by D1 tests; admission consumes only ownership fields.
 const environment = { id: "environment", owner_team_id: "team" } as EnvironmentRow;
@@ -235,6 +241,61 @@ describe("owned-resource admission outcomes", () => {
       authorizeSessionTarget(ctx, { teamId: null, environmentId: "environment" })
     ).resolves.toBeNull();
     expect(EnvironmentStore.prototype.getById).not.toHaveBeenCalled();
+  });
+
+  it.each(["lead", "member", "outsider", "suspended", "missing_permission"])(
+    "reuses canonical admission for a preloaded %s viewer, including missing IDs",
+    async (access) => {
+      const ctx = context();
+      ctx.authorization!.permissions =
+        access === "missing_permission" ? [] : ["environments.read", "environments.manage"];
+      ctx.sessionMemberships = new Map(
+        access === "outsider" ? [] : [["team", access === "member" ? "member" : "lead"]]
+      );
+      if (access === "suspended") ctx.authorization!.suspendedAt = 1;
+      const store = {
+        getById: vi.fn(async () => null),
+        getByIds: vi.fn(async () => [environment]),
+      };
+      const evaluator = new EnvironmentAdmissionEvaluator(ctx, store);
+      await evaluator.preload([environment.id, "missing", environment.id]);
+      await evaluator.preload(["missing", environment.id]);
+      expect(store.getByIds).toHaveBeenCalledExactlyOnceWith([environment.id, "missing"]);
+      for (const id of [environment.id, "missing"]) {
+        vi.mocked(EnvironmentStore.prototype.getById).mockResolvedValue(
+          id === environment.id ? environment : null
+        );
+        for (const need of ["read", "manage"] as const) {
+          expect(await evaluator.evaluate(id, need)).toEqual(
+            await evaluateEnvironmentAdmission(ctx, id, need)
+          );
+        }
+      }
+      expect(store.getById).not.toHaveBeenCalled();
+      expect(ctx.environmentAdmission).toBeUndefined();
+    }
+  );
+
+  it("caches individual environment lookups across read/manage and keeps service ceilings", async () => {
+    const ctx = context();
+    const viewers = vi.spyOn(resourceViewers, "resourceViewer");
+    const store = {
+      getById: vi.fn(async () => environment),
+      getByIds: vi.fn(async () => [environment]),
+    };
+    const evaluator = new EnvironmentAdmissionEvaluator(ctx, store);
+    await evaluator.evaluate(environment.id, "read");
+    await evaluator.evaluate(environment.id, "manage");
+    await evaluator.preload([environment.id]);
+    expect(store.getById).toHaveBeenCalledExactlyOnceWith(environment.id);
+    expect(store.getByIds).not.toHaveBeenCalled();
+    ctx.principal = { kind: "service", service: "github-bot", actor: null };
+    await expect(evaluator.evaluate(environment.id, "manage")).resolves.toMatchObject({
+      kind: "denied",
+      reasonCode: "service_capability_required",
+    });
+    expect(store.getById).toHaveBeenCalledOnce();
+    expect(viewers).toHaveBeenCalledExactlyOnceWith(ctx);
   });
 });
 

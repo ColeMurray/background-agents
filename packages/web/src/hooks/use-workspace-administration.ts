@@ -2,9 +2,14 @@
 
 import useSWR, { useSWRConfig } from "swr";
 import {
+  memberMergePreviewSchema,
+  memberMergeResultSchema,
   roleListResponseSchema,
   workspaceMemberListResponseSchema,
   type EffectiveAuthorization,
+  type MemberMergeInput,
+  type MemberMergePreview,
+  type MemberMergeResult,
   type RoleSummary,
   type WorkspaceMember,
 } from "@open-inspect/shared/rbac";
@@ -22,6 +27,23 @@ async function fetchRoles(): Promise<RoleSummary[]> {
   const response = await browserApiFetch("/api/roles");
   if (!response.ok) throw new Error(`Roles request failed (${response.status})`);
   return roleListResponseSchema.parse(await response.json());
+}
+
+async function postMemberMerge(path: `/api/${string}`, input: MemberMergeInput): Promise<unknown> {
+  const response = await browserApiFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
+        ? body.error
+        : `Member merge failed (${response.status})`;
+    throw new Error(message);
+  }
+  return body;
 }
 
 /**
@@ -109,12 +131,53 @@ export function useWorkspaceAdministration(input: { readMembers: boolean; readRo
     }
   }
 
+  async function previewMerge(merge: MemberMergeInput): Promise<MemberMergePreview> {
+    return memberMergePreviewSchema.parse(
+      await postMemberMerge("/api/members/merge/preview", merge)
+    );
+  }
+
+  async function mergeMembers(merge: MemberMergeInput): Promise<MemberMergeResult> {
+    const result = memberMergeResultSchema.parse(
+      await postMemberMerge("/api/members/merge", merge)
+    );
+    // The merge committed: reflect the known deletion locally so it completes now, whatever the
+    // network does next. Revalidation runs in the background and reports through `refreshError`.
+    const removedRoleId = members.data?.find((member) => member.userId === merge.sourceUserId)?.role
+      .id;
+    await Promise.all([
+      members.mutate(
+        (current) => current?.filter((member) => member.userId !== merge.sourceUserId),
+        { revalidate: false }
+      ),
+      roles.mutate(
+        (current) =>
+          current?.map((role) =>
+            role.id === removedRoleId
+              ? { ...role, assignmentCount: Math.max(0, role.assignmentCount - 1) }
+              : role
+          ),
+        { revalidate: false }
+      ),
+    ]);
+    void Promise.all([members.mutate(), roles.mutate()]).catch(() => undefined);
+    return result;
+  }
+
+  // A failure before any data loaded blocks the page; one while refreshing loaded data does not.
+  const loadError =
+    (members.data === undefined ? members.error : undefined) ??
+    (roles.data === undefined ? roles.error : undefined);
+
   return {
     members: members.data ?? [],
     roles: roles.data ?? [],
     loading: (input.readMembers && members.isLoading) || (input.readRoles && roles.isLoading),
-    error: members.error ?? roles.error,
+    error: loadError,
+    refreshError: loadError ? undefined : (members.error ?? roles.error),
     updateMember,
+    previewMerge,
+    mergeMembers,
   };
 }
 

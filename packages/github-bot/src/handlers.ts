@@ -9,6 +9,7 @@ import type { Logger } from "./logger";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
 import { containsBotMention, stripBotMention } from "./github-mention";
+import { parseInlinePromptFlags } from "@open-inspect/shared/inline-prompt-flags";
 import { startSession, type HandlerResult } from "./session-startup";
 import { resolveThreadSuggestionTarget } from "./suggested-changes";
 
@@ -123,6 +124,9 @@ export async function handleIssueComment(
     return { outcome: "skipped", skip_reason: "self_comment" };
   }
 
+  const inlineFlags = parseInlinePromptFlags(
+    stripBotMention(comment.body, env.GITHUB_BOT_USERNAME)
+  );
   return startSession(env, log, traceId, {
     repository: repo,
     sender,
@@ -130,13 +134,14 @@ export async function handleIssueComment(
     title: `GitHub: PR #${issue.number} comment`,
     action: "comment",
     reactionPath: `issues/comments/${comment.id}`,
+    inlineFlags,
     buildPrompt: (config) =>
       buildCommentActionPrompt({
         owner: repo.owner.login,
         repo: repo.name,
         number: issue.number,
         title: issue.title,
-        commentBody: stripBotMention(comment.body, env.GITHUB_BOT_USERNAME),
+        commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
         commentActionInstructions: config.commentActionInstructions,
@@ -166,6 +171,9 @@ export async function handleReviewComment(
     return { outcome: "skipped", skip_reason: "self_comment" };
   }
 
+  const inlineFlags = parseInlinePromptFlags(
+    stripBotMention(comment.body, env.GITHUB_BOT_USERNAME)
+  );
   return startSession(env, log, traceId, {
     repository: repo,
     sender,
@@ -173,6 +181,7 @@ export async function handleReviewComment(
     title: `GitHub: PR #${pr.number} review comment`,
     action: "review_comment",
     reactionPath: `pulls/comments/${comment.id}`,
+    inlineFlags,
     buildPrompt: (config) =>
       buildCommentActionPrompt({
         owner: repo.owner.login,
@@ -181,7 +190,7 @@ export async function handleReviewComment(
         title: pr.title,
         base: pr.base.ref,
         head: pr.head.ref,
-        commentBody: stripBotMention(comment.body, env.GITHUB_BOT_USERNAME),
+        commentBody: inlineFlags.ok ? inlineFlags.text : "",
         commenter: sender.login,
         isPublic: !repo.private,
         reviewThread: {

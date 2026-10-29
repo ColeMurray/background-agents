@@ -8,7 +8,7 @@ import {
 import { MemoryPreferenceStore } from "../../src/db/memory-preferences";
 import { MemoryRecordStore } from "../../src/db/memory-records";
 import { mergeUsers } from "../../src/db/user-merge";
-import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
+import { memorySelectorForTest, seedMemorySession, seedPrompt } from "./memory-test-helpers";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedActiveUser, seedSandboxAuthHash, serviceFetch } from "./helpers";
@@ -41,10 +41,21 @@ async function createMemory(body: object = content) {
   expect(response.status).toBe(201);
   return memoryDtoSchema.parse(((await response.json()) as { memory: unknown }).memory);
 }
-async function session(id: string, include = true, parent?: string) {
-  if (parent) await seedActiveUser(OTHER);
+/**
+ * A workspace-visible session whose agent is processing `owner`'s prompt. A child is spawned on
+ * its owner's prompt, as the spawn route assigns ownership.
+ */
+async function session(
+  id: string,
+  {
+    include = true,
+    parent,
+    owner = OWNER,
+  }: { include?: boolean; parent?: string; owner?: string } = {}
+) {
+  if (owner === OTHER) await seedActiveUser(OTHER);
   await seedMemorySession(id, {
-    userId: parent ? OTHER : OWNER,
+    userId: owner,
     visibility: "workspace",
     status: "created",
     includePersonalMemories: include,
@@ -52,12 +63,14 @@ async function session(id: string, include = true, parent?: string) {
   });
   const { stub } = await initNamedSessionDO(id);
   await seedSandboxAuthHash(stub, { authToken: `token-${id}`, sandboxId: `sandbox-${id}` });
-  return (path: string, method = "GET", body?: unknown) =>
+  await seedPrompt(stub, owner);
+  const call = (path: string, method = "GET", body?: unknown) =>
     SELF.fetch(`${BASE}/sessions/${id}/sandbox-memory${path}`, {
       method,
       headers: { Authorization: `Bearer token-${id}`, "Content-Type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  return Object.assign(call, { stub });
 }
 
 describe("memory HTTP lifecycle and session boundaries", () => {
@@ -79,6 +92,43 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       3
     );
     expect((await request("/memories?limit=10000")).status).toBe(400);
+  });
+  it("filters management records by literal terms across title, description and body", async () => {
+    const byTitle = await createMemory({ ...content, title: "Rspec retries" });
+    const byDescription = await createMemory({
+      ...content,
+      description: "Flaky RSPEC suites in CI",
+    });
+    const byBody = await createMemory({ ...content, content: "Run rspec with --seed" });
+    const wildcard = await createMemory({ ...content, title: "Coverage at 100%_done" });
+    await createMemory();
+    const ids = async (search: string, extra = "") => {
+      const response = await request(`/memories?search=${encodeURIComponent(search)}${extra}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { memories: { id: string }[]; nextOffset: unknown };
+      return { ids: body.memories.map((memory) => memory.id).sort(), nextOffset: body.nextOffset };
+    };
+
+    expect((await ids("RSpec")).ids).toEqual([byTitle.id, byDescription.id, byBody.id].sort());
+    // Every term must match somewhere in the record.
+    expect((await ids("rspec seed")).ids).toEqual([byBody.id]);
+    // `%` and `_` match themselves, not any text.
+    expect((await ids("100%_")).ids).toEqual([wildcard.id]);
+    expect((await ids("0%")).ids).toEqual([wildcard.id]);
+    // Search combines with paging and status.
+    const firstPage = await ids("rspec", "&limit=2");
+    expect(firstPage.ids).toHaveLength(2);
+    expect(firstPage.nextOffset).toBe(2);
+    expect((await ids("rspec", "&status=archived")).ids).toEqual([]);
+    // A blank search is no filter; oversized searches are rejected.
+    expect((await ids("   ")).ids).toHaveLength(5);
+    expect((await request(`/memories?search=${"x".repeat(257)}`)).status).toBe(400);
+    // Nonblank searches share agent search's minimum length.
+    expect((await request("/memories?search=a")).status).toBe(400);
+    expect((await request("/memories?search=%20a%20")).status).toBe(400);
+    expect(
+      (await request(`/memories?search=${encodeURIComponent("a b c d e f g h i")}`)).status
+    ).toBe(400);
   });
   it("keeps personal management owner-only, including other administrators", async () => {
     const record = await createMemory();
@@ -211,10 +261,10 @@ describe("memory HTTP lifecycle and session boundaries", () => {
   });
   it("opt-out blocks guessed personal IDs and personal writes, including inherited children", async () => {
     const record = await createMemory();
-    const sandbox = await session("excluded", false);
+    const sandbox = await session("excluded", { include: false });
     expect((await sandbox(`/${record.id}`)).status).toBe(404);
     expect((await sandbox("", "POST", agentWrite)).status).toBe(403);
-    const child = await session("child-excluded", true, "excluded");
+    const child = await session("child-excluded", { parent: "excluded" });
     expect((await child(`/${record.id}`)).status).toBe(404);
     expect(
       (await new SessionMemorySelectionStore(env.DB).loadSelection("child-excluded"))?.selection
@@ -251,9 +301,14 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       expect(await response.text()).not.toContain("Private archive reason");
     }
   );
-  it("shared-session personal learning is proposed, approved, loaded next session, then archived", async () => {
+  it("personal learning saves on the owner's prompts until someone else prompts, then is proposed", async () => {
     await createMemory();
     const sandbox = await session("learning");
+    const saved = await sandbox("", "POST", { ...agentWrite, title: "Saved fact" });
+    expect(saved.status).toBe(201);
+    expect(await saved.json()).toMatchObject({ status: "active" });
+
+    await seedPrompt(sandbox.stub, OTHER, "completed");
     const write = await sandbox("", "POST", { ...agentWrite, title: "Learned fact" });
     expect(write.status).toBe(201);
     const proposal = (await write.json()) as { id: string; status: string; revisionId: string };
@@ -264,14 +319,48 @@ describe("memory HTTP lifecycle and session boundaries", () => {
     expect(await (await next("")).json()).toMatchObject({
       rendered: expect.stringContaining("Learned fact"),
     });
-    const inherited = await session("child-included", true, "next");
+    const inherited = await session("child-included", { parent: "next" });
     expect((await inherited(`/${proposal.id}`)).status).toBe(200);
-    expect((await inherited("", "POST", agentWrite)).status).toBe(403);
+    // Children read only what they inherited and never auto-save.
+    const childWrite = await inherited("", "POST", agentWrite);
+    expect(childWrite.status).toBe(201);
+    expect(await childWrite.json()).toMatchObject({ status: "proposed" });
     const later = await createMemory();
     expect((await inherited(`/${later.id}`)).status).toBe(404);
     expect((await next(`/${later.id}`)).status).toBe(200);
     await act(proposal.id, "archive", proposal.revisionId);
     expect(await (await next(`/${proposal.id}`)).json()).toMatchObject({ status: "archived" });
+  });
+  it("gives a child spawned on someone else's prompt none of the owner's personal memory", async () => {
+    const directive = await createMemory({
+      ...content,
+      memoryType: "directive",
+      content: "Be terse",
+    });
+    const pinnedFact = await createMemory();
+    await session("delegating-parent");
+    const delegated = await session("delegated-child", {
+      parent: "delegating-parent",
+      owner: OTHER,
+    });
+    const loaded = (await new SessionMemorySelectionStore(env.DB).loadSelection(
+      "delegated-child"
+    ))!;
+    expect(loaded.selection.personalOwnerUserId).toBeNull();
+    expect(loaded.selection.items).toEqual([]);
+    expect(((await (await delegated("")).json()) as { rendered: string }).rendered).not.toContain(
+      "Be terse"
+    );
+    expect((await delegated(`/${pinnedFact.id}`)).status).toBe(404);
+    expect((await delegated("", "POST", agentWrite)).status).toBe(403);
+    // The parent keeps its selection.
+    expect(
+      (await new SessionMemorySelectionStore(env.DB).loadSelection(
+        "delegating-parent"
+      ))!.selection.items
+        .map((item) => item.memoryId)
+        .sort()
+    ).toEqual([directive.id, pinnedFact.id].sort());
   });
   it("enforces the record/revision pair in a pinned manifest", async () => {
     const first = await createMemory();
@@ -296,6 +385,11 @@ describe("memory HTTP lifecycle and session boundaries", () => {
       .selection;
     await request("/memory-preferences", "PUT", { includePersonalMemories: false });
     await act(record.id, "archive", record.currentRevisionId);
+    // The request helper links every seeded user to GitHub; a merge refuses to give one user two
+    // GitHub identities, so drop the merged-in user's fixture identity first.
+    await env.DB.prepare("DELETE FROM user_identities WHERE user_id = ? AND provider = 'github'")
+      .bind(OWNER)
+      .run();
     await mergeUsers(env.DB, { survivorId: OTHER, loserId: OWNER });
     const after = (await new SessionMemorySelectionStore(env.DB).loadSelection("merged-owner"))!
       .selection;

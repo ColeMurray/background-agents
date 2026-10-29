@@ -1,16 +1,13 @@
 /**
  * Shared plumbing for the Slack and Linear bots' target classifiers.
  *
- * Both bots pick a classification provider from the model id alone and, on the
- * OpenAI path, speak the same strict structured-output dialect of the Chat
- * Completions API. Only that provider-selection and transport layer lives here;
- * each bot keeps its own response validation, prompt, and Anthropic transport.
+ * Owns model resolution and protocol-level request/response handling. Each
+ * bot keeps its prompt, domain validation, and Messages API transport (Slack
+ * uses the SDK; Linear uses fetch). Provider payloads cross that boundary as
+ * unknown values, never as trusted classification results.
  */
 
 import { z } from "zod";
-
-/** Provider serving a classification request. */
-export type ClassificationProvider = "anthropic" | "openai";
 
 /**
  * Model the classifiers use when a deployment sets no override.
@@ -18,10 +15,13 @@ export type ClassificationProvider = "anthropic" | "openai";
 export const DEFAULT_CLASSIFICATION_MODEL = "claude-haiku-4-5";
 
 /**
- * Bound on a single classification request to either provider, so a stalled
+ * Bound on a single classification request to any provider, so a stalled
  * model call can't hang message handling indefinitely.
  */
 export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 10_000;
+
+/** Output-token budget for a Messages API classification tool call. */
+export const MESSAGES_CLASSIFICATION_MAX_TOKENS = 500;
 
 /**
  * Cap on an OpenAI classification response.
@@ -33,52 +33,141 @@ export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 10_000;
 export const OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS = 2000;
 
 /**
- * Resolve which provider serves a classification model id, and the bare id to
- * send that provider (any `anthropic/`/`openai/` prefix stripped).
+ * A classification model id parsed into the provider that serves it and the
+ * model id sent to that provider, plus the AWS Region for Bedrock.
+ */
+export type ClassificationModel =
+  | { provider: "anthropic"; model: string }
+  | { provider: "openai"; model: string }
+  | { provider: "bedrock"; region: string; model: string };
+
+/**
+ * Worker bindings a classifier reads: the model id and each provider's key.
+ * A deployment binds only the key its model's provider needs.
+ */
+export interface ClassificationEnv {
+  CLASSIFICATION_MODEL?: string;
+  /** OpenAI only; unset preserves the model's default effort. */
+  CLASSIFICATION_REASONING_EFFORT?: string;
+  ANTHROPIC_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  BEDROCK_API_KEY?: string;
+}
+
+/**
+ * A Messages API endpoint: the Anthropic API or Claude in Amazon Bedrock.
  *
- * There is no separate provider env var — the model id alone selects the
- * provider, so `CLASSIFICATION_MODEL=gpt-5.4-mini` routes to OpenAI while the
- * default {@link DEFAULT_CLASSIFICATION_MODEL} keeps routing to Anthropic.
+ * `baseUrl` has no `/v1`: callers append `/v1/messages`, or pass it to the
+ * Anthropic SDK as `baseURL`.
+ */
+export interface AnthropicMessagesTarget {
+  protocol: "anthropic-messages";
+  provider: "anthropic" | "bedrock";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+/**
+ * The OpenAI Chat Completions endpoint, called through
+ * {@link callOpenAIStructured}.
+ */
+export interface OpenAIChatTarget {
+  protocol: "openai-chat";
+  provider: "openai";
+  apiKey: string;
+  model: string;
+}
+
+/**
+ * The endpoint, credential, and model that serve a classification request.
+ * Callers dispatch on `protocol`; `provider` names the service for logs.
+ */
+export type ClassificationTarget = AnthropicMessagesTarget | OpenAIChatTarget;
+
+type ClassificationProvider = ClassificationModel["provider"];
+
+// Mirrors local.classifier_model_patterns in
+// terraform/environments/production/locals.tf, so plan rejects the ids the
+// bots reject. The Bedrock pattern checks format only: Bedrock can still
+// reject a matching id, such as an in-Region model id that serves on-demand
+// traffic only through an inference profile.
+const MODEL_ID_PATTERNS = {
+  anthropic: /^(?:anthropic\/(?<model>\s*\S.*)|claude-\s*\S.*)$/,
+  openai: /^(?:openai\/(?<model>\s*\S.*)|gpt-\s*\S.*)$/,
+  bedrock:
+    /^bedrock\/(?<region>[a-z]{2}(?:-[a-z]+)+-[0-9]+)\/(?<model>(?:[a-z]+(?:-[a-z]+)?\.)?anthropic\.claude-[a-z0-9-]+(?::[0-9]+)?)$/,
+} satisfies Record<ClassificationProvider, RegExp>;
+
+const CREDENTIAL_BINDING = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  bedrock: "BEDROCK_API_KEY",
+} as const satisfies Record<ClassificationProvider, keyof ClassificationEnv>;
+
+/**
+ * Parse a classification model id into its provider, the model id sent to
+ * that provider, and the AWS Region for Bedrock.
+ *
+ * There is no separate provider env var: the model id alone selects the
+ * provider. A prefixed id (`anthropic/...`, `openai/...`) sends the provider
+ * the id after the prefix; a bare `claude-...` or `gpt-...` id is sent whole.
  *
  * Unlike `extractProviderAndModel` in `./models`, an unrecognized id throws
  * rather than silently falling back to Anthropic: a typo'd classifier model
  * should fail the request loudly, not bill the wrong provider.
  */
-export function resolveClassificationProvider(modelId: string): {
-  provider: ClassificationProvider;
-  model: string;
-} {
-  if (modelId.startsWith("anthropic/")) {
-    return { provider: "anthropic", model: modelId.slice("anthropic/".length) };
-  }
-  if (modelId.startsWith("openai/")) {
-    return { provider: "openai", model: modelId.slice("openai/".length) };
-  }
-  if (modelId.startsWith("claude-")) {
-    return { provider: "anthropic", model: modelId };
-  }
-  if (modelId.startsWith("gpt-")) {
-    return { provider: "openai", model: modelId };
+export function parseClassificationModel(modelId: string): ClassificationModel {
+  const patterns = Object.entries(MODEL_ID_PATTERNS) as [ClassificationProvider, RegExp][];
+  for (const [provider, pattern] of patterns) {
+    // Every pattern names a group, so `groups` is set exactly when it matches.
+    const groups = pattern.exec(modelId)?.groups;
+    if (!groups) continue;
+    const model = groups.model ?? modelId;
+    return provider === "bedrock"
+      ? { provider, region: groups.region, model }
+      : { provider, model };
   }
   throw new Error(`Unrecognized classification model: ${modelId}`);
 }
 
 /**
- * Read the provider credential required by a resolved classification model.
+ * Resolve the endpoint, credential, and model that serve the configured
+ * classification model.
  *
- * Only the selected provider's key is bound to each classifier Worker. Fail
- * before the outbound request when the binding and model selection disagree,
- * rather than reporting the provider's authentication error.
+ * Only the selected provider's key is bound to each classifier Worker. Throw
+ * before any request when the binding and model selection disagree, rather
+ * than reporting the provider's authentication error.
  */
-export function requireClassificationProviderKey(
-  key: string | undefined,
-  binding: "ANTHROPIC_API_KEY" | "OPENAI_API_KEY",
-  modelId: string
-): string {
-  if (!key) {
+export function resolveClassificationTarget(env: ClassificationEnv): ClassificationTarget {
+  const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
+  const parsed = parseClassificationModel(modelId);
+  const binding = CREDENTIAL_BINDING[parsed.provider];
+  const apiKey = env[binding];
+  if (!apiKey) {
     throw new Error(`Classification model "${modelId}" requires ${binding} to be set`);
   }
-  return key;
+
+  switch (parsed.provider) {
+    case "anthropic":
+      return {
+        protocol: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        apiKey,
+        model: parsed.model,
+      };
+    case "bedrock":
+      return {
+        protocol: "anthropic-messages",
+        provider: "bedrock",
+        baseUrl: `https://bedrock-runtime.${parsed.region}.amazonaws.com/anthropic`,
+        apiKey,
+        model: parsed.model,
+      };
+    case "openai":
+      return { protocol: "openai-chat", provider: "openai", apiKey, model: parsed.model };
+  }
 }
 
 /**
@@ -97,6 +186,49 @@ export const openAiChatCompletionEnvelopeSchema = z.object({
 });
 
 /**
+ * Build the Messages API request used by both SDK and fetch callers.
+ * Auto tool selection and omitted temperature support newer Claude models;
+ * text-only replies are rejected by extractClassificationToolInput.
+ * Preserve the caller's tool type so SDK callers need no conversion or cast.
+ */
+export function buildClassificationMessagesRequest<T extends { name: string }>(
+  model: string,
+  prompt: string,
+  tool: T
+) {
+  return {
+    model,
+    max_tokens: MESSAGES_CLASSIFICATION_MAX_TOKENS,
+    system: `Answer by calling the ${tool.name} tool exactly once. Do not reply in plain text.`,
+    tools: [tool],
+    tool_choice: { type: "auto" as const },
+    messages: [{ role: "user" as const, content: prompt }],
+  };
+}
+
+const messagesEnvelopeSchema = z.object({
+  content: z.array(
+    z.object({
+      type: z.string(),
+      name: z.string().optional(),
+      input: z.unknown().optional(),
+    })
+  ),
+});
+
+/** Extract the first named tool's input; the caller validates its domain schema. */
+export function extractClassificationToolInput(response: unknown, toolName: string): unknown {
+  const envelope = messagesEnvelopeSchema.safeParse(response);
+  if (!envelope.success) throw new Error("Malformed Messages API response");
+
+  const tool = envelope.data.content.find(
+    (block) => block.type === "tool_use" && block.name === toolName
+  );
+  if (!tool) throw new Error("No classification tool_use block in Messages API response");
+  return tool.input;
+}
+
+/**
  * Call OpenAI's Chat Completions API in strict structured-output mode and
  * return the parsed JSON payload.
  *
@@ -110,8 +242,7 @@ export const openAiChatCompletionEnvelopeSchema = z.object({
  * OpenAI applies the model's default effort.
  */
 export async function callOpenAIStructured(
-  apiKey: string,
-  model: string,
+  target: OpenAIChatTarget,
   prompt: string,
   schema: { name: string; schema: unknown },
   reasoningEffort?: string
@@ -120,10 +251,10 @@ export async function callOpenAIStructured(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${target.apiKey}`,
     },
     body: JSON.stringify({
-      model,
+      model: target.model,
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       max_completion_tokens: OPENAI_CLASSIFICATION_MAX_COMPLETION_TOKENS,
       messages: [{ role: "user", content: prompt }],

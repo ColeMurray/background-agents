@@ -4,7 +4,7 @@ import type { AutomationRow, AutomationRunRow } from "../db/automation-store";
 import type * as AutomationStoreModule from "../db/automation-store";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { StartInvocationResult } from "../scheduler/scheduler";
+import type { StartInvocationResult } from "../scheduler/contracts";
 import { admitGitHubEvent, MAX_GITHUB_ADMISSION_ATTEMPTS } from "./github-event-admission";
 
 const mocks = vi.hoisted(() => ({
@@ -46,6 +46,7 @@ const automation: AutomationRow = {
   trigger_config: null,
   trigger_auth_data: null,
   schedule_cron: null,
+  schedule_once_at: null,
   schedule_tz: "UTC",
   harness: "opencode",
   model: "anthropic/claude-sonnet-4-6",
@@ -113,6 +114,7 @@ describe("GitHub event admission", () => {
       triggered: 1,
       skipped: 0,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(fire).toHaveBeenCalledTimes(2);
     expect(mocks.current).toHaveBeenCalledTimes(2);
@@ -131,9 +133,11 @@ describe("GitHub event admission", () => {
       triggered: 1,
       skipped: 0,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(mocks.deny).toHaveBeenCalledOnce();
     expect(fire).toHaveBeenCalledTimes(2);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("settles a genuinely missing grant without calling the launch pipeline again", async () => {
@@ -146,6 +150,7 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(fire).toHaveBeenCalledOnce();
     expect(mocks.deny).toHaveBeenCalledOnce();
@@ -156,11 +161,12 @@ describe("GitHub event admission", () => {
     mocks.deny.mockResolvedValue(true);
     const fire = vi
       .fn<() => Promise<StartInvocationResult>>()
-      .mockResolvedValue({ outcome: "skipped" });
+      .mockResolvedValue({ outcome: "skipped", invocationId: "inv-skip" });
     expect(await admitGitHubEvent(db, event, fire, log)).toEqual({
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(mocks.deny).toHaveBeenCalledOnce();
     expect(fire).not.toHaveBeenCalled();
@@ -206,6 +212,7 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [],
     });
     expect(fire).toHaveBeenCalledOnce();
     expect(mocks.deny).not.toHaveBeenCalled();
@@ -221,9 +228,70 @@ describe("GitHub event admission", () => {
       triggered: 0,
       skipped: 1,
       steered: 0,
+      invocationIds: [expect.any(String)],
     });
     expect(fire).toHaveBeenCalledOnce();
   });
+
+  it.each<{
+    name: string;
+    result: StartInvocationResult;
+    skipped: number;
+    invocationIds: string[];
+  }>([
+    {
+      name: "deduplication",
+      result: { outcome: "deduplicated", invocationId: "existing" },
+      skipped: 1,
+      invocationIds: ["existing"],
+    },
+    {
+      name: "recorded overlap",
+      result: { outcome: "skipped", invocationId: "skip" },
+      skipped: 1,
+      invocationIds: ["skip"],
+    },
+    {
+      name: "unrecorded overlap",
+      result: { outcome: "skipped", invocationId: null },
+      skipped: 1,
+      invocationIds: [],
+    },
+    {
+      name: "blocked overlap",
+      result: { outcome: "blocked", reason: "concurrent_run_active" },
+      skipped: 1,
+      invocationIds: [],
+    },
+    {
+      name: "failed launch",
+      result: { ...started, launched: 0, runs: [{ status: "failed" } as AutomationRunRow] },
+      skipped: 0,
+      invocationIds: [started.invocationId],
+    },
+  ])(
+    "preserves event accounting and logging for $name",
+    async ({ result, skipped, invocationIds }) => {
+      const fire = vi.fn<() => Promise<StartInvocationResult>>().mockResolvedValue(result);
+      await expect(admitGitHubEvent(db, event, fire, log)).resolves.toEqual({
+        triggered: 0,
+        skipped,
+        steered: 0,
+        invocationIds,
+      });
+      expect(log.info).toHaveBeenCalledExactlyOnceWith("Event processed", {
+        event: "scheduler.event_processed",
+        source: "github",
+        event_type: event.eventType,
+        trigger_key: event.triggerKey,
+        triggered: 0,
+        skipped,
+        steered: 0,
+        candidates: 1,
+      });
+      expect(fire).toHaveBeenCalledOnce();
+    }
+  );
 
   it("waits for the admitted invocation's asynchronous launch to settle", async () => {
     let finish: ((result: StartInvocationResult) => void) | undefined;
@@ -239,6 +307,11 @@ describe("GitHub event admission", () => {
     await vi.waitFor(() => expect(fire).toHaveBeenCalledOnce());
     expect(settled).toBe(false);
     finish?.(started);
-    expect(await admission).toEqual({ triggered: 1, skipped: 0, steered: 0 });
+    expect(await admission).toEqual({
+      triggered: 1,
+      skipped: 0,
+      steered: 0,
+      invocationIds: [expect.any(String)],
+    });
   });
 });
