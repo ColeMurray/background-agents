@@ -46,14 +46,17 @@ workspace role, and new users receive the Member role by default.
 
 ### Sign-In Allowlist
 
-Active built-in Owners and Administrators manage rules at **Settings > Workspace access > Sign-in
-allowlist**. Custom roles, even with member-management permission, cannot read or edit this policy.
+Active built-in Owners and Administrators manage rules at **Settings > Workspace access > Who can
+sign in**. Custom roles, even with member-management permission, cannot read or edit this policy.
 The policy covers browser sign-in and creation of new accounts through bot enrollment using the
 evidence described below. The member directory, general bot invocation restrictions, integration
 trigger restrictions, and resource authorization remain separate controls. Adding a rule itself
 sends no invitation and creates no member.
 
-The editor shows **Deployment**, **Settings**, or **Both** for each rule. Deployment rules come from
+The editor lists every rule as one plain-language line (for example, "Anyone with an @example.com
+email"). Type an email, domain, or GitHub name into the single add field; the editor infers the rule
+type and asks whether a bare name is a GitHub user or organization. Rules marked with a lock come
+from the deployment; the lock tooltip names the source variable. Deployment rules come from
 `ALLOWED_EMAILS`, `ALLOWED_EMAIL_DOMAINS`, `ALLOWED_USERS` (GitHub usernames), and
 `ALLOWED_GITHUB_ORGS`, or the corresponding Terraform `allowed_*` inputs. They are read-only in the
 UI. Settings rules are persisted in the global SQL store and survive deployments. Both sources are
@@ -71,8 +74,8 @@ further over-limit fan-out. Saving performs syntax validation, not DNS or member
 Review additions/removals before saving. Domain and organization rules admit matching people who are
 not already members. The review warns about overlapping grants and existing sessions, but does not
 enumerate all affected people or guarantee recovery-account reachability. Conflicts and unknown save
-outcomes require an explicit reload and draft review, not automatic retry. Cancel confirms discard;
-browser unload warns about unsaved changes, but arbitrary in-app navigation is not blocked.
+outcomes require an explicit reload and draft review, not automatic retry. Discard confirms; browser
+unload warns about unsaved changes, but arbitrary in-app navigation is not blocked.
 
 The deployment must still have a compatible baseline for every enabled provider; managed rules do
 not satisfy Terraform's safety gates or rescue invalid runtime configuration. Keep an exact verified

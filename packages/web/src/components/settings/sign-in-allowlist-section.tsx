@@ -1,248 +1,232 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import {
-  admissionRulesSchema,
-  MAX_MANAGED_ADMISSION_RULES,
-  type AdmissionRules,
-} from "@open-inspect/shared/admission-settings";
+import { admissionRulesSchema, type AdmissionRules } from "@open-inspect/shared/admission-settings";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { LockIcon } from "@/components/ui/icons";
 import { useAdmissionPolicy } from "@/hooks/use-admission-policy";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
-import { ADMISSION_RULE_GROUPS, AdmissionRuleGroups } from "./admission-rule-groups";
-import { SettingsCardSection } from "./settings-card-section";
+import { SignInAllowlistAddRule } from "./sign-in-allowlist-add-rule";
 import { SignInAllowlistReview } from "./sign-in-allowlist-review";
+import { SignInAllowlistRow } from "./sign-in-allowlist-row";
+import { allowlistEntries, type AllowlistEntry } from "./sign-in-allowlist-rules";
 import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 export function SignInAllowlistSection() {
   const policy = useAdmissionPolicy();
   const { hasPermission } = useCurrentUserAuthorization();
-  const [type, setType] = useState<keyof AdmissionRules>("allowedEmails");
-  const [value, setValue] = useState("");
+  const [input, setInput] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  const inputId = useId();
-  const group = ADMISSION_RULE_GROUPS.find((candidate) => candidate.key === type)!;
+  const panel = useRef<HTMLElement>(null);
+  const titleId = useId();
   const { snapshot, draft, changes } = policy;
-  const dirty = changes.length > 0 || value.length > 0;
+  const pendingInput = !!input.trim();
+  const dirty = changes.length > 0 || pendingInput;
+  const editable = !!snapshot && !snapshot.editingDisabledReason && !snapshot.unsafeAllowAllUsers;
+  const entries = snapshot && draft ? allowlistEntries(snapshot, draft) : [];
+  const added = changes.filter(({ action }) => action === "Add").length;
+  const removed = changes.length - added;
+  const githubRulesWithoutGitHub =
+    !!snapshot &&
+    !snapshot.enabledProviders.includes("github") &&
+    entries.some(
+      (entry) => entry.type === "allowedGitHubUsers" || entry.type === "allowedGitHubOrganizations"
+    );
 
   useSettingsUnsavedChanges(dirty);
 
-  function addRule() {
-    if (!draft || !policy.canEdit) return;
-    const parsed = admissionRulesSchema.safeParse({ ...draft, [type]: [...draft[type], value] });
+  function updateDraft(next: AdmissionRules) {
+    const parsed = admissionRulesSchema.safeParse(next);
     if (!parsed.success) {
       setValidationError(parsed.error.issues.map((issue) => issue.message).join(" "));
-      return;
+      return false;
     }
     policy.setDraft(parsed.data);
-    setValue("");
-    setValidationError(null);
+    return true;
+  }
+
+  function setEntryInDraft(entry: AllowlistEntry, included: boolean) {
+    if (!draft || !policy.canEdit) return;
+    const others = draft[entry.type].filter((item) => item !== entry.value);
+    updateDraft({ ...draft, [entry.type]: included ? [...others, entry.value] : others });
   }
 
   return (
-    <SettingsCardSection
-      title="Sign-in allowlist"
-      description="Any matching rule allows access. Deployment rules are read-only."
-    >
-      <div ref={panel} tabIndex={-1} className="space-y-5">
-        {policy.error && <ErrorBanner role="alert">{policy.error}</ErrorBanner>}
-        {policy.notice && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {policy.notice}
+    <section ref={panel} tabIndex={-1} aria-labelledby={titleId} className="space-y-3">
+      <div>
+        <h3 id={titleId} className="text-base font-semibold text-foreground">
+          Who can sign in
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Only people who match something on this list can join.
+        </p>
+      </div>
+
+      {policy.error && <ErrorBanner role="alert">{policy.error}</ErrorBanner>}
+      {policy.notice && (
+        <p role="status" className="text-sm text-success">
+          {policy.notice}
+        </p>
+      )}
+      {policy.loading && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading rules...
+        </p>
+      )}
+      {policy.denied && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Only Owners and Administrators can edit these rules.
+        </p>
+      )}
+      {!policy.denied && !policy.loading && (!snapshot || policy.needsReload) && (
+        <Button variant="outline" size="sm" onClick={() => void policy.reload()}>
+          {snapshot ? "Reload rules" : "Retry"}
+        </Button>
+      )}
+      {snapshot?.unsafeAllowAllUsers && (
+        <div
+          role="status"
+          className="rounded-md border border-warning/30 bg-warning-muted p-3 text-sm text-foreground"
+        >
+          <p className="font-medium">
+            {snapshot.unsafeAllowAllEffective
+              ? "All authenticated users can sign in."
+              : "Unsafe allow-all is set. Current rules still apply."}
           </p>
-        )}
-        {policy.loading && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Loading rules...
+          <p className="mt-1 text-muted-foreground">
+            Ask your operator to disable unsafe allow-all before you edit rules.
           </p>
-        )}
-        {policy.denied && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Only Owners and Administrators can edit these rules.
-          </p>
-        )}
-        {!policy.denied && !policy.loading && (!snapshot || policy.needsReload) && (
-          <Button variant="outline" onClick={() => void policy.reload()}>
-            {snapshot ? "Reload rules" : "Retry"}
-          </Button>
-        )}
-        {snapshot && draft && (
-          <>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-muted-foreground">Sign-in:</span>
-              {snapshot.enabledProviders.map((provider) => (
-                <span
-                  key={provider}
-                  className="rounded-full border border-border px-2 py-1 text-foreground"
-                >
-                  {provider === "github" ? "GitHub" : "Google"}
-                </span>
-              ))}
-              {!snapshot.enabledProviders.length && <span>None configured</span>}
-            </div>
-            {!snapshot.enabledProviders.includes("github") && (
-              <p className="text-sm text-muted-foreground">GitHub sign-in is not enabled.</p>
-            )}
-            {snapshot.unsafeAllowAllUsers && (
-              <div
-                role="status"
-                className="rounded-md border border-border p-3 text-sm text-muted-foreground"
-              >
-                <p>
-                  {snapshot.unsafeAllowAllEffective
-                    ? "All authenticated users can sign in."
-                    : "Unsafe allow-all is set. Current rules still apply."}
-                </p>
-                <p className="mt-2">
-                  Ask your operator to disable unsafe allow-all before you edit rules.
-                </p>
-              </div>
-            )}
-            <AdmissionRuleGroups
-              deployment={snapshot.deployment}
-              draft={draft}
-              disabled={!policy.canEdit}
-              onChange={policy.setDraft}
-            />
-            {!snapshot.editingDisabledReason && !snapshot.unsafeAllowAllUsers && (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  addRule();
-                }}
-                className="space-y-3 rounded-md border border-border p-4"
-              >
-                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-end">
-                  <div className="min-w-0 space-y-1.5">
-                    <label htmlFor={`${inputId}-type`} className="text-xs text-muted-foreground">
-                      Rule type
-                    </label>
-                    <Select
-                      value={type}
-                      disabled={!policy.canEdit}
-                      onValueChange={(next) => {
-                        setType(next as keyof AdmissionRules);
-                        setValidationError(null);
-                      }}
-                    >
-                      <SelectTrigger id={`${inputId}-type`}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ADMISSION_RULE_GROUPS.map((item) => (
-                          <SelectItem key={item.key} value={item.key}>
-                            {item.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="min-w-0 space-y-1.5">
-                    <label htmlFor={inputId} className="text-xs text-muted-foreground">
-                      {group.label}
-                    </label>
-                    <Input
-                      id={inputId}
-                      value={value}
-                      disabled={!policy.canEdit}
-                      placeholder={group.placeholder}
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      aria-invalid={!!validationError}
-                      aria-describedby={`${inputId}-help`}
-                      onChange={(event) => {
-                        setValue(event.target.value);
-                        setValidationError(null);
-                      }}
-                    />
-                  </div>
-                  <Button
-                    type="submit"
-                    variant="outline"
-                    disabled={!policy.canEdit || !value.trim()}
-                  >
-                    Add rule
-                  </Button>
-                </div>
-                <p id={`${inputId}-help`} className="text-xs text-muted-foreground">
-                  {group.help} Limit: {MAX_MANAGED_ADMISSION_RULES} settings rules.
-                </p>
-                {validationError && (
-                  <p role="alert" className="text-sm text-destructive">
-                    {validationError}
-                  </p>
-                )}
-              </form>
-            )}
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                ref={reviewTrigger}
-                disabled={!policy.canEdit || !changes.length || !!value}
-                onClick={() => setReviewOpen(true)}
-              >
-                {policy.saving ? "Saving..." : "Review and save"}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={!dirty || policy.saving || policy.loading}
-                onClick={() => {
-                  if (!window.confirm("Discard unsaved changes?")) return;
-                  policy.discard();
-                  setValue("");
+        </div>
+      )}
+      {githubRulesWithoutGitHub && (
+        <p role="status" className="text-sm text-warning">
+          GitHub sign-in is off, so GitHub rules have no effect.
+        </p>
+      )}
+
+      {snapshot && draft && (
+        <>
+          <div className="rounded-md border border-border">
+            {editable && (
+              <SignInAllowlistAddRule
+                value={input}
+                error={validationError}
+                disabled={!policy.canEdit}
+                onValueChange={(next) => {
+                  setInput(next);
                   setValidationError(null);
                 }}
-              >
-                Cancel
-              </Button>
-              <span role="status" className="text-xs text-muted-foreground">
-                {dirty
-                  ? `Unsaved: ${changes.filter(({ action }) => action === "Add").length} added, ${changes.filter(({ action }) => action === "Remove").length} removed.${value ? " Add or clear the value before you save." : ""}`
-                  : ""}
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              To block a member, use{" "}
-              <a href="#workspace-members" className="underline">
-                Members &gt; Suspend
-              </a>
-              .
-              {hasPermission("workspace.audit.read") && (
-                <>
-                  {" "}
-                  <a href="/settings?tab=audit-log" className="underline">
-                    Audit log
-                  </a>
-                </>
+                onAdd={({ type, value }) => {
+                  if (
+                    !policy.canEdit ||
+                    !updateDraft({ ...draft, [type]: [...draft[type], value] })
+                  )
+                    return false;
+                  setInput("");
+                  return true;
+                }}
+              />
+            )}
+            <ul className="divide-y divide-border-muted">
+              {entries.map((entry) => (
+                <SignInAllowlistRow
+                  key={`${entry.type}:${entry.value}`}
+                  entry={entry}
+                  disabled={!policy.canEdit}
+                  onRemove={() => setEntryInDraft(entry, false)}
+                  onRestore={() => setEntryInDraft(entry, true)}
+                />
+              ))}
+              {!entries.length && (
+                <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  No one can sign in yet.
+                </li>
               )}
-            </p>
-            <SignInAllowlistReview
-              open={reviewOpen && policy.canEdit}
-              onOpenChange={setReviewOpen}
-              snapshot={snapshot}
-              draft={draft}
-              onSave={() => void policy.save()}
-              onCloseFocus={() => {
-                const target = reviewTrigger.current;
-                if (target && !target.disabled) target.focus();
-                else panel.current?.focus();
-              }}
-            />
-          </>
-        )}
-      </div>
-    </SettingsCardSection>
+            </ul>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            {entries.some((entry) => entry.fromDeployment) && (
+              <>
+                <LockIcon className="inline h-3 w-3 align-[-1px]" aria-hidden /> Set in your
+                deployment config.{" "}
+              </>
+            )}
+            To block someone who already joined,{" "}
+            <a href="#workspace-members" className="underline hover:text-foreground">
+              suspend them in Members
+            </a>
+            .
+            {hasPermission("workspace.audit.read") && (
+              <>
+                {" "}
+                <a href="/settings?tab=audit-log" className="underline hover:text-foreground">
+                  Audit log
+                </a>
+              </>
+            )}
+          </p>
+
+          {changes.length > 0 && (
+            <div className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-md border border-border bg-popover px-4 py-3 shadow-lg">
+              <p role="status" className="min-w-0 flex-1 basis-48 text-sm text-foreground">
+                {changes.length} unsaved {changes.length === 1 ? "change" : "changes"}
+                <span className="text-muted-foreground">
+                  {" "}
+                  ·{" "}
+                  {[added && `${added} added`, removed && `${removed} removed`]
+                    .filter(Boolean)
+                    .join(", ")}
+                </span>
+                {pendingInput && (
+                  <span className="block text-xs text-muted-foreground">
+                    Add or clear the typed value before you save.
+                  </span>
+                )}
+              </p>
+              <div className="ml-auto flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={policy.saving || policy.loading}
+                  onClick={() => {
+                    if (!window.confirm("Discard unsaved changes?")) return;
+                    policy.discard();
+                    setInput("");
+                    setValidationError(null);
+                  }}
+                >
+                  Discard
+                </Button>
+                <Button
+                  ref={reviewTrigger}
+                  size="sm"
+                  disabled={!policy.canEdit || pendingInput}
+                  onClick={() => setReviewOpen(true)}
+                >
+                  {policy.saving ? "Saving..." : "Review and save"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <SignInAllowlistReview
+            open={reviewOpen && policy.canEdit}
+            onOpenChange={setReviewOpen}
+            snapshot={snapshot}
+            draft={draft}
+            onSave={() => void policy.save()}
+            onCloseFocus={() => {
+              const target = reviewTrigger.current;
+              if (target && !target.disabled) target.focus();
+              else panel.current?.focus();
+            }}
+          />
+        </>
+      )}
+    </section>
   );
 }

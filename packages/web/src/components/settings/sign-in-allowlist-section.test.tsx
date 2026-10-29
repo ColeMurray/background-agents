@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyAdmissionRules,
@@ -55,10 +54,12 @@ const initial: AdmissionPolicySnapshot = {
 function json(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
 }
+const ADD_LABEL = "Add an email, domain, or GitHub name";
+
 async function renderPolicy(snapshot = initial) {
   vi.mocked(browserApiFetch).mockResolvedValueOnce(json(snapshot));
   render(<SignInAllowlistSection />);
-  await screen.findByText("Sign-in:");
+  await screen.findByText(/Set in your deployment config/);
 }
 function NavigationProbe({ onLeave }: { onLeave: () => void }) {
   const confirmNavigation = useConfirmSettingsNavigation();
@@ -73,12 +74,22 @@ async function renderGuardedPolicy() {
       <SignInAllowlistSection />
     </SettingsNavigationGuardProvider>
   );
-  await screen.findByText("Sign-in:");
+  await screen.findByRole("combobox", { name: ADD_LABEL });
   return onLeave;
 }
-function addEmail(value: string) {
-  fireEvent.change(screen.getByRole("textbox", { name: "Email address" }), { target: { value } });
-  fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+function typeRule(value: string) {
+  const input = screen.getByRole("combobox", { name: ADD_LABEL });
+  act(() => input.focus());
+  fireEvent.change(input, { target: { value } });
+  return input;
+}
+/** Types a value and accepts the first suggestion with Enter. */
+function addRule(value: string) {
+  fireEvent.keyDown(typeRule(value), { key: "Enter" });
+}
+function openReview() {
+  fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+  return screen.getByRole("alertdialog");
 }
 
 beforeEach(() => {
@@ -94,8 +105,7 @@ describe("SignInAllowlistSection", () => {
   it("protects typed values before Add and stops warning when they are cleared", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const onLeave = await renderGuardedPolicy();
-    const input = screen.getByRole("textbox", { name: "Email address" });
-    fireEvent.change(input, { target: { value: "unfinished" } });
+    const input = typeRule("unfinished");
     fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
     expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
     expect(onLeave).not.toHaveBeenCalled();
@@ -116,8 +126,8 @@ describe("SignInAllowlistSection", () => {
     async (status) => {
       vi.spyOn(window, "confirm").mockReturnValue(false);
       const onLeave = await renderGuardedPolicy();
-      addEmail("new@example.com");
-      fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+      addRule("new@example.com");
+      openReview();
       vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, status));
       fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
       await screen.findByRole("button", { name: "Reload rules" });
@@ -132,36 +142,51 @@ describe("SignInAllowlistSection", () => {
     }
   );
 
-  it("keeps default copy short while stating matching and source rules", async () => {
+  it("shows one quiet list with read-only deployment rules and no save controls", async () => {
     await renderPolicy();
-    expect(screen.getByText(/Any matching rule allows access/)).toBeInTheDocument();
-    expect(screen.getByText(/Deployment rules are read-only/)).toBeInTheDocument();
-    expect(screen.getByText(/Use a verified email address/)).toBeInTheDocument();
-    expect(screen.getByText(/GitHub sign-in is not enabled/)).toBeInTheDocument();
-    expect(document.body.textContent!.split(/\s+/).length).toBeLessThan(120);
-    expect(screen.getByText("Deployment", { exact: true })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Remove settings email address recovery/ })
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.getByText(/Only people who match something on this list/)).toBeInTheDocument();
+    expect(screen.getByText("recovery@example.com")).toBeInTheDocument();
+    expect(screen.getByLabelText("Set by deployment")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/GitHub sign-in is off/)).not.toBeInTheDocument();
+    expect(document.body.textContent!.split(/\s+/).length).toBeLessThan(60);
+  });
+
+  it("warns when GitHub rules exist but GitHub sign-in is off", async () => {
+    await renderPolicy({
+      ...initial,
+      deployment: { ...initial.deployment, allowedGitHubUsers: ["octocat"] },
+    });
+    expect(screen.getByText(/GitHub sign-in is off/)).toBeInTheDocument();
   });
 
   it("validates inline, normalizes draft entries, and keeps duplicates a no-op", async () => {
     await renderPolicy();
-    addEmail("not an email");
+    addRule("person@bad_domain");
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Email address" })).toHaveAttribute(
+    expect(screen.getByRole("combobox", { name: ADD_LABEL })).toHaveAttribute(
       "aria-invalid",
       "true"
     );
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
-    addEmail(" NEW@Example.com ");
+    addRule(" NEW@Example.com ");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText("new@example.com")).toBeInTheDocument();
-    addEmail("new@example.com");
+    expect(screen.getByText("New")).toBeInTheDocument();
+    addRule("new@example.com");
     expect(screen.getAllByText("new@example.com")).toHaveLength(1);
-    expect(screen.getByText(/1 added, 0 removed/)).toBeInTheDocument();
+    expect(screen.getByText(/1 unsaved change/)).toHaveTextContent("1 added");
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears typed input with Escape", async () => {
+    await renderPolicy();
+    const input = typeRule("octocat");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
   it("removes only the settings copy of a dual-source rule and reviews its continuing deployment grant", async () => {
@@ -169,43 +194,70 @@ describe("SignInAllowlistSection", () => {
       ...initial,
       managed: { ...emptyAdmissionRules(), allowedEmails: ["recovery@example.com"] },
     });
-    expect(screen.getByText("Both", { exact: true })).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Remove settings email address recovery@example.com" })
+      screen.getByRole("button", { name: "Remove settings copy of recovery@example.com" })
     );
-    expect(screen.getByText("recovery@example.com")).toBeInTheDocument();
-    expect(screen.getByText("Deployment", { exact: true })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-    const dialog = screen.getByRole("alertdialog");
+    expect(screen.getByText("recovery@example.com")).not.toHaveClass("line-through");
+    expect(
+      screen.getByRole("button", { name: "Undo removing recovery@example.com" })
+    ).toBeInTheDocument();
+    const dialog = openReview();
     expect(within(dialog).getByText(/Deployment still allows this entry/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Existing sessions stay active/)).toBeInTheDocument();
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("strikes through a pending removal and restores it with Undo", async () => {
+    await renderPolicy({
+      ...initial,
+      managed: { ...emptyAdmissionRules(), allowedGitHubUsers: ["octocat"] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove octocat on GitHub" }));
+    expect(screen.getByText("octocat on GitHub")).toHaveClass("line-through");
+    expect(screen.getByText(/1 unsaved change/)).toHaveTextContent("1 removed");
+    fireEvent.click(screen.getByRole("button", { name: "Undo removing octocat on GitHub" }));
+    expect(screen.getByText("octocat on GitHub")).not.toHaveClass("line-through");
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
+  });
+
   it.each([
-    ["Email domain", " EXAMPLE.com ", "example.com", true],
-    ["GitHub username", " OctoCat ", "octocat", false],
-    ["GitHub organization", " MY-ORG ", "my-org", true],
+    ["an email domain", " @EXAMPLE.com ", null, "Anyone with an @example.com email", true],
+    ["a GitHub user", " OctoCat ", /GitHub user octocat/, "octocat on GitHub", false],
+    ["a GitHub organization", " MY-ORG ", /my-org GitHub org/, "Members of my-org on GitHub", true],
   ] as const)(
-    "adds a normalized %s and reviews broad access when applicable",
-    async (label, value, normalized, broad) => {
-      const user = userEvent.setup();
+    "adds %s from free-form input and reviews broad access when applicable",
+    async (_kind, value, option, description, broad) => {
       await renderPolicy();
-      await user.click(screen.getByRole("combobox", { name: "Rule type" }));
-      await user.click(await screen.findByRole("option", { name: label }));
-      fireEvent.change(screen.getByRole("textbox", { name: label }), {
-        target: { value },
-      });
-      fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
-      expect(screen.getByText(normalized, { exact: true })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
-      const dialog = screen.getByRole("alertdialog");
+      if (option) {
+        typeRule(value);
+        fireEvent.click(screen.getByRole("option", { name: option }));
+      } else {
+        addRule(value);
+      }
+      expect(screen.getByText(description, { exact: true })).toBeInTheDocument();
+      const dialog = openReview();
       expect(within(dialog).queryAllByText(/(?:Domain|Organization) rules allow all/)).toHaveLength(
         broad ? 1 : 0
       );
       expect(browserApiFetch).toHaveBeenCalledTimes(1);
     }
   );
+
+  it("offers GitHub user or organization for a bare name and supports keyboard choice", async () => {
+    await renderPolicy();
+    const input = typeRule("my-org");
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Allow GitHub user my-org",
+      "Allow everyone in the my-org GitHub orgMembers need a verified email",
+    ]);
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(screen.getAllByRole("option")[1]).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByText("Members of my-org on GitHub")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+  });
 
   it("warns about a broader domain that remains after removing an exact email", async () => {
     await renderPolicy({
@@ -216,23 +268,18 @@ describe("SignInAllowlistSection", () => {
         allowedEmailDomains: ["example.com"],
       },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove settings email address person@example.com" })
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove person@example.com" }));
     expect(
-      within(screen.getByRole("alertdialog")).getByText(/A domain rule still allows this email/)
+      within(openReview()).getByText(/A domain rule still allows this email/)
     ).toBeInTheDocument();
   });
 
   it("requires confirmation before saving and announces success", async () => {
     await renderPolicy();
-    addEmail("new@example.com");
-    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    addRule("new@example.com");
+    const dialog = openReview();
     expect(browserApiFetch).toHaveBeenCalledTimes(1);
-    expect(
-      within(screen.getByRole("alertdialog")).getByText(/Deployment rules will not change/)
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Deployment rules will not change/)).toBeInTheDocument();
     vi.mocked(browserApiFetch).mockResolvedValueOnce(
       json({
         ...initial,
@@ -243,30 +290,39 @@ describe("SignInAllowlistSection", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByText("Rules saved.");
-    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
+    expect(screen.queryByText("New")).not.toBeInTheDocument();
   });
 
-  it("confirms cancel before discarding unsaved changes", async () => {
+  it("blocks saving while a typed value is pending", async () => {
+    await renderPolicy();
+    addRule("new@example.com");
+    typeRule("other@example.com");
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.getByText(/Add or clear the typed value/)).toBeInTheDocument();
+  });
+
+  it("confirms before discarding unsaved changes", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await renderPolicy();
-    addEmail("new@example.com");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    addRule("new@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
     expect(screen.getByText("new@example.com")).toBeInTheDocument();
     confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(screen.queryByText("new@example.com")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
   });
 
-  it("explains read-only unsafe allow-all without presenting an add form", async () => {
+  it("explains read-only unsafe allow-all without presenting an add input", async () => {
     await renderPolicy({
       ...initial,
       editingDisabledReason: "unsafe_allow_all",
       unsafeAllowAllUsers: true,
     });
-    expect(screen.queryByRole("button", { name: "Add rule" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: ADD_LABEL })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
     expect(screen.getByText(/disable unsafe allow-all/)).toBeInTheDocument();
   });
 
@@ -275,19 +331,19 @@ describe("SignInAllowlistSection", () => {
     render(<SignInAllowlistSection />);
     await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByRole("alert")).toHaveTextContent("unavailable");
-    expect(screen.queryByRole("button", { name: "Add rule" })).not.toBeInTheDocument();
-    expect(screen.queryByText("None")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: ADD_LABEL })).not.toBeInTheDocument();
+    expect(screen.queryByText("No one can sign in yet.")).not.toBeInTheDocument();
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json(initial));
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Add rule" })).toBeInTheDocument()
+      expect(screen.getByRole("combobox", { name: ADD_LABEL })).toBeInTheDocument()
     );
   });
 
   it("keeps the conflict draft visible and exposes an explicit reload/review action", async () => {
     await renderPolicy();
-    addEmail("new@example.com");
-    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    addRule("new@example.com");
+    openReview();
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, 412));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await screen.findByRole("button", { name: "Reload rules" });
