@@ -146,10 +146,16 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
+/**
+ * Sources a public prompt caller may assert. "automation" decides who opens a
+ * PR, and it and "agent" are minted only on internal paths.
+ */
+export const publicPromptSourceSchema = messageSourceSchema.exclude(["automation", "agent"]);
+
 export const sendPromptRequestSchema = z
   .object({
     content: promptContentSchema,
-    source: messageSourceSchema.optional(),
+    source: publicPromptSourceSchema.optional(),
     model: z.string().optional(),
     reasoningEffort: z.string().optional(),
     attachments: z.unknown().optional(),
