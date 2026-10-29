@@ -18,7 +18,7 @@ import {
   LinearAuthError,
 } from "./linear-credentials";
 import { z } from "zod";
-import { abortable } from "./abortable";
+import { abortable } from "@open-inspect/shared/abortable";
 
 export {
   completeLinearOAuthInstallation,
@@ -226,7 +226,8 @@ export async function emitAgentActivity(
   client: LinearApiClient,
   agentSessionId: string,
   content: Record<string, unknown>,
-  ephemeral?: boolean
+  ephemeral?: boolean,
+  callerSignal?: AbortSignal
 ): Promise<boolean> {
   try {
     await linearGraphQL(
@@ -240,7 +241,8 @@ export async function emitAgentActivity(
     `,
       {
         input: { agentSessionId, content, ephemeral },
-      }
+      },
+      callerSignal
     );
     return true;
   } catch (err) {
@@ -385,7 +387,8 @@ export async function getRepoSuggestions(
  */
 export async function fetchUser(
   client: LinearApiClient,
-  userId: string
+  userId: string,
+  callerSignal?: AbortSignal
 ): Promise<{ id: string; name: string; email: string | null } | null> {
   try {
     const data = await linearGraphQL(
@@ -399,7 +402,8 @@ export async function fetchUser(
         }
       }
     `,
-      { id: userId }
+      { id: userId },
+      callerSignal
     );
 
     const parsed = linearUserResponseSchema.safeParse(data);

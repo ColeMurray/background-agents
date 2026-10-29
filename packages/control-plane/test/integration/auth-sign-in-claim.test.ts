@@ -363,11 +363,14 @@ describe("register, linking, and steady state", () => {
     // GitHub ingress attributes no email; the shared identity row means bot
     // resolution finds the same user instead of minting a phantom.
     const store = new UserStore(env.DB);
-    const resolved = await store.resolveOrCreateUser({
-      provider: "github",
-      providerUserId: GITHUB_SUBJECT,
-      providerLogin: "octocat",
-    });
+    const resolved = await store.resolveOrCreateUser(
+      {
+        provider: "github",
+        providerUserId: GITHUB_SUBJECT,
+        providerLogin: "octocat",
+      },
+      () => {}
+    );
     expect(resolved.id).toBe(webUserId);
     expect(resolved.isNew).toBe(false);
     expect(await countTableRows("users")).toBe(1);

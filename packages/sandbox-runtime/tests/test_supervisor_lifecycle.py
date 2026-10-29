@@ -1,5 +1,7 @@
 import asyncio
+import os
 import signal
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -207,8 +209,8 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
 async def test_build_boot_refreshes_models_catalog_before_reporting_success(tmp_path, monkeypatch):
     events = []
     supervisor, *_ = _supervisor(tmp_path, events)
-    supervisor._refresh_models_catalog = AsyncMock(
-        side_effect=lambda: events.append("models_catalog")
+    supervisor_module.ensure_model_catalog.side_effect = lambda *_args, **_kwargs: (
+        events.append("models_catalog") or True
     )
     monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
     callback = MagicMock()
@@ -223,59 +225,64 @@ async def test_build_boot_refreshes_models_catalog_before_reporting_success(tmp_
 
     assert await supervisor.run(callback) is True
     assert events == ["repository:build", "models_catalog", "callback"]
+    supervisor_module.ensure_model_catalog.assert_awaited_once_with(
+        os.environ, supervisor.log, refresh=True
+    )
 
 
-async def test_session_boot_does_not_refresh_models_catalog(tmp_path, monkeypatch):
+async def test_build_without_usable_catalog_reports_failure_instead_of_success(
+    tmp_path, monkeypatch
+):
     supervisor, *_ = _supervisor(tmp_path, [])
-    supervisor._refresh_models_catalog = AsyncMock()
+    monkeypatch.setenv("IMAGE_BUILD_MODE", "true")
+    supervisor_module.ensure_model_catalog.return_value = False
+    supervisor._report_fatal_error = AsyncMock()
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock(return_value=True)
+
+    assert await supervisor.run(callback) is False
+    callback.report_success.assert_not_awaited()
+    callback.report_failure.assert_awaited_once_with("Model price catalog unavailable")
+    assert not any(
+        call.args == ("image_build.complete",) for call in supervisor.log.info.mock_calls
+    )
+
+
+async def test_session_boot_checks_catalog_without_forcing_refresh(tmp_path, monkeypatch):
+    supervisor, *_ = _supervisor(tmp_path, [])
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
     monkeypatch.delenv("FROM_REPO_IMAGE", raising=False)
 
     assert await supervisor.run() is True
-    supervisor._refresh_models_catalog.assert_not_awaited()
+    supervisor_module.ensure_model_catalog.assert_awaited_once_with(os.environ, supervisor.log)
 
 
-async def test_models_catalog_refresh_runs_opencode(tmp_path, monkeypatch):
-    record = tmp_path / "argv"
-    monkeypatch.setattr(
-        supervisor_module,
-        "OPENCODE_MODELS_REFRESH_COMMAND",
-        ("sh", "-c", f'echo "$0 $*" > {record}', "opencode", "models", "--refresh"),
+@pytest.mark.parametrize("harness", ["opencode", "codex", "claude"])
+@pytest.mark.parametrize("mode", [BootMode.FRESH, BootMode.REPO_IMAGE, BootMode.SNAPSHOT_RESTORE])
+async def test_catalog_recovery_precedes_harness_start(tmp_path, monkeypatch, harness, mode):
+    events = []
+    supervisor, *_ = _supervisor(tmp_path, events)
+    supervisor.config = replace(supervisor.config, session_config={"harness": harness})
+    monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
+    monkeypatch.setenv("FROM_REPO_IMAGE", str(mode is BootMode.REPO_IMAGE).lower())
+    monkeypatch.setenv("RESTORED_FROM_SNAPSHOT", str(mode is BootMode.SNAPSHOT_RESTORE).lower())
+    supervisor_module.ensure_model_catalog.side_effect = lambda *_args, **_kwargs: (
+        events.append("catalog") or False
     )
-    supervisor, *_ = _supervisor(tmp_path, [])
 
-    await supervisor._refresh_models_catalog()
-
-    assert record.read_text() == "opencode models --refresh\n"
-    supervisor.log.info.assert_called_once_with("opencode_models.refresh_finished", exit_code=0)
-
-
-@pytest.mark.parametrize(
-    ("command", "error"),
-    [(("/nonexistent/opencode",), FileNotFoundError), (("sleep", "30"), TimeoutError)],
-    ids=["missing", "hung"],
-)
-async def test_models_catalog_refresh_failure_is_not_fatal(tmp_path, monkeypatch, command, error):
-    monkeypatch.setattr(supervisor_module, "OPENCODE_MODELS_REFRESH_COMMAND", command)
-    monkeypatch.setattr(supervisor_module, "OPENCODE_MODELS_REFRESH_TIMEOUT_SECONDS", 0.2)
-    supervisor, *_ = _supervisor(tmp_path, [])
-
-    await supervisor._refresh_models_catalog()
-
-    assert isinstance(supervisor.log.warn.call_args.kwargs["exc"], error)
-
-
-async def test_models_catalog_refresh_nonzero_exit_is_logged_as_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        supervisor_module, "OPENCODE_MODELS_REFRESH_COMMAND", ("sh", "-c", "exit 3")
-    )
-    supervisor, *_ = _supervisor(tmp_path, [])
-
-    await supervisor._refresh_models_catalog()
-
-    supervisor.log.warn.assert_called_once_with("opencode_models.refresh_failed", exit_code=3)
-    supervisor.log.info.assert_not_called()
+    # A failed recovery is nonfatal, but always finishes before a turn can start.
+    assert await supervisor.run() is True
+    if harness == "claude":
+        supervisor_module.ensure_model_catalog.assert_not_awaited()
+    else:
+        assert events.index("catalog") < events.index("opencode") < events.index("bridge")
 
 
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { buildBootstrapSql, parseArgs, run } from "./bootstrap-workspace-owner.ts";
 
 const USER_ID = "11111111111111111111111111111111";
 const OTHER_USER_ID = "22222222222222222222222222222222";
 
-function createDatabase(): DatabaseSync {
-  const database = new DatabaseSync(":memory:");
+function createDatabase(path = ":memory:"): DatabaseSync {
+  const database = new DatabaseSync(path);
   database.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE users (
@@ -102,6 +105,22 @@ function insertPriorAudit(
 }
 
 describe("Owner bootstrap CLI arguments", () => {
+  it("requires exactly one backend and accepts an explicit SQLite target", () => {
+    assert.deepEqual(parseArgs(["--sqlite", "/tmp/workspace.sqlite", "--user", USER_ID]), {
+      sqlite: "/tmp/workspace.sqlite",
+      userId: USER_ID,
+      execute: false,
+    });
+    assert.throws(() => parseArgs(["--user", USER_ID]), /exactly one/);
+    assert.throws(
+      () => parseArgs(["--database", "db", "--sqlite", "local.sqlite", "--user", USER_ID]),
+      /exactly one/
+    );
+    for (const path of ["", ":memory:", "file:workspace.sqlite"]) {
+      assert.throws(() => parseArgs(["--sqlite", path, "--user", USER_ID]), /existing/);
+    }
+  });
+
   it("defaults to a remote dry run and accepts explicit execution", () => {
     assert.deepEqual(parseArgs(["--database", "open-inspect-prod", "--user", USER_ID]), {
       database: "open-inspect-prod",
@@ -132,6 +151,110 @@ describe("Owner bootstrap CLI arguments", () => {
     assert.throws(
       () => parseArgs(["--database", "db", "--user", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA"]),
       /canonical/
+    );
+  });
+});
+
+describe("Owner bootstrap on existing SQLite files", () => {
+  function fixture(t: TestContext) {
+    const directory = mkdtempSync(join(tmpdir(), "owner-bootstrap-"));
+    const path = join(directory, "workspace.sqlite");
+    const database = createDatabase(path);
+    t.after(() => {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    return { database, path, directory };
+  }
+
+  it("dry-runs, promotes a fresh Member, and becomes an audit-free no-op", async (t) => {
+    const { database, path } = fixture(t);
+    const options = { sqlite: path, userId: USER_ID, execute: false };
+    await run(options);
+    assert.equal(preflight(database).status, "ready");
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS n FROM authorization_audit_events").get()!.n,
+      0
+    );
+
+    await run(
+      { ...options, execute: true },
+      { randomUUID: () => "sqlite-';audit", now: () => 100 }
+    );
+    assert.equal(preflight(database).status, "no-op");
+    const audit = database.prepare("SELECT * FROM authorization_audit_events").get()!;
+    assert.equal(audit.id, "sqlite-';audit");
+    assert.equal(audit.principal_kind, "service");
+    assert.equal(audit.actor_service_snapshot, "operator-cli");
+    assert.equal(audit.actor_user_id_snapshot, null);
+    await run({ ...options, execute: true });
+    assert.equal(
+      database.prepare("SELECT COUNT(*) AS n FROM authorization_audit_events").get()!.n,
+      1
+    );
+  });
+
+  for (const [label, change] of [
+    ["suspended target", "UPDATE users SET suspended_at = 1"],
+    ["missing assignment", "DELETE FROM user_role_assignments"],
+    ["missing target", "DELETE FROM user_role_assignments; DELETE FROM users"],
+    ["inconsistent Owner role", "UPDATE roles SET is_system = 0 WHERE key = 'owner'"],
+    ["incomplete schema", "ALTER TABLE authorization_audit_events DROP COLUMN reason_code"],
+    [
+      "another Owner",
+      `INSERT INTO users VALUES ('${OTHER_USER_ID}', NULL);
+      INSERT INTO user_role_assignments VALUES ('${OTHER_USER_ID}', 'role_builtin_owner')`,
+    ],
+  ]) {
+    it(`refuses ${label} without an audit or promotion`, async (t) => {
+      const { database, path } = fixture(t);
+      database.exec(change);
+      await assert.rejects(run({ sqlite: path, userId: USER_ID, execute: true }), /refused/);
+      assert.equal(
+        database.prepare("SELECT COUNT(*) AS n FROM authorization_audit_events").get()!.n,
+        0
+      );
+      assert.notEqual(
+        database.prepare("SELECT role_id FROM user_role_assignments WHERE user_id = ?").get(USER_ID)
+          ?.role_id,
+        "role_builtin_owner"
+      );
+    });
+  }
+
+  for (const table of ["authorization_audit_events", "user_role_assignments"]) {
+    it(`rolls back when ${table} rejects a write`, async (t) => {
+      const { database, path } = fixture(t);
+      const event = table === "authorization_audit_events" ? "INSERT" : "UPDATE";
+      database.exec(`CREATE TRIGGER reject_write BEFORE ${event} ON ${table}
+        BEGIN SELECT RAISE(ABORT, 'write rejected'); END`);
+      await assert.rejects(run({ sqlite: path, userId: USER_ID, execute: true }), /write rejected/);
+      assert.equal(preflight(database).status, "ready");
+      assert.equal(
+        database.prepare("SELECT COUNT(*) AS n FROM authorization_audit_events").get()!.n,
+        0
+      );
+    });
+  }
+
+  it("never creates a missing SQLite file or falls back to D1", async (t) => {
+    const { directory } = fixture(t);
+    const path = join(directory, "missing.sqlite");
+    await assert.rejects(
+      run(
+        { sqlite: path, userId: USER_ID, execute: true },
+        {
+          runWrangler: () => {
+            throw new Error("unexpected remote call");
+          },
+        }
+      ),
+      /ENOENT/
+    );
+    assert.equal(existsSync(path), false);
+    await assert.rejects(
+      run({ sqlite: directory, userId: USER_ID, execute: true }),
+      /existing database file/
     );
   });
 });

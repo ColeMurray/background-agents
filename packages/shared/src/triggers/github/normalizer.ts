@@ -55,6 +55,17 @@ function getActor(payload: GitHubEventBase): string | undefined {
   return payload.sender?.login;
 }
 
+function getActorKind(payload: GitHubEventBase): GitHubAutomationEvent["actorKind"] {
+  switch (payload.sender?.type) {
+    case "User":
+      return "person";
+    case "Bot":
+      return "bot";
+    default:
+      return undefined;
+  }
+}
+
 function getPRLabels(pr: PullRequestPayload["pull_request"]): string[] | undefined {
   const names = pr.labels?.map((l) => l.name).filter((name): name is string => Boolean(name));
   return names?.length ? names : undefined;
@@ -196,6 +207,7 @@ function normalizePullRequest(
     targetBranch,
     labels: getPRLabels(pr),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     pullRequest: getPullRequestFacts(pr),
     contextBlock: buildPullRequestContextBlock(eventType, payload),
     meta: {
@@ -222,6 +234,7 @@ function normalizeIssueComment(
     repoOwner: getRepoOwner(payload),
     repoName: getRepoName(payload),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildIssueCommentContextBlock(payload),
     meta: {
       commentId,
@@ -249,6 +262,7 @@ function normalizeReviewComment(
     branch: pr.head?.ref,
     targetBranch,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildReviewCommentContextBlock(payload),
     meta: {
       commentId,
@@ -272,6 +286,7 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
     repoName: getRepoName(payload),
     branch: checkSuite.head_branch ?? undefined,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     conclusion,
     checkConclusion: conclusion,
     contextBlock: buildCheckSuiteContextBlock(payload),
@@ -303,6 +318,7 @@ function normalizeWorkflowRun(
     repoName: getRepoName(payload),
     branch: run.head_branch ?? undefined,
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     conclusion,
     workflowName: run.name,
     contextBlock: buildWorkflowRunContextBlock(payload),
@@ -332,6 +348,7 @@ function normalizeIssue(
     repoName: getRepoName(payload),
     labels: getIssueLabels(issue),
     actor: getActor(payload),
+    actorKind: getActorKind(payload),
     contextBlock: buildIssueContextBlock(eventType, payload),
     meta: {
       issueNumber: issue.number,
