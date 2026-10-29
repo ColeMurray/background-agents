@@ -6,6 +6,7 @@ the synchronous per-event translator (`_apply_sse_event`) dispositions and
 the cross-prompt session-title dedupe, which are directly testable now.
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -222,7 +223,7 @@ class TestReasoningProgress:
     ASSISTANT_ID = oc_message_id(PROMPT_TS_MS + 1_000, 1, "a")
     T0 = PROMPT_TS_MS + 2_000
 
-    def authorized(self) -> tuple[OpenCodePromptStream, _PromptState]:
+    def authorized(self, provider_id: str = "openai") -> tuple[OpenCodePromptStream, _PromptState]:
         stream = make_stream()
         state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(
@@ -235,6 +236,7 @@ class TestReasoningProgress:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": PROMPT_MESSAGE_ID,
+                        "providerID": provider_id,
                         "time": {"created": PROMPT_TS_MS + 1_000},
                     }
                 },
@@ -243,7 +245,9 @@ class TestReasoningProgress:
         self.apply(stream, state, {"type": "step-start", "id": "prt_step_1"})
         return stream, state
 
-    def apply(self, stream: OpenCodePromptStream, state: _PromptState, part: dict) -> list[dict]:
+    def apply_all(
+        self, stream: OpenCodePromptStream, state: _PromptState, part: dict
+    ) -> list[dict]:
         step = stream._apply_sse_event(
             state,
             sse(
@@ -251,7 +255,12 @@ class TestReasoningProgress:
                 {"part": {"sessionID": PARENT_SESSION_ID, "messageID": self.ASSISTANT_ID, **part}},
             ),
         )
-        return [event for event in step.events if event["type"] == "reasoning"]
+        return step.events
+
+    def apply(self, stream: OpenCodePromptStream, state: _PromptState, part: dict) -> list[dict]:
+        return [
+            event for event in self.apply_all(stream, state, part) if event["type"] == "reasoning"
+        ]
 
     def reasoning(self, part_id: str, start: int, end: int | None = None, text: str = "") -> dict:
         time = {"start": start} if end is None else {"start": start, "end": end}
@@ -282,6 +291,7 @@ class TestReasoningProgress:
                 "updatedAt": self.T0,
                 "summaries": [],
                 "summaryCount": 0,
+                "active": True,
             }
         ]
         assert first[0]["summaries"] == [
@@ -342,6 +352,56 @@ class TestReasoningProgress:
         assert len(latest["summaries"]) == MAX_REASONING_SUMMARIES
         assert latest["summaries"][0]["text"] == "**Thought 3**"
         assert latest["summaries"][-1]["text"] == "x" * (MAX_REASONING_SUMMARY_CHARS - 1) + "…"
+
+    def test_output_ends_reasoning_and_resumed_reasoning_reopens_it(self):
+        """Clients see a text part only once it completes, so reasoning has to be
+        reported as over when the text starts, not when its token arrives."""
+        stream, state = self.authorized()
+        self.apply(stream, state, self.reasoning("prt_r1", self.T0, self.T0 + 20_000, "**Plan**"))
+
+        text_started = self.apply_all(
+            stream, state, {"type": "text", "id": "prt_text", "text": "", "time": {"start": 1}}
+        )
+        text_finished = self.apply_all(
+            stream,
+            state,
+            {"type": "text", "id": "prt_text", "text": "Here is the plan.", "time": {"start": 1}},
+        )
+        resumed = self.apply(stream, state, self.reasoning("prt_r2", self.T0 + 95_000))
+        finished = self.apply(stream, state, {"type": "step-finish", "id": "prt_finish_1"})
+
+        assert text_started == [
+            {
+                "type": "reasoning",
+                "messageId": "cp-msg-1",
+                "stepId": "prt_step_1",
+                "startedAt": self.T0,
+                "updatedAt": self.T0 + 20_000,
+                "summaries": [{"text": "**Plan**", "at": self.T0 + 20_000}],
+                "summaryCount": 1,
+                "active": False,
+            }
+        ]
+        assert [event["type"] for event in text_finished] == ["token"]
+        assert resumed[0]["active"] is True
+        assert resumed[0]["updatedAt"] == self.T0 + 95_000
+        assert finished[0]["active"] is False
+
+    def test_reasoning_text_is_withheld_for_providers_without_summaries(self):
+        stream, state = self.authorized(provider_id="anthropic")
+
+        opened = self.apply(stream, state, self.reasoning("prt_r1", self.T0))
+        finished = self.apply(
+            stream,
+            state,
+            self.reasoning("prt_r1", self.T0, self.T0 + 30_000, "Raw reasoning about the bug"),
+        )
+
+        assert opened[0]["active"] is True
+        assert finished[0]["updatedAt"] == self.T0 + 30_000
+        assert finished[0]["summaries"] == []
+        assert finished[0]["summaryCount"] == 0
+        assert "Raw reasoning" not in json.dumps(finished)
 
     def test_child_reasoning_is_not_forwarded(self):
         stream, state = self.authorized()

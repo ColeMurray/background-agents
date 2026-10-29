@@ -171,8 +171,9 @@ const nonArtifactSandboxEventSchemas = [
     taskCallId: z.string().optional(),
   }),
   // Reasoning progress for one model step. Like `token`, each event carries
-  // the step's whole state so far, so storage keeps one row per step. Only the
-  // provider's display summaries are forwarded, never raw reasoning. Live
+  // the step's whole state so far, so storage keeps one row per step.
+  // Summaries come only from providers whose reasoning text is a display
+  // summary; other providers report timing alone, never raw reasoning. Live
   // ingest drops unknown union entries, so this entry must exist before
   // runtimes emit it.
   messageSandboxEventBaseSchema.extend({
@@ -186,6 +187,8 @@ const nonArtifactSandboxEventSchemas = [
     summaries: z.array(reasoningSummarySchema),
     /** Every summary the step produced, including any the cap dropped. */
     summaryCount: z.number().int().nonnegative(),
+    /** True while the step reasons; false once it writes output or finishes. */
+    active: z.boolean(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_result"),

@@ -198,7 +198,12 @@ describe("POST /internal/sandbox-event", () => {
     });
     const { messageId } = await promptResponse.json<{ messageId: string }>();
 
-    const sendReasoning = async (stepId: string, summaries: string[], timestamp: number) => {
+    const sendReasoning = async (
+      stepId: string,
+      summaries: string[],
+      timestamp: number,
+      active = true
+    ) => {
       const response = await stub.fetch("http://internal/internal/sandbox-event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -215,6 +220,7 @@ describe("POST /internal/sandbox-event", () => {
             at: 1_000_000 + (index + 1) * 20_000,
           })),
           summaryCount: summaries.length,
+          active,
         }),
       });
       expect(response.status).toBe(200);
@@ -226,7 +232,7 @@ describe("POST /internal/sandbox-event", () => {
       `SELECT created_at FROM events WHERE type = 'reasoning' AND message_id = ?`,
       messageId
     );
-    await sendReasoning("step-1", ["**Planning**", "**Checking CI**"], 1040);
+    await sendReasoning("step-1", ["**Planning**", "**Checking CI**"], 1040, false);
     await sendReasoning("step-2", ["**Running the tests**"], 1100);
 
     const rows = await queryDO<{ data: string; created_at: number }>(
@@ -238,7 +244,11 @@ describe("POST /internal/sandbox-event", () => {
 
     expect(rows).toHaveLength(2);
     expect(rows[0].created_at).toBe(opened.created_at);
-    expect(JSON.parse(rows[0].data)).toMatchObject({ stepId: "step-1", summaryCount: 2 });
+    expect(JSON.parse(rows[0].data)).toMatchObject({
+      stepId: "step-1",
+      summaryCount: 2,
+      active: false,
+    });
     expect(JSON.parse(rows[1].data)).toMatchObject({ stepId: "step-2", summaryCount: 1 });
   });
 

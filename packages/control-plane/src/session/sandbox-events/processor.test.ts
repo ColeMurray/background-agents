@@ -170,6 +170,7 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
       updatedAt: 1_026_000,
       summaries: [{ text: "**secret-plan**", at: 1_026_000 }],
       summaryCount: 1,
+      active: true,
     } satisfies SandboxEvent;
     await h.processor.processSandboxEvent(event);
 
@@ -179,6 +180,7 @@ describe("SessionSandboxEventProcessor event diagnostics", () => {
       message_id: "msg-1",
       step_id: "step-1",
       summary_count: 1,
+      active: true,
       duration_ms: expect.any(Number),
     });
     expect(JSON.stringify(h.log.info.mock.calls)).not.toContain("secret-");

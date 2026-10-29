@@ -12,29 +12,37 @@ export function reasoningKey(event: Pick<ReasoningEvent, "messageId" | "stepId">
   return JSON.stringify([event.messageId, event.stepId]);
 }
 
-/** One display line from a provider summary: its first line, without markdown emphasis. */
-export function reasoningTitle(text: string): string {
-  const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
-  return firstLine
-    .trim()
-    .replace(/^(\*\*|__)(.+)\1$/, "$2")
-    .trim();
+function splitSummary(text: string): { title: string; detail: string } {
+  const lines = text.split("\n");
+  const titleIndex = lines.findIndex((line) => line.trim());
+  if (titleIndex === -1) return { title: "", detail: "" };
+  return {
+    title: lines[titleIndex]
+      .trim()
+      .replace(/^(\*\*|__)(.+)\1$/, "$2")
+      .trim(),
+    detail: lines
+      .slice(titleIndex + 1)
+      .join("\n")
+      .trim(),
+  };
 }
 
-/** Events after which the model has left the reasoning it last reported. */
-const REASONING_ENDING_EVENT_TYPES: ReadonlySet<SandboxEvent["type"]> = new Set([
-  "token",
-  "tool_call",
-  "step_finish",
-  "user_message",
-  "execution_complete",
-  "error",
-]);
+/** One display line from a provider summary: its first line, without markdown emphasis. */
+export function reasoningTitle(text: string): string {
+  return splitSummary(text).title;
+}
+
+/** The rest of a provider summary after its title line; empty when it is only a title. */
+export function reasoningDetail(text: string): string {
+  return splitSummary(text).detail;
+}
 
 /**
- * The reasoning the model is in the middle of: the newest reasoning event when
- * nothing that ends it has arrived since. While a step reasons the runtime
- * sends nothing else, so this is what the thinking row narrates.
+ * The reasoning the model is in the middle of: the newest reasoning event of
+ * the running turn, while the runtime still reports it active. The runtime
+ * clears `active` when the step writes output or finishes, which clients
+ * otherwise cannot see while the output is being written.
  */
 export function selectLiveReasoning(
   events: SandboxEvent[],
@@ -43,8 +51,9 @@ export function selectLiveReasoning(
   if (!isProcessing) return null;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event.type === "reasoning") return event;
-    if (REASONING_ENDING_EVENT_TYPES.has(event.type)) return null;
+    if (event.type === "reasoning") return event.active ? event : null;
+    // An earlier turn's reasoning never describes the running one.
+    if (event.type === "execution_complete") return null;
   }
   return null;
 }

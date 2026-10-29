@@ -429,7 +429,8 @@ describe("reasoning progress", () => {
 
   function reasoningEvent(
     summaries: string[],
-    updatedAt = STEP_START_MS + summaries.length * 20_000
+    updatedAt = STEP_START_MS + summaries.length * 20_000,
+    active = true
   ): Extract<SandboxEvent, { type: "reasoning" }> {
     return {
       type: "reasoning",
@@ -444,6 +445,7 @@ describe("reasoning progress", () => {
         at: STEP_START_MS + (index + 1) * 20_000,
       })),
       summaryCount: summaries.length,
+      active,
     };
   }
 
@@ -480,13 +482,48 @@ describe("reasoning progress", () => {
     expect(screen.getByText("No new thoughts for 4m 0s")).toBeInTheDocument();
   });
 
+  it("stops narrating once the step writes output, without a quiet note", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(STEP_START_MS + 40_000 + 10 * 60_000);
+    render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        isProcessing
+        events={[reasoningEvent(thoughts, STEP_START_MS + 40_000, false)]}
+      />
+    );
+
+    expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    expect(screen.queryByText(/No new thoughts/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Thought for 40s/ })).toBeInTheDocument();
+  });
+
+  it("shows each summary's full text when expanded", async () => {
+    render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          reasoningEvent(
+            ["**Reading the failing test**\n\nThe assertion compares local and UTC dates."],
+            STEP_START_MS + 20_000,
+            false
+          ),
+        ]}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /Thought for 20s/ }));
+
+    expect(screen.getByText("The assertion compares local and UTC dates.")).toBeInTheDocument();
+  });
+
   it("leaves an expandable record once the step moves on", async () => {
     render(
       <SessionTimeline
         {...baseTimelineProps}
         isProcessing
         events={[
-          reasoningEvent(thoughts, STEP_START_MS + 630_000),
+          reasoningEvent(thoughts, STEP_START_MS + 630_000, false),
           toolEvent("bash", "call-1", STEP_START_MS / 1000 + 656),
         ]}
       />

@@ -30,6 +30,7 @@ function eventLogContext(event: SandboxEventWithAck, messageId: string | null) {
   if ("success" in event) fields.success = event.success;
   if ("tool" in event) fields.tool = event.tool;
   if ("summaryCount" in event) fields.summary_count = event.summaryCount;
+  if ("active" in event) fields.active = event.active;
   for (const [key, value] of Object.entries(fields)) {
     if (typeof value === "string" && value.length > LOG_METADATA_MAX_CHARS) {
       fields[key] = value.slice(0, LOG_METADATA_MAX_CHARS);

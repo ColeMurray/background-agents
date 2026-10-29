@@ -4,7 +4,7 @@ description: A tour of the session page, from the header and timeline to the com
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-28"
+lastReviewed: "2026-10-29"
 relatedCode:
   - packages/web/src/hooks/use-prompt-draft.ts
   - packages/web/src/lib/prompt-drafts.ts
@@ -15,6 +15,8 @@ relatedCode:
   - packages/web/src/lib/session-socket/boot-phase.ts
   - packages/web/src/components/session-header.tsx
   - packages/web/src/components/session-timeline.tsx
+  - packages/web/src/components/reasoning-progress.tsx
+  - packages/web/src/lib/reasoning.ts
   - packages/web/src/components/mermaid-code-block.tsx
   - packages/web/src/components/session-prompt-composer.tsx
   - packages/web/src/components/session-right-sidebar.tsx
@@ -46,19 +48,19 @@ On phones the header keeps only the title. A status strip below it appears when 
 
 The timeline is the shared record of the session. Everyone connected sees the same events.
 
-| Row                      | What it looks like                                                                                                                                                                                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Your prompt              | A highlighted block labeled "You". Prompts from other people show their name and avatar. Attached images appear under the text. Hover to reveal "Copy markdown".                                                                                                                     |
-| Assistant response       | A block labeled "Assistant" rendered as Markdown. File paths link to the file in the repository.                                                                                                                                                                                     |
-| "Thinking..."            | A pulsing row at the bottom while the agent is processing a prompt. While the model reasons, it shows how long it has been thinking, its latest reasoning summary, and how many summaries it has reported. If no new summary arrives for 3 minutes, it adds "No new thoughts for …". |
-| "Thought for …"          | A collapsible row such as "Thought for 4m 12s" where a reasoning step ran, with its last summary beside it. Expand it to read each summary with its time into the step. Appears for models that report reasoning summaries.                                                          |
-| Work group               | A collapsible row such as "Worked for 2m 14s" that folds the tool activity for one prompt. Expand it to read what the agent did.                                                                                                                                                     |
-| Tool activity            | Rows showing the tool name and a short summary (Read, Edit, Apply Patch, Bash, and others). Click a row to expand its input and output. Sub-agent tasks show as their own rows with "Task activity", "Instructions", and "Result" disclosures.                                       |
-| Status rows              | "Git sync", "Execution complete", "Execution failed", and "Error" rows, colored by outcome. Warnings appear in yellow.                                                                                                                                                               |
-| "Context compacted"      | A divider marking where the agent compressed its context to keep working on a long session.                                                                                                                                                                                          |
-| "Resumed by PR feedback" | A header on a prompt that PR Feedback Autofix queued from a review or PR comment, with "PR comment" or "Review", "Human" or "Bot", and an "Open feedback" link.                                                                                                                      |
-| Pull request card        | "Opened pull request #12", "Updated pull request #12", or "Create pull request failed". Expand it to see the title, the branch route ("feature-branch into main"), the description, a Draft, Open, or Updated badge, and an "Open PR" button.                                        |
-| Screenshot or video card | A preview with a caption, labeled "Screenshot" or "Video". Click it to open the media viewer.                                                                                                                                                                                        |
+| Row                      | What it looks like                                                                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your prompt              | A highlighted block labeled "You". Prompts from other people show their name and avatar. Attached images appear under the text. Hover to reveal "Copy markdown".                                                                                                                                              |
+| Assistant response       | A block labeled "Assistant" rendered as Markdown. File paths link to the file in the repository.                                                                                                                                                                                                              |
+| "Thinking..."            | A pulsing row at the bottom while the agent is processing a prompt. While the model reasons, it shows how long it has been thinking. Models that report reasoning summaries also show the latest summary and how many have arrived. If 3 minutes pass without new reasoning, it adds "No new thoughts for …". |
+| "Thought for …"          | A collapsible row such as "Thought for 4m 12s" where a reasoning step ran, with its last summary beside it. Expand it to read each summary in full with its time into the step. Appears for models that report reasoning summaries.                                                                           |
+| Work group               | A collapsible row such as "Worked for 2m 14s" that folds the tool activity for one prompt. Expand it to read what the agent did.                                                                                                                                                                              |
+| Tool activity            | Rows showing the tool name and a short summary (Read, Edit, Apply Patch, Bash, and others). Click a row to expand its input and output. Sub-agent tasks show as their own rows with "Task activity", "Instructions", and "Result" disclosures.                                                                |
+| Status rows              | "Git sync", "Execution complete", "Execution failed", and "Error" rows, colored by outcome. Warnings appear in yellow.                                                                                                                                                                                        |
+| "Context compacted"      | A divider marking where the agent compressed its context to keep working on a long session.                                                                                                                                                                                                                   |
+| "Resumed by PR feedback" | A header on a prompt that PR Feedback Autofix queued from a review or PR comment, with "PR comment" or "Review", "Human" or "Bot", and an "Open feedback" link.                                                                                                                                               |
+| Pull request card        | "Opened pull request #12", "Updated pull request #12", or "Create pull request failed". Expand it to see the title, the branch route ("feature-branch into main"), the description, a Draft, Open, or Updated badge, and an "Open PR" button.                                                                 |
+| Screenshot or video card | A preview with a caption, labeled "Screenshot" or "Video". Click it to open the media viewer.                                                                                                                                                                                                                 |
 
 Assistant responses render Mermaid diagrams. Once a ` ```mermaid ` code block is complete, it shows as a diagram with a "View diagram source" disclosure beneath it. A diagram that cannot be rendered stays as code. Ask the agent for a Mermaid diagram when a flow or architecture is easier to read as a picture.
 

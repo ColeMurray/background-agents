@@ -43,6 +43,11 @@ CONTEXT_OVERFLOW_ERROR_NAME: Final = "ContextOverflowError"
 # the newest summaries, each trimmed to a display line's worth of text.
 MAX_REASONING_SUMMARIES: Final = 50
 MAX_REASONING_SUMMARY_CHARS: Final = 280
+# Providers whose reasoning text is a provider-written summary meant for
+# display: OpenAI's Responses API returns only reasoning summaries. OpenCode
+# does not mark summaries, and other providers can stream raw reasoning, so
+# their steps report reasoning timing without text.
+REASONING_SUMMARY_PROVIDERS: Final = frozenset({"openai"})
 
 OPENCODE_DEFAULT_TITLE_RE: Final = re.compile(
     r"^(new session|child session) - " r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
@@ -67,6 +72,9 @@ class _ReasoningRun:
     summaries: list[dict[str, Any]] = field(default_factory=list)
     summary_count: int = 0
     finished_part_ids: set[str] = field(default_factory=set)
+    # Cleared when the step moves on to output or finishes; set again if the
+    # step resumes reasoning.
+    active: bool = True
 
     def to_event(self, message_id: str, step_id: str) -> dict[str, Any]:
         return {
@@ -77,6 +85,7 @@ class _ReasoningRun:
             "updatedAt": self.updated_at_ms,
             "summaries": list(self.summaries),
             "summaryCount": self.summary_count,
+            "active": self.active,
         }
 
 
@@ -102,6 +111,9 @@ class _PromptState:
     step_ids: StepIdTracker = field(default_factory=StepIdTracker)
     # Parent reasoning progress keyed by step id.
     reasoning_runs: dict[str, _ReasoningRun] = field(default_factory=dict)
+    # Parent assistant messages whose provider writes display summaries
+    # (REASONING_SUMMARY_PROVIDERS); only their reasoning text is forwarded.
+    summary_message_ids: set[str] = field(default_factory=set)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
@@ -476,6 +488,8 @@ class OpenCodePromptStream:
                         events.append(error_event)
 
                 if disposition is AssistantMessageDisposition.OUTPUT:
+                    if info.get("providerID") in REASONING_SUMMARY_PROVIDERS:
+                        state.summary_message_ids.add(oc_msg_id)
                     events.extend(self._drain_pending_parts(state, oc_msg_id, is_subtask=False))
 
             if finish and finish not in ("tool-calls", ""):
@@ -637,15 +651,22 @@ class OpenCodePromptStream:
             }
         ]
 
+    @staticmethod
+    def _reasoning_step_id(state: _PromptState, part: dict[str, Any]) -> str:
+        """The step a parent part belongs to, falling back to its message."""
+        oc_message_id = part.get("messageID") or ""
+        return state.step_ids.active.get(oc_message_id) or oc_message_id
+
     def _reasoning_event(self, state: _PromptState, part: dict[str, Any]) -> dict[str, Any] | None:
         """Fold one parent reasoning part into its step's run and report the run.
 
         OpenCode sends a reasoning part when its segment opens, with no
-        ``time.end``, and again with its summary when the segment finishes;
-        the summary text itself arrives as a ``message.part.delta`` just before
-        that. Only the step's first opening is reported, which starts the
-        step's clock. Each finish is reported once, so a replayed part changes
-        nothing.
+        ``time.end``, and again with its text when the segment finishes; the
+        text itself arrives as a ``message.part.delta`` just before that. The
+        step's first opening is reported, which starts the step's clock, and
+        so is an opening that resumes reasoning after output. Each finish is
+        reported once, so a replayed part changes nothing. The text is kept
+        only when the message's provider writes display summaries.
         """
         time_info = part.get("time")
         part_id = part.get("id")
@@ -653,17 +674,20 @@ class OpenCodePromptStream:
             return None
         started = _epoch_ms(time_info.get("start"))
         ended = _epoch_ms(time_info.get("end"))
-        oc_message_id = part.get("messageID") or ""
-        step_id = state.step_ids.active.get(oc_message_id) or oc_message_id
+        step_id = self._reasoning_step_id(state, part)
         if not step_id:
             return None
 
         run = state.reasoning_runs.get(step_id)
         if ended is None:
-            if run is not None or started is None:
+            if started is None or (run is not None and run.active):
                 return None
-            run = _ReasoningRun(started_at_ms=started, updated_at_ms=started)
-            state.reasoning_runs[step_id] = run
+            if run is None:
+                run = _ReasoningRun(started_at_ms=started, updated_at_ms=started)
+                state.reasoning_runs[step_id] = run
+            else:
+                run.active = True
+                run.updated_at_ms = max(run.updated_at_ms, started)
             return run.to_event(state.message_id, step_id)
 
         if run is None:
@@ -673,11 +697,27 @@ class OpenCodePromptStream:
             return None
         run.finished_part_ids.add(part_id)
         run.updated_at_ms = max(run.updated_at_ms, ended)
-        summary = _reasoning_summary(part.get("text"))
+        is_summary = part.get("messageID") in state.summary_message_ids
+        summary = _reasoning_summary(part.get("text")) if is_summary else ""
         if summary:
             run.summary_count += 1
             run.summaries.append({"text": summary, "at": ended})
             del run.summaries[:-MAX_REASONING_SUMMARIES]
+        return run.to_event(state.message_id, step_id)
+
+    def _reasoning_ended_event(
+        self, state: _PromptState, part: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Report a step's reasoning as over once the step writes output or finishes.
+
+        Clients see a text part only when it completes and a tool call only once
+        it has input, so this is the signal that the model stopped reasoning.
+        """
+        step_id = self._reasoning_step_id(state, part)
+        run = state.reasoning_runs.get(step_id) if step_id else None
+        if run is None or not run.active:
+            return None
+        run.active = False
         return run.to_event(state.message_id, step_id)
 
     def _parent_error_event_once(self, state: _PromptState, error: object) -> dict[str, Any] | None:
@@ -704,6 +744,10 @@ class OpenCodePromptStream:
         part_type = part.get("type", "")
         part_id = part.get("id", "")
         events: list[dict[str, Any]] = []
+        if not is_subtask and part_type in ("text", "tool", "step-finish"):
+            reasoning_ended = self._reasoning_ended_event(state, part)
+            if reasoning_ended:
+                events.append(reasoning_ended)
 
         if part_type == "text":
             if is_subtask:

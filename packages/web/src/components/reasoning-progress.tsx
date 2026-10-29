@@ -4,7 +4,7 @@ import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
 import { ChevronRightIcon } from "@/components/ui/icons";
 import { useNow } from "@/hooks/use-now";
 import { formatDuration } from "@/lib/format";
-import { REASONING_QUIET_AFTER_MS, reasoningTitle } from "@/lib/reasoning";
+import { REASONING_QUIET_AFTER_MS, reasoningDetail, reasoningTitle } from "@/lib/reasoning";
 
 /** Position of a thought within its step, e.g. 26_000 → "+0:26". */
 function formatOffset(offsetMs: number): string {
@@ -106,16 +106,24 @@ export function ReasoningRow({
               {thoughtCount(droppedCount)} earlier not kept
             </li>
           )}
-          {event.summaries.map((summary, index) => (
-            <li key={`${summary.at}:${index}`} className="flex min-w-0 gap-2">
-              <span className="w-12 shrink-0 text-xs tabular-nums text-secondary-foreground">
-                {formatOffset(summary.at - event.startedAt)}
-              </span>
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {reasoningTitle(summary.text)}
-              </span>
-            </li>
-          ))}
+          {event.summaries.map((summary, index) => {
+            const detail = reasoningDetail(summary.text);
+            return (
+              <li key={`${summary.at}:${index}`} className="flex min-w-0 gap-2">
+                <span className="w-12 shrink-0 text-xs tabular-nums text-secondary-foreground">
+                  {formatOffset(summary.at - event.startedAt)}
+                </span>
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {reasoningTitle(summary.text)}
+                  {detail && (
+                    <span className="block whitespace-pre-line text-muted-foreground">
+                      {detail}
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>
