@@ -5,6 +5,7 @@ import { admissionRulesSchema, type AdmissionRules } from "@open-inspect/shared/
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { LockIcon } from "@/components/ui/icons";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAdmissionPolicy } from "@/hooks/use-admission-policy";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { SignInAllowlistAddRule } from "./sign-in-allowlist-add-rule";
@@ -23,7 +24,7 @@ export function SignInAllowlistSection() {
   const panel = useRef<HTMLElement>(null);
   const titleId = useId();
   const { snapshot, draft, changes } = policy;
-  const pendingInput = !!input.trim();
+  const pendingInput = input.length > 0;
   const dirty = changes.length > 0 || pendingInput;
   const editable = !!snapshot && !snapshot.editingDisabledReason && !snapshot.unsafeAllowAllUsers;
   const entries = snapshot && draft ? allowlistEntries(snapshot, draft) : [];
@@ -130,22 +131,26 @@ export function SignInAllowlistSection() {
                 }}
               />
             )}
-            <ul className="divide-y divide-border-muted">
-              {entries.map((entry) => (
-                <SignInAllowlistRow
-                  key={`${entry.type}:${entry.value}`}
-                  entry={entry}
-                  disabled={!policy.canEdit}
-                  onRemove={() => setEntryInDraft(entry, false)}
-                  onRestore={() => setEntryInDraft(entry, true)}
-                />
-              ))}
-              {!entries.length && (
-                <li className="px-4 py-6 text-center text-sm text-muted-foreground">
-                  No one can sign in yet.
-                </li>
-              )}
-            </ul>
+            <TooltipProvider>
+              <ul className="divide-y divide-border-muted">
+                {entries.map((entry) => (
+                  <SignInAllowlistRow
+                    key={`${entry.type}:${entry.value}`}
+                    entry={entry}
+                    disabled={!policy.canEdit}
+                    onRemove={() => setEntryInDraft(entry, false)}
+                    onRestore={() => setEntryInDraft(entry, true)}
+                  />
+                ))}
+                {!entries.length && (
+                  <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    {snapshot.unsafeAllowAllEffective
+                      ? "No rules. Unsafe allow-all lets every authenticated user sign in."
+                      : "No one can sign in yet."}
+                  </li>
+                )}
+              </ul>
+            </TooltipProvider>
           </div>
 
           <p className="text-xs text-muted-foreground">

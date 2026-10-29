@@ -146,7 +146,10 @@ describe("SignInAllowlistSection", () => {
     await renderPolicy();
     expect(screen.getByText(/Only people who match something on this list/)).toBeInTheDocument();
     expect(screen.getByText("recovery@example.com")).toBeInTheDocument();
-    expect(screen.getByLabelText("Set by deployment")).toBeInTheDocument();
+    const lock = screen.getByRole("img", {
+      name: "Set by deployment: ALLOWED_EMAILS / allowed_emails",
+    });
+    expect(lock).toHaveAttribute("tabindex", "0");
     expect(screen.queryByRole("button", { name: /Remove/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
     expect(screen.queryByText(/GitHub sign-in is off/)).not.toBeInTheDocument();
@@ -302,6 +305,17 @@ describe("SignInAllowlistSection", () => {
     expect(screen.getByText(/Add or clear the typed value/)).toBeInTheDocument();
   });
 
+  it("treats whitespace-only typed input as unsaved", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onLeave = await renderGuardedPolicy();
+    addRule("new@example.com");
+    typeRule("   ");
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Leave settings" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(onLeave).not.toHaveBeenCalled();
+  });
+
   it("confirms before discarding unsaved changes", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await renderPolicy();
@@ -313,6 +327,23 @@ describe("SignInAllowlistSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     expect(screen.queryByText("new@example.com")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Review and save" })).not.toBeInTheDocument();
+  });
+
+  it("does not claim no one can sign in when unsafe allow-all admits everyone", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(
+      json({
+        ...initial,
+        deployment: emptyAdmissionRules(),
+        effective: emptyAdmissionRules(),
+        editingDisabledReason: "unsafe_allow_all",
+        unsafeAllowAllUsers: true,
+        unsafeAllowAllEffective: true,
+      })
+    );
+    render(<SignInAllowlistSection />);
+    await screen.findByText("All authenticated users can sign in.");
+    expect(screen.queryByText("No one can sign in yet.")).not.toBeInTheDocument();
+    expect(screen.getByText(/Unsafe allow-all lets every authenticated user/)).toBeInTheDocument();
   });
 
   it("explains read-only unsafe allow-all without presenting an add input", async () => {

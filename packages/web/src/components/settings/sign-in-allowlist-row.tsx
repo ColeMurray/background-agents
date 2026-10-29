@@ -8,6 +8,7 @@ import {
   MailIcon,
   XIcon,
 } from "@/components/ui/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ADMISSION_RULE_GROUPS } from "./admission-rule-groups";
 import {
@@ -56,12 +57,22 @@ export function SignInAllowlistRow({
         <span className="rounded-sm bg-accent-muted px-1.5 py-0.5 text-xs text-accent">New</span>
       )}
       {entry.fromDeployment && (
-        <span
-          className="flex h-[26px] w-[26px] items-center justify-center"
-          title={`Set in your deployment config (${group.environment} / ${group.terraform}). It can't be changed here.`}
-        >
-          <LockIcon className="h-3.5 w-3.5 text-muted-foreground" aria-label="Set by deployment" />
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              role="img"
+              tabIndex={0}
+              aria-label={`Set by deployment: ${group.environment} / ${group.terraform}`}
+              className="flex h-[26px] w-[26px] items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <LockIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            Set in your deployment config ({group.environment} / {group.terraform}). It can&apos;t
+            be changed here.
+          </TooltipContent>
+        </Tooltip>
       )}
       {entry.status === "removed" ? (
         <Button
