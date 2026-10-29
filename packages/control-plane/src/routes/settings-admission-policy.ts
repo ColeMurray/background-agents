@@ -66,13 +66,10 @@ function deploymentConfiguration(env: Env) {
   };
 }
 
-async function deploymentHash(
-  config: ReturnType<typeof deploymentConfiguration>,
-  writesFrozen: boolean
-): Promise<string> {
+async function deploymentHash(config: ReturnType<typeof deploymentConfiguration>): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(JSON.stringify({ ...config, writesFrozen }))
+    new TextEncoder().encode(JSON.stringify(config))
   );
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -94,11 +91,7 @@ function snapshotResponse(
     updatedByUserId: policy.updatedByUserId,
     unsafeAllowAllEffective:
       config.unsafeAllowAllUsers && Object.values(effective).every((list) => list.length === 0),
-    editingDisabledReason: config.unsafeAllowAllUsers
-      ? "unsafe_allow_all"
-      : policy.writesFrozen
-        ? "maintenance"
-        : null,
+    editingDisabledReason: config.unsafeAllowAllUsers ? "unsafe_allow_all" : null,
   };
   const response = json(snapshot);
   response.headers.set("ETag", snapshot.etag);
@@ -110,7 +103,7 @@ async function getPolicy(_request: Request, env: Env, _params: object, ctx: User
   try {
     const config = deploymentConfiguration(env);
     const policy = await new AdmissionPolicyStore(ctx.db).get();
-    return snapshotResponse(config, policy, await deploymentHash(config, policy.writesFrozen));
+    return snapshotResponse(config, policy, await deploymentHash(config));
   } catch {
     logger.error("admission_policy.read_failed", { request_id: ctx.request_id });
     return failure("admission_policy_unavailable", 503);
@@ -148,8 +141,7 @@ async function putPolicy(request: Request, env: Env, _params: object, ctx: UserR
     const store = new AdmissionPolicyStore(ctx.db);
     const current = await store.get();
     if (config.unsafeAllowAllUsers) return failure("admission_policy_unsafe_allow_all", 409);
-    if (current.writesFrozen) return failure("admission_policy_maintenance", 409);
-    const hash = await deploymentHash(config, current.writesFrozen);
+    const hash = await deploymentHash(config);
     if (match[2] !== hash) return failure("admission_policy_conflict", 412);
 
     // Managed rules must never rescue a deployment without a compatible recovery baseline.
@@ -188,8 +180,6 @@ async function putPolicy(request: Request, env: Env, _params: object, ctx: UserR
         return failure("admission_policy_forbidden", 403);
       case "conflict":
         return failure("admission_policy_conflict", 412);
-      case "maintenance":
-        return failure("admission_policy_maintenance", 409);
       case "unavailable":
         return failure("admission_policy_unavailable", 503);
       default:

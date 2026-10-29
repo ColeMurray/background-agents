@@ -38,9 +38,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   });
   afterEach(() => sqlite.close());
 
-  function unfreeze() {
-    sqlite.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
-  }
   function audit() {
     return sqlite
       .prepare(
@@ -49,27 +46,27 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
       .get() as { operation_result: string; reason_code: string; metadata_json: string };
   }
 
-  it("seeds a frozen empty singleton and does not reseed on migration rerun", async () => {
+  it("seeds an editable empty singleton and does not reseed on migration rerun", async () => {
     expect(await store.get()).toEqual({
       rules: emptyAdmissionRules(),
       rulesJson: JSON.stringify(emptyAdmissionRules()),
       revision: 0,
       updatedAt: null,
       updatedByUserId: null,
-      writesFrozen: true,
     });
-    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
-      "maintenance"
-    );
-    expect(audit().operation_result).toBe("rejected");
-    unfreeze();
-    await store.replace({ ...input, before: await store.get() });
+    expect(
+      sqlite
+        .prepare(
+          "SELECT name FROM pragma_table_info('workspace_admission_policy') WHERE name = 'writes_frozen'"
+        )
+        .get()
+    ).toBeUndefined();
+    expect((await store.replace({ ...input, before: await store.get() })).status).toBe("applied");
     expect(applyMigrations(sqlite, migrations)).toEqual([]);
     expect((await store.get()).revision).toBe(1);
   });
 
   it("atomically applies CAS, canonical no-ops, and stale rejections with audit metadata", async () => {
-    unfreeze();
     expect(await store.replace({ ...input, before: await store.get() })).toMatchObject({
       status: "applied",
       policy: { revision: 1, updatedAt: 100, updatedByUserId: "actor" },
@@ -103,7 +100,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   it.each(["role_builtin_owner", "role_builtin_administrator"])(
     "accepts canonical %s",
     async (roleId) => {
-      unfreeze();
       sqlite
         .prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = 'actor'")
         .run(roleId);
@@ -112,7 +108,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   );
 
   it("keeps full before/after audit metadata below 30 KiB at the managed limit", async () => {
-    unfreeze();
     const domain = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(61)}`;
     const rules = (prefix: string) => ({
       ...emptyAdmissionRules(),
@@ -137,7 +132,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   });
 
   it("denies a canonical role ID/key whose persisted system flag is corrupted", async () => {
-    unfreeze();
     sqlite.exec(`PRAGMA ignore_check_constraints = ON;
       UPDATE roles SET is_system = 0 WHERE id = 'role_builtin_owner';
       PRAGMA ignore_check_constraints = OFF;`);
@@ -151,7 +145,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   it.each(["suspend", "demote", "custom"])(
     "revalidates a stale actor at batch time: %s",
     async (change) => {
-      unfreeze();
       const racingStore = new AdmissionPolicyStore({
         prepare: db.prepare.bind(db),
         batch<T>(statements: SqlStatement[]) {
@@ -176,15 +169,12 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
     }
   );
 
-  it.each(["revision", "freeze", "raw-json", "metadata"])(
+  it.each(["revision", "raw-json", "metadata"])(
     "rejects a concurrent %s change inside the batch",
     async (change) => {
-      unfreeze();
       const racingStore = new AdmissionPolicyStore({
         prepare: db.prepare.bind(db),
         batch<T>(statements: SqlStatement[]) {
-          if (change === "freeze")
-            sqlite.exec("UPDATE workspace_admission_policy SET writes_frozen = 1");
           if (change === "revision")
             sqlite.exec("UPDATE workspace_admission_policy SET revision = 1");
           if (change === "raw-json")
@@ -195,14 +185,13 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
         },
       });
       expect((await racingStore.replace({ ...input, before: await store.get() })).status).toBe(
-        change === "freeze" ? "maintenance" : "conflict"
+        "conflict"
       );
       expect((await store.get()).rules).toEqual(emptyAdmissionRules());
     }
   );
 
   it("leaves policy untouched if the required audit insert fails", async () => {
-    unfreeze();
     sqlite.exec(
       "CREATE TRIGGER fail_policy_audit BEFORE INSERT ON authorization_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"
     );
@@ -214,7 +203,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   });
 
   it("never reconciles a future expected revision with a newer row after the caller's read", async () => {
-    unfreeze();
     const before = await store.get();
     sqlite.exec("UPDATE workspace_admission_policy SET revision = 1");
     expect((await store.replace({ ...input, before, expectedRevision: 1 })).status).toBe(
@@ -225,7 +213,6 @@ describe("AdmissionPolicyStore (Node SQLite)", () => {
   });
 
   it("rolls back the audit if the policy update fails", async () => {
-    unfreeze();
     sqlite.exec(
       "CREATE TRIGGER fail_policy_write BEFORE UPDATE ON workspace_admission_policy BEGIN SELECT RAISE(ABORT, 'write unavailable'); END"
     );

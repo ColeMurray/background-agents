@@ -13,7 +13,6 @@ const mutationStatusSchema = z.enum([
   "no_op",
   "actor_authorization_changed",
   "conflict",
-  "maintenance",
   "unavailable",
 ]);
 
@@ -57,11 +56,9 @@ export class AdmissionPolicyStore {
           ) THEN 'actor_authorization_changed'
           WHEN NOT EXISTS (SELECT 1 FROM workspace_admission_policy WHERE id = 1 AND schema_version = 1)
             THEN 'unavailable'
-          WHEN (SELECT writes_frozen FROM workspace_admission_policy WHERE id = 1) <> 0
-            THEN 'maintenance'
           WHEN NOT EXISTS (SELECT 1 FROM workspace_admission_policy
             WHERE id = 1 AND revision = ? AND revision = ? AND rules_json = ?
-              AND writes_frozen = ? AND updated_at IS ? AND updated_by_user_id_snapshot IS ?)
+              AND updated_at IS ? AND updated_by_user_id_snapshot IS ?)
             THEN 'conflict'
           WHEN ? THEN 'no_op'
           ELSE 'applied' END)
@@ -92,7 +89,6 @@ export class AdmissionPolicyStore {
           input.expectedRevision,
           before.revision,
           before.rulesJson,
-          before.writesFrozen ? 1 : 0,
           before.updatedAt,
           before.updatedByUserId,
           unchanged ? 1 : 0,

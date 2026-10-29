@@ -11,13 +11,13 @@ import { routeRequest, serviceRequestHeaders, type ServiceRequestInit } from "./
 
 const url = "https://cp.test/settings/admission-policy";
 
-async function resetPolicy(writesFrozen: number) {
+async function resetPolicy() {
   await env.DB.prepare(
     `UPDATE workspace_admission_policy
     SET schema_version = 1, revision = 0, rules_json = ?, updated_at = NULL,
-        updated_by_user_id_snapshot = NULL, writes_frozen = ? WHERE id = 1`
+        updated_by_user_id_snapshot = NULL WHERE id = 1`
   )
-    .bind(JSON.stringify(emptyAdmissionRules()), writesFrozen)
+    .bind(JSON.stringify(emptyAdmissionRules()))
     .run();
 }
 
@@ -40,12 +40,12 @@ async function request(init?: ServiceRequestInit, overrides: Partial<WorkerBindi
 
 beforeEach(async () => {
   await cleanD1Tables();
-  await resetPolicy(0);
+  await resetPolicy();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
   await env.DB.exec("DROP TRIGGER IF EXISTS fail_admission_route_audit");
-  await resetPolicy(1);
+  await resetPolicy();
   await cleanD1Tables();
 });
 
@@ -187,35 +187,33 @@ describe("authenticated admission policy routes (D1)", () => {
     ).toBeNull();
   });
 
-  it.each(["unsafe_allow_all", "maintenance"] as const)(
-    "keeps %s read-only for an authenticated administrator",
-    async (reason) => {
-      if (reason === "maintenance") await resetPolicy(1);
-      const overrides = reason === "unsafe_allow_all" ? { UNSAFE_ALLOW_ALL_USERS: "true" } : {};
-      const get = await request(undefined, overrides);
-      expect(get.status).toBe(200);
-      const snapshot = admissionPolicySnapshotSchema.parse(await get.json());
-      expect(snapshot.editingDisabledReason).toBe(reason);
-      const response = await request(
-        {
-          method: "PUT",
-          headers: { "If-Match": snapshot.etag },
-          body: JSON.stringify(emptyAdmissionRules()),
-        },
-        overrides
-      );
-      expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toMatchObject({ code: `admission_policy_${reason}` });
-      expect(
-        await env.DB.prepare("SELECT revision FROM workspace_admission_policy").first()
-      ).toEqual({ revision: 0 });
-      expect(
-        await env.DB.prepare(
-          "SELECT id FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated'"
-        ).first()
-      ).toBeNull();
-    }
-  );
+  it("keeps unsafe allow-all read-only for an authenticated administrator", async () => {
+    const overrides = { UNSAFE_ALLOW_ALL_USERS: "true" };
+    const get = await request(undefined, overrides);
+    expect(get.status).toBe(200);
+    const snapshot = admissionPolicySnapshotSchema.parse(await get.json());
+    expect(snapshot.editingDisabledReason).toBe("unsafe_allow_all");
+    const response = await request(
+      {
+        method: "PUT",
+        headers: { "If-Match": snapshot.etag },
+        body: JSON.stringify(emptyAdmissionRules()),
+      },
+      overrides
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "admission_policy_unsafe_allow_all",
+    });
+    expect(await env.DB.prepare("SELECT revision FROM workspace_admission_policy").first()).toEqual(
+      { revision: 0 }
+    );
+    expect(
+      await env.DB.prepare(
+        "SELECT id FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated'"
+      ).first()
+    ).toBeNull();
+  });
 
   it("returns 503 with unchanged persisted state when the operation audit fails", async () => {
     const before = admissionPolicySnapshotSchema.parse(await (await request()).json());

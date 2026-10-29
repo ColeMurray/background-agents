@@ -110,14 +110,6 @@ export function SignInAllowlistSection() {
                 </p>
               </div>
             )}
-            {snapshot.editingDisabledReason === "maintenance" && (
-              <p
-                role="status"
-                className="rounded-md border border-border p-3 text-sm text-muted-foreground"
-              >
-                Editing is locked. Ask your operator to unlock it.
-              </p>
-            )}
             <AdmissionRuleGroups
               deployment={snapshot.deployment}
               draft={draft}

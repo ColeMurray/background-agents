@@ -213,7 +213,6 @@ describe("runtime-managed admission", () => {
       revision: 1,
       updatedAt: null,
       updatedByUserId: null,
-      writesFrozen: false,
     }));
     vi.spyOn(GitHubProviderIdentityResolver.prototype, "resolveIdentity").mockResolvedValue({
       provider: "github",
@@ -335,7 +334,6 @@ describe("runtime-managed admission", () => {
             revision: 0,
             updated_at: null,
             updated_by_user_id_snapshot: null,
-            writes_frozen: 0,
             ...value,
           };
     const first =

@@ -83,22 +83,19 @@ deployment baseline managed entirely through the UI is not supported.
 `UNSAFE_ALLOW_ALL_USERS=true` only allows any otherwise valid identity when **all effective lists
 are empty**. Nonempty managed or deployment rules keep it dormant. Whenever the flag is true, the
 editor is read-only and the server rejects mutations. To enable secure editing, deploy a recovery
-baseline and disable unsafe mode together, verify that account's login/role, then unfreeze if
-needed.
+baseline and disable unsafe mode together, then verify that account's login/role.
 
-Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero with
-**`writes_frozen=1`**. Freezing prevents managed writes, not sign-in: current rules remain enforced.
-The operator must explicitly unfreeze only after all old environment-only auth runtimes drain. The
-frontend may deploy independently first; missing backend routes show unavailable, and migrated
-frozen backends show read-only maintenance. There is no automatic CI enablement gate or unfreeze.
+Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero. Owners
+and Administrators can edit them as soon as the backend serves the settings routes. The frontend may
+deploy independently first; missing backend routes show unavailable.
 
 ### Policy Safety and Audit
 
 Management uses human-authorized `GET`/`PUT /settings/admission-policy` through the signed
 `/api/settings/admission-policy` web proxy. PUT requires `If-Match` for the reviewed revision and
-deployment/frozen-state fingerprint. Actor role/status, revision, and maintenance state are checked
-in the mutation transaction; required audit failure prevents the write. Applied writes advance
-revision; no-ops do not. Environment fingerprints do not serialize concurrent deployment versions.
+deployment fingerprint. Actor role/status and revision are checked in the mutation transaction;
+required audit failure prevents the write. Applied writes advance revision; no-ops do not.
+Environment fingerprints do not serialize concurrent deployment versions.
 
 The new browser PUT route requires **exactly `Sec-Fetch-Site: same-origin`**. Missing, `same-site`,
 `cross-site`, and `none` are rejected. It does not trust `Host` or forwarded-host headers and needs
@@ -108,8 +105,7 @@ The operation audit action is `workspace.admission_policy_updated`. Its metadata
 `before`/`after`, `requested: { expectedRevision }`, current/result revision, and deployment hash,
 not another full requested rule document. The 50-rule limit keeps normal before/after metadata under
 30 KiB, about 3 MB for 100 such audit events before response overhead. Rule values include emails
-and are visible to authorized `workspace.audit.read` holders. Operator freeze/unfreeze uses
-`workspace.admission_policy_maintenance` with `operator-cli` attribution.
+and are visible to authorized `workspace.audit.read` holders.
 
 Each admission evaluation reads the current SQL policy; cached auth runtimes do not cache managed
 rules. An evaluation already holding an older snapshot may finish under it. A missing, malformed, or
@@ -596,62 +592,31 @@ node scripts/bootstrap-workspace-owner.ts --sqlite /path/to/existing/global.db -
 ```
 
 Bootstrap refuses suspended/nonexistent targets or another active Owner. It does not bypass normal
-ownership administration or suspension. Both operator CLIs share a result-bearing SQL runner: remote
-D1 uses `wrangler d1 execute --remote --command ... --json` rather than file import; SQLite writes
-use `BEGIN IMMEDIATE`. Mutation and audit proof are performed together.
-
-### Enable or Freeze Policy Editing
-
-After migration and the complete backend rollout, confirm all old auth runtimes have drained, then
-inspect and explicitly enable editing. Replace `<revision>` with the value returned by `status`; the
-initial seed is zero, but never assume it is still current.
-
-```bash
-node scripts/admission-policy-maintenance.ts status --database <D1-name>
-node scripts/admission-policy-maintenance.ts unfreeze --database <D1-name> --expected-revision <revision>
-node scripts/admission-policy-maintenance.ts unfreeze --database <D1-name> --expected-revision <revision> --execute
-node scripts/admission-policy-maintenance.ts status --database <D1-name>
-```
-
-`status` is read-only and takes neither `--execute` nor `--expected-revision`. Freeze/unfreeze are
-dry runs unless `--execute` is present and always require a reviewed expected revision. State
-changes increment revision; executing an already matching state records a no-op. On conflict or
-uncertain output, inspect status/audit rather than blindly retry. SQLite uses the same commands with
-`--sqlite /path/to/existing/global.db` instead of `--database <D1-name>`.
+ownership administration or suspension. Its result-bearing SQL runner uses
+`wrangler d1 execute --remote --command ... --json` for remote D1 rather than file import; SQLite
+writes use `BEGIN IMMEDIATE`. Mutation and audit proof are performed together.
 
 ### Rollback and Recovery
 
-Before rolling back to old code that ignores managed rules, stop concurrent deployments, baseline
-edits, and operator policy changes, and disable/control automated rollback. Freeze and export:
+Rolling back to old code that ignores managed rules drops every managed grant. Before such a
+rollback, stop concurrent deployments, baseline edits, and Settings policy edits, and
+disable/control automated rollback. Nothing locks the editor or deployment configuration for you.
 
-```bash
-node scripts/admission-policy-maintenance.ts status --database <D1-name>
-node scripts/admission-policy-maintenance.ts freeze --database <D1-name> --expected-revision <revision>
-umask 077
-node scripts/admission-policy-maintenance.ts freeze --database <D1-name> --expected-revision <revision> --execute > admission-policy-frozen.json
-node scripts/admission-policy-maintenance.ts status --database <D1-name>
-```
+While still on new code, copy the managed rules from Settings and protect the copy as sensitive
+data. It does not include the deployment baseline: separately retrieve the actual serving baseline,
+normalize and union each list with the managed rules, and deploy that complete union with unsafe
+mode false. Verify the deployed union, provider compatibility, and intended login eligibility.
+Immediately before old-code rollback, confirm the managed rules and the deployed union are
+unchanged. Stop if either drifted.
 
-The executed freeze returns the managed snapshot and resulting revision from the same transaction.
-Protect the export as sensitive data. **The script does not fetch the deployment baseline.**
-Separately retrieve the actual serving baseline, normalize and union each list with exported
-`managed` rules, and deploy that complete union with unsafe mode false while still on new code.
-Verify the deployed union, provider compatibility, and intended login eligibility. Immediately
-before old-code rollback, rerun `status` to confirm the exported revision and `writesFrozen: true`
-still hold, and independently verify the deployed union is unchanged. Stop if either drifted. The
-CLI does not serialize deployments or prevent someone changing environment configuration.
-
-Only after those checks should old code serve traffic. Retain the policy table, frozen state, and
-audit history. A frontend-only rollback leaves backend enforcement intact; restore a compatible
-editor to change managed rules. Do not unfreeze while old auth runtimes remain.
+Only after those checks should old code serve traffic. Retain the policy table and audit history. A
+frontend-only rollback leaves backend enforcement intact; restore a compatible editor to change
+managed rules.
 
 For a policy mistake, deploy a known valid recovery email in the baseline with unsafe mode false,
 then verify login and active administrative role. A corrupted/unavailable policy needs database
-repair or restore first; maintenance does not rewrite/repair rule JSON. Do not delete the singleton
-or enable allow-all as recovery. After restoring current code and draining old runtimes, use
-`status`, reviewed `unfreeze --expected-revision <revision>`, and the same command with `--execute`
-as above, then verify status and reload the editor. Baseline copies added for rollback remain until
-deliberately removed by a later reviewed deployment.
+repair or restore first. Do not delete the singleton or enable allow-all as recovery. Baseline
+copies added for rollback remain until deliberately removed by a later reviewed deployment.
 
 See [container operations](CONTROL_PLANE_CONTAINER.md#sign-in-allowlist-operations) for access to
 the actual SQLite volume. These procedures are not claims that rollout or live-provider verification

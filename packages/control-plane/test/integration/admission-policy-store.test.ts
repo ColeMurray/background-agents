@@ -9,7 +9,7 @@ import { seedActiveUser, sqlDatabase } from "./helpers";
 async function resetPolicy() {
   await env.DB.prepare("DELETE FROM workspace_admission_policy").run();
   await env.DB.prepare(
-    "INSERT INTO workspace_admission_policy (id, schema_version, revision, rules_json, writes_frozen) VALUES (1, 1, 0, ?, 1)"
+    "INSERT INTO workspace_admission_policy (id, schema_version, revision, rules_json) VALUES (1, 1, 0, ?)"
   )
     .bind(JSON.stringify(emptyAdmissionRules()))
     .run();
@@ -39,12 +39,8 @@ describe("AdmissionPolicyStore (D1)", () => {
     deploymentHash: "baseline",
   };
 
-  it("enforces freeze, CAS and canonical no-ops with durable operation audit", async () => {
+  it("enforces CAS and canonical no-ops with durable operation audit", async () => {
     const store = new AdmissionPolicyStore(sqlDatabase(env.DB));
-    expect((await store.replace({ ...input, before: await store.get() })).status).toBe(
-      "maintenance"
-    );
-    await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
     expect((await store.replace({ ...input, before: await store.get() })).status).toBe("applied");
     expect(
       (await store.replace({ ...input, before: await store.get(), expectedRevision: 1 })).status
@@ -55,13 +51,11 @@ describe("AdmissionPolicyStore (D1)", () => {
       "SELECT operation_result, metadata_json FROM authorization_audit_events WHERE action = 'workspace.admission_policy_updated' ORDER BY rowid"
     ).all();
     expect(audits.results.map((row) => row.operation_result)).toEqual([
-      "rejected",
       "applied",
       "no_op",
       "rejected",
     ]);
     expect(audits.results.map((row) => JSON.parse(row.metadata_json as string).requested)).toEqual([
-      { expectedRevision: 0 },
       { expectedRevision: 0 },
       { expectedRevision: 1 },
       { expectedRevision: 0 },
@@ -69,7 +63,6 @@ describe("AdmissionPolicyStore (D1)", () => {
   });
 
   it("rejects a demoted actor in the same batch", async () => {
-    await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
     const db = sqlDatabase(env.DB);
     const store = new AdmissionPolicyStore({
       prepare: db.prepare.bind(db),
@@ -87,7 +80,6 @@ describe("AdmissionPolicyStore (D1)", () => {
   });
 
   it("does not change policy when D1 cannot insert the required audit", async () => {
-    await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
     await env.DB.exec(
       "CREATE TRIGGER fail_admission_audit BEFORE INSERT ON authorization_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"
     );
@@ -99,7 +91,6 @@ describe("AdmissionPolicyStore (D1)", () => {
   it.each(["future-revision", "raw-json", "metadata"])(
     "fences the caller's preimage against a concurrent %s change in D1",
     async (change) => {
-      await env.DB.exec("UPDATE workspace_admission_policy SET writes_frozen = 0");
       const db = sqlDatabase(env.DB);
       const store = new AdmissionPolicyStore({
         prepare: db.prepare.bind(db),

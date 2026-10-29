@@ -64,7 +64,7 @@ async function setManagedRules(rules: Partial<AdmissionRules>): Promise<void> {
 beforeEach(async () => {
   await cleanD1Tables();
   await env.DB.prepare(
-    "INSERT OR REPLACE INTO workspace_admission_policy (id, schema_version, revision, rules_json, writes_frozen) VALUES (1, 1, 0, ?, 1)"
+    "INSERT OR REPLACE INTO workspace_admission_policy (id, schema_version, revision, rules_json) VALUES (1, 1, 0, ?)"
   )
     .bind(JSON.stringify(emptyAdmissionRules()))
     .run();

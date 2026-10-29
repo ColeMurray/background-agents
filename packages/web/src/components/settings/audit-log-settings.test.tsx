@@ -259,21 +259,6 @@ describe("AuditLogSettings", () => {
         '"new@example.com"',
       ],
     },
-    {
-      action: "workspace.admission_policy_maintenance",
-      label: "Sign-in allowlist maintenance",
-      metadata: {
-        before: { revision: 4, writesFrozen: 1 },
-        requested: { expectedRevision: 4, writesFrozen: 0 },
-        after: { revision: 5, writesFrozen: 0 },
-      },
-      visibleFields: [
-        '"expectedRevision": 4',
-        '"revision": 5',
-        '"writesFrozen": 1',
-        '"writesFrozen": 0',
-      ],
-    },
   ])(
     "recognizes $action and exposes readable policy metadata",
     async ({ action, label, metadata, visibleFields }) => {

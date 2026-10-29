@@ -71,7 +71,6 @@ beforeEach(() => {
     revision: 0,
     updatedAt: null,
     updatedByUserId: null,
-    writesFrozen: false,
   };
   mocks.get.mockImplementation(async () => policy);
   mocks.replace.mockImplementation(async ({ rules }) => ({
@@ -126,20 +125,16 @@ describe("admission policy settings routes", () => {
     expect((await snapshot()).etag).toBe(before.etag);
   });
 
-  it.each(["baseline", "provider", "freeze", "unsafe"])(
-    "changes ETag for %s changes",
-    async (change) => {
-      const before = await snapshot();
-      if (change === "baseline") env.ALLOWED_USERS = "new-user";
-      if (change === "provider") {
-        env.GOOGLE_CLIENT_ID = "google-id";
-        env.GOOGLE_CLIENT_SECRET = "google-secret";
-      }
-      if (change === "freeze") policy.writesFrozen = true;
-      if (change === "unsafe") env.UNSAFE_ALLOW_ALL_USERS = "true";
-      expect((await snapshot()).etag).not.toBe(before.etag);
+  it.each(["baseline", "provider", "unsafe"])("changes ETag for %s changes", async (change) => {
+    const before = await snapshot();
+    if (change === "baseline") env.ALLOWED_USERS = "new-user";
+    if (change === "provider") {
+      env.GOOGLE_CLIENT_ID = "google-id";
+      env.GOOGLE_CLIENT_SECRET = "google-secret";
     }
-  );
+    if (change === "unsafe") env.UNSAFE_ALLOW_ALL_USERS = "true";
+    expect((await snapshot()).etag).not.toBe(before.etag);
+  });
 
   it.each(["GET", "PUT"])(
     "denies %s by a custom member manager before reading policy",
@@ -232,11 +227,10 @@ describe("admission policy settings routes", () => {
     expect(body.etag).not.toBe(etag);
   });
 
-  it.each(["unsafe", "frozen"])("makes %s snapshots read-only and rejects edits", async (mode) => {
-    if (mode === "unsafe") env.UNSAFE_ALLOW_ALL_USERS = " TRUE ";
-    else policy.writesFrozen = true;
+  it("makes unsafe snapshots read-only and rejects edits", async () => {
+    env.UNSAFE_ALLOW_ALL_USERS = " TRUE ";
     const body = await snapshot();
-    expect(body.editingDisabledReason).toBe(mode === "unsafe" ? "unsafe_allow_all" : "maintenance");
+    expect(body.editingDisabledReason).toBe("unsafe_allow_all");
     expect(body.unsafeAllowAllEffective).toBe(false);
     expect((await call("PUT", JSON.stringify(emptyAdmissionRules()), body.etag)).status).toBe(409);
     expect(mocks.replace).not.toHaveBeenCalled();
@@ -320,7 +314,6 @@ describe("admission policy settings routes", () => {
 
   it.each([
     ["actor_authorization_changed", 403],
-    ["maintenance", 409],
     ["unavailable", 503],
     ["no_op", 200],
   ] as const)("maps transactional %s to %i", async (status, expectedStatus) => {

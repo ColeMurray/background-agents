@@ -120,20 +120,17 @@ describe("useAdmissionPolicy", () => {
     }
   );
 
-  it.each(["maintenance", "unsafe_allow_all"] as const)(
-    "does not allow edits during %s",
-    async (reason) => {
-      vi.mocked(browserApiFetch).mockResolvedValue(
-        json({ ...initial, editingDisabledReason: reason })
-      );
-      const { result } = await loaded();
-      expect(result.current.canEdit).toBe(false);
-      act(() => result.current.setDraft(edited));
-      await act(() => result.current.save());
-      expect(result.current.draft).toEqual(initial.managed);
-      expect(browserApiFetch).toHaveBeenCalledTimes(1);
-    }
-  );
+  it("does not allow edits during unsafe allow-all", async () => {
+    vi.mocked(browserApiFetch).mockResolvedValue(
+      json({ ...initial, editingDisabledReason: "unsafe_allow_all" })
+    );
+    const { result } = await loaded();
+    expect(result.current.canEdit).toBe(false);
+    act(() => result.current.setDraft(edited));
+    await act(() => result.current.save());
+    expect(result.current.draft).toEqual(initial.managed);
+    expect(browserApiFetch).toHaveBeenCalledTimes(1);
+  });
 
   it("normalizes saves, pins If-Match, and prevents double submission", async () => {
     const { result } = await loaded();

@@ -116,18 +116,15 @@ curl -s http://localhost:8787/healthz
 ```
 
 Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
-empty managed rules, revision zero, and **`writes_frozen=1`**. The independently deployed frontend
-may arrive before the backend: missing routes show unavailable, and migrated frozen state shows
-read-only maintenance. This initial freeze makes staging safe; no new CI gate or automatic unfreeze
-is provided. Leave it frozen until the new backend is complete and all old environment-only auth
-runtimes have drained.
+empty managed rules at revision zero; Owners and Administrators can edit them in Settings once the
+backend is running. The independently deployed frontend may arrive before the backend: missing
+routes show unavailable.
 
 Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
-lowercase hexadecimal user ID. Both operator scripts need Node.js 24+, a checkout with dependencies
-installed (`npm ci --ignore-scripts`), and exactly one of `--sqlite <existing-path>` or
-`--database <D1-name>`. SQLite opens an existing file only; do not point at a backup or a new empty
-file. The runtime app image does not ship these source scripts or `node_modules`, so do not assume
-`docker compose exec app node scripts/...` works.
+lowercase hexadecimal user ID. The script needs Node.js 24+, a repository checkout, and exactly one
+of `--sqlite <existing-path>` or `--database <D1-name>`. SQLite opens an existing file only; do not
+point at a backup or a new empty file. The runtime app image does not ship the source scripts, so do
+not assume `docker compose exec app node scripts/...` works.
 
 For local Compose, this helper runs the checkout's scripts in a Node container on the **actual app
 volume**. Run it from the repository root with the app running, and confirm the selected container
@@ -136,11 +133,7 @@ same `node` user as the app so SQLite sidecar files retain the correct ownership
 be readable by that user.
 
 ```bash
-# Install checkout dependencies first. The maintenance CLI uses the shared Zod schema.
 # This also works on a Docker-only host; no host Node.js installation is required.
-docker run --rm --user "$(id -u):$(id -g)" -e npm_config_cache=/tmp/npm-cache \
-  -v "$PWD:/workspace" -w /workspace node:24 npm ci --ignore-scripts
-
 APP_CONTAINER_ID="$(docker compose ps -q app)"
 operator_sql() {
   docker run --rm --user node --volumes-from "$APP_CONTAINER_ID" \
@@ -158,46 +151,17 @@ general recovery bypass for suspended accounts. On AWS, use an operator checkout
 actual volume and select the app from the AWS Compose invocation, or use `node scripts/... --sqlite`
 with the existing database's host path. Do not modify a copied database expecting to affect the app.
 
-### Enable and inspect
+### Roll back
 
-Only after all old auth runtimes drain, inspect status, then use the reported revision for both the
-dry run and execution:
+Older code ignores managed rules, so rolling back to it drops every managed grant. Stop concurrent
+deployments/configuration edits and Settings policy edits, and disable or control automated rollback
+first; nothing locks deployment configuration or the editor for you.
 
-```bash
-operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
-operator_sql scripts/admission-policy-maintenance.ts unfreeze --sqlite /data/global.db --expected-revision <revision>
-operator_sql scripts/admission-policy-maintenance.ts unfreeze --sqlite /data/global.db --expected-revision <revision> --execute
-operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
-```
-
-`status` is read-only and does not accept `--execute` or `--expected-revision`. Freeze/unfreeze
-require the expected revision and do not mutate without `--execute`. State changes advance revision;
-executing an already matching state records a no-op. Writes and operator audit proof share a
-`BEGIN IMMEDIATE` transaction. The D1 alternative uses the same scripts with `--database <D1-name>`
-and Wrangler's remote result-bearing `--command` execution, not file import. No new environment flag
-controls the freeze. Reload the UI after enabling.
-
-### Freeze and roll back
-
-Stop concurrent deployments/configuration edits and operator policy changes; disable or control
-automated rollback before exporting. The maintenance tool does not lock deployment configuration.
-Freezing stops managed writes, not sign-in or enforcement of existing rules.
-
-```bash
-operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
-operator_sql scripts/admission-policy-maintenance.ts freeze --sqlite /data/global.db --expected-revision <revision>
-umask 077
-operator_sql scripts/admission-policy-maintenance.ts freeze --sqlite /data/global.db --expected-revision <revision> --execute > admission-policy-frozen.json
-operator_sql scripts/admission-policy-maintenance.ts status --sqlite /data/global.db
-```
-
-The CLI first validates the stored rules with the runtime schema. Its write checks both the revision
-and the exact validated JSON. The freeze and returned managed snapshot are transactional. Record the
-**returned revision** and verify `writesFrozen: true`. The export contains managed rules only; **the
-CLI does not fetch the actual deployment baseline**. Separately read the serving container's
-admission configuration, normalize and union each baseline list with the exported managed list, and
-put that union in `.env` (or the AWS SSM source). Set unsafe mode false. While still on current
-code, apply the reviewed configuration; local Compose recreates the app with:
+While still on current code, copy the managed rules from Settings and treat the copy as sensitive
+data. It contains managed rules only, not the deployment baseline. Separately read the serving
+container's admission configuration, normalize and union each baseline list with the managed list,
+and put that union in `.env` (or the AWS SSM source). Set unsafe mode false. Apply the reviewed
+configuration on current code; local Compose recreates the app with:
 
 ```bash
 docker compose up -d --build app
@@ -205,24 +169,20 @@ docker compose up -d --build app
 
 On AWS, use its normal SSM/deployment workflow and Compose overlay rather than relying on a local
 `.env` edit that a later deployment would replace. Verify the **deployed** union and intended login
-eligibility, re-select `APP_CONTAINER_ID`, and rerun maintenance `status`. Immediately before moving
-to old code, confirm the frozen revision and deployed union still match the reviewed
-export/baseline. If either changed, stop and repeat the review. Only then deploy the approved old
-image/source version with that union intact. Keep `global.db`, the policy row, frozen state, and
-audit history; do not drop policy data or unfreeze while any old auth runtime remains. A
-frontend-only rollback does not stop the new backend from enforcing managed rules.
+eligibility. Immediately before moving to old code, confirm the managed rules and the deployed union
+still match what you reviewed. If either changed, stop and repeat the review. Only then deploy the
+approved old image/source version with that union intact. Keep `global.db`, the policy row, and
+audit history; do not drop policy data. A frontend-only rollback does not stop the new backend from
+enforcing managed rules.
 
-### Recover and re-enable
+### Recover
 
 For a valid but mistaken policy, add a known valid recovery email to the deployment baseline with
 unsafe mode false, deploy it on current code, and verify login and the account's active role. For
 missing/corrupt policy state, repair or restore the database first: even a baseline match fails
-closed when the managed policy cannot be read. The maintenance CLI does not repair rule JSON. Do not
-delete the singleton or enable unsafe allow-all to work around it.
+closed when the managed policy cannot be read. Do not delete the singleton or enable unsafe
+allow-all to work around it.
 
-After restoring current code and draining old auth runtimes, re-select the live container and repeat
-the `status`, dry-run `unfreeze`, `unfreeze --execute`, and verification commands above using the
-newly observed revision. On timeout/unknown results inspect status and audit before retrying.
 Baseline copies added for rollback remain until a separate reviewed deployment removes them.
 
 The Next.js callback proxy allows 240 seconds, with `maxDuration = 300` on the auth route, because

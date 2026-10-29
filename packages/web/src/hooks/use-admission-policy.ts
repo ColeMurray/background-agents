@@ -39,7 +39,6 @@ async function requestPolicy(init?: RequestInit): Promise<AdmissionPolicySnapsho
     const policyMessages: Record<string, string> = {
       admission_policy_unsafe_allow_all:
         "Ask your operator to disable unsafe allow-all before you edit rules.",
-      admission_policy_maintenance: "Editing is locked. Ask your operator to unlock it.",
       admission_policy_configuration: "Sign-in setup is incomplete. Contact your operator.",
       admission_policy_organization_limit:
         "Organization limit reached. Remove a settings rule before you add another. Deployment rules also count.",

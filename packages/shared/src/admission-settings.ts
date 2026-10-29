@@ -113,7 +113,6 @@ const storedAdmissionPolicySchema = z.object({
   rules_json: z.string(),
   updated_at: z.number().int().nonnegative().safe().nullable(),
   updated_by_user_id_snapshot: z.string().min(1).nullable(),
-  writes_frozen: z.union([z.literal(0), z.literal(1)]),
 });
 
 export interface StoredAdmissionPolicy {
@@ -122,7 +121,6 @@ export interface StoredAdmissionPolicy {
   revision: number;
   updatedAt: number | null;
   updatedByUserId: string | null;
-  writesFrozen: boolean;
 }
 
 /** Keep the original JSON for exact preimage fences, alongside normalized validated rules. */
@@ -134,7 +132,6 @@ export function parseStoredAdmissionPolicy(value: unknown): StoredAdmissionPolic
     revision: row.revision,
     updatedAt: row.updated_at,
     updatedByUserId: row.updated_by_user_id_snapshot,
-    writesFrozen: row.writes_frozen === 1,
   };
 }
 
@@ -149,7 +146,7 @@ export const admissionPolicySnapshotSchema = z.strictObject({
   enabledProviders: z.array(z.enum(["github", "google"])),
   unsafeAllowAllUsers: z.boolean(),
   unsafeAllowAllEffective: z.boolean(),
-  editingDisabledReason: z.enum(["unsafe_allow_all", "maintenance"]).nullable(),
+  editingDisabledReason: z.enum(["unsafe_allow_all"]).nullable(),
 });
 
 export type AdmissionPolicySnapshot = z.infer<typeof admissionPolicySnapshotSchema>;

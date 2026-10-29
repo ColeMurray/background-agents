@@ -259,23 +259,16 @@ describe("SignInAllowlistSection", () => {
     expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
   });
 
-  it.each(["maintenance", "unsafe_allow_all"] as const)(
-    "explains read-only %s without presenting an add form",
-    async (reason) => {
-      await renderPolicy({
-        ...initial,
-        editingDisabledReason: reason,
-        unsafeAllowAllUsers: reason === "unsafe_allow_all",
-      });
-      expect(screen.queryByRole("button", { name: "Add rule" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
-      expect(
-        screen.getByText(
-          reason === "maintenance" ? /Editing is locked/ : /disable unsafe allow-all/
-        )
-      ).toBeInTheDocument();
-    }
-  );
+  it("explains read-only unsafe allow-all without presenting an add form", async () => {
+    await renderPolicy({
+      ...initial,
+      editingDisabledReason: "unsafe_allow_all",
+      unsafeAllowAllUsers: true,
+    });
+    expect(screen.queryByRole("button", { name: "Add rule" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review and save" })).toBeDisabled();
+    expect(screen.getByText(/disable unsafe allow-all/)).toBeInTheDocument();
+  });
 
   it("shows initial failures as unavailable, with Retry and no empty editor", async () => {
     vi.mocked(browserApiFetch).mockResolvedValueOnce(json({}, 503));

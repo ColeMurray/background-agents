@@ -15,7 +15,6 @@ describe("admission settings contracts", () => {
     rules_json: JSON.stringify(emptyAdmissionRules()),
     updated_at: 10,
     updated_by_user_id_snapshot: "editor",
-    writes_frozen: 1,
   };
 
   it("parses the complete persisted envelope while preserving raw JSON for CAS", () => {
@@ -30,7 +29,6 @@ describe("admission settings contracts", () => {
       revision: 7,
       updatedAt: 10,
       updatedByUserId: "editor",
-      writesFrozen: true,
     });
   });
 
@@ -41,7 +39,6 @@ describe("admission settings contracts", () => {
     { rules_json: "broken" },
     { rules_json: "{}" },
     { rules_json: JSON.stringify({ ...emptyAdmissionRules(), allowedEmails: ["bad"] }) },
-    { writes_frozen: 2 },
     { updated_at: -1 },
     { updated_at: 1.5 },
     { updated_at: "10" },
@@ -204,7 +201,7 @@ describe("admission settings contracts", () => {
       enabledProviders: ["github"],
       unsafeAllowAllUsers: false,
       unsafeAllowAllEffective: false,
-      editingDisabledReason: "maintenance",
+      editingDisabledReason: null,
     };
     expect(admissionPolicySnapshotSchema.parse(snapshot).deployment.allowedEmailDomains).toEqual([
       "localhost",
