@@ -167,6 +167,7 @@ export class SessionPromptAdmission {
 
     const enqueued = await this.enqueuePromptCore({
       participant,
+      promptAccountUserId: data.promptAccountUserId,
       userId: data.authorId,
       content: data.content,
       source: data.source,
@@ -297,15 +298,19 @@ export class SessionPromptAdmission {
 
     // Only new work refreshes identity. Keep this after both duplicate checks
     // and synchronous with insertion so a retry cannot restore stale attribution.
+    // Tracks the participant's stored account through both writes below.
+    let participantCanonicalUserId = data.participant.canonical_user_id ?? null;
     if (data.canonicalUserId) {
       this.participantRepository.updateParticipantCoalesce(data.participant.id, {
         canonicalUserId: data.canonicalUserId,
       });
+      participantCanonicalUserId = data.canonicalUserId;
     }
     if (data.scmEnrichment !== undefined) {
       const enrichment = data.scmEnrichment;
+      participantCanonicalUserId = data.canonicalUserId ?? participantCanonicalUserId;
       this.participantRepository.updateParticipantIdentity(data.participant.id, {
-        canonicalUserId: data.canonicalUserId ?? data.participant.canonical_user_id ?? null,
+        canonicalUserId: participantCanonicalUserId,
         scmName: enrichment.name,
         scmEmail: enrichment.email,
         scmLogin: enrichment.login,
@@ -318,6 +323,10 @@ export class SessionPromptAdmission {
         {
           id: messageId,
           authorId: data.participant.id,
+          authorCanonicalUserId:
+            data.promptAccountUserId !== undefined
+              ? data.promptAccountUserId
+              : participantCanonicalUserId,
           content: data.content,
           source: data.source,
           model: messageModel,

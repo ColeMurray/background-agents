@@ -117,6 +117,7 @@ function buildAdmission() {
         messages.push({
           id: data.id,
           author_id: data.authorId,
+          author_canonical_user_id: data.authorCanonicalUserId ?? null,
           content: data.content,
           source: data.source,
           model: data.model ?? null,
@@ -569,6 +570,59 @@ describe("participant preparation and validation", () => {
       h.participantRepository.updateParticipantIdentity.mock.invocationCallOrder[0]
     ).toBeLessThan(h.messageRepository.createMessageWithAttachments.mock.invocationCallOrder[0]);
   });
+
+  it.each([
+    { label: "no account", stored: null, scmEnrichment: undefined },
+    {
+      label: "no account and SCM enrichment",
+      stored: null,
+      scmEnrichment: { userId: "1001", login: "octocat", name: null, email: null },
+    },
+    { label: "a previous account", stored: "previous-account", scmEnrichment: undefined },
+  ])(
+    "records the account an API prompt gives a participant with $label",
+    async ({ stored, scmEnrichment }) => {
+      const h = buildAdmission();
+      h.participant.canonical_user_id = stored;
+      await h.admission.enqueueFromApi({
+        content: "Fix",
+        authorId: client.userId,
+        source: "slack",
+        canonicalUserId: "canonical-1",
+        scmEnrichment,
+      });
+      expect(h.messages[0].author_canonical_user_id).toBe("canonical-1");
+    }
+  );
+
+  it("records the participant's stored account when the prompt names none", async () => {
+    const h = buildAdmission();
+    h.participant.canonical_user_id = "canonical-1";
+    await h.admission.enqueueFromWeb(client, { content: "Web" });
+    await h.admission.enqueueFromApi({ content: "Api", authorId: client.userId, source: "slack" });
+    expect(h.messages.map((message) => message.author_canonical_user_id)).toEqual([
+      "canonical-1",
+      "canonical-1",
+    ]);
+  });
+
+  it.each(["parent-account", null])(
+    "records a relayed prompt's account %s in place of its author's",
+    async (promptAccountUserId) => {
+      const h = buildAdmission();
+      await h.admission.enqueueFromApi({
+        content: "Follow up",
+        authorId: client.userId,
+        source: "agent",
+        canonicalUserId: "canonical-1",
+        promptAccountUserId,
+      });
+      expect(h.participantRepository.updateParticipantCoalesce).toHaveBeenCalledWith("part-1", {
+        canonicalUserId: "canonical-1",
+      });
+      expect(h.messages[0].author_canonical_user_id).toBe(promptAccountUserId);
+    }
+  );
 
   it("falls back to the API author id without changing absent SCM enrichment", async () => {
     const h = buildAdmission();

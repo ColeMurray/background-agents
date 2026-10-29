@@ -119,6 +119,46 @@ describe("POST /internal/prompt", () => {
     expect(await queryDO(stub, "SELECT id FROM messages")).toHaveLength(2);
   });
 
+  it("records the account an existing participant gains or changes through an API prompt", async () => {
+    const { stub } = await initSession();
+    const enqueue = async (body: Record<string, unknown>) => {
+      const response = await stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authorId: "slack:U1", source: "slack", ...body }),
+      });
+      expect(response.status).toBe(200);
+      return (await response.json<{ messageId: string }>()).messageId;
+    };
+    const accountOf = async (messageId: string) => {
+      const rows = await queryDO<{ author_canonical_user_id: string | null }>(
+        stub,
+        "SELECT author_canonical_user_id FROM messages WHERE id = ?",
+        messageId
+      );
+      return rows[0].author_canonical_user_id;
+    };
+
+    const unlinked = await enqueue({ content: "Before linking" });
+    const linked = await enqueue({ content: "After linking", canonicalUserId: "account-1" });
+    const relinked = await enqueue({
+      content: "After relinking",
+      canonicalUserId: "account-2",
+      scmEnrichment: { userId: null, login: null, name: "Slack User", email: null },
+    });
+
+    expect(await accountOf(unlinked)).toBeNull();
+    expect(await accountOf(linked)).toBe("account-1");
+    expect(await accountOf(relinked)).toBe("account-2");
+    expect(
+      await queryDO(
+        stub,
+        "SELECT canonical_user_id FROM participants WHERE user_id = ?",
+        "slack:U1"
+      )
+    ).toEqual([{ canonical_user_id: "account-2" }]);
+  });
+
   it("enqueues prompt and returns messageId", async () => {
     const { stub } = await initSession();
 
