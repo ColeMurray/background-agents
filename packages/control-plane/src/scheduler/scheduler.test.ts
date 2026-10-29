@@ -914,11 +914,16 @@ describe("Scheduler", () => {
     it("resolves the scheduled owner's verified profile when no login is cached", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
-        { provider: "github", providerUserId: "42", providerLogin: null },
+        { id: "github-account-42", provider: "github", providerUserId: "42", providerLogin: null },
       ]);
       mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
       mockGitHubAccountInfo.mockResolvedValue({
-        user: { id: "42" },
+        account: {
+          id: "github-account-42",
+          providerId: "github",
+          accountId: "42",
+        },
+        user: { name: "Verified Owner" },
         data: {
           provider: "github",
           issuer: "https://github.com",
@@ -938,7 +943,7 @@ describe("Scheduler", () => {
         scmEmail: "42+verified-owner@users.noreply.github.com",
       });
       expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
-        query: { providerId: "github", accountId: "42", userId: "user-1" },
+        query: { accountId: "github-account-42", userId: "user-1" },
       });
     });
 
@@ -2725,11 +2730,16 @@ describe("Scheduler", () => {
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
-        { provider: "github", providerUserId: "77", providerLogin: null },
+        { id: "github-account-77", provider: "github", providerUserId: "77", providerLogin: null },
       ]);
       mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
       mockGitHubAccountInfo.mockResolvedValue({
-        user: { id: "77" },
+        account: {
+          id: "github-account-77",
+          providerId: "github",
+          accountId: "77",
+        },
+        user: { name: "Verified Actor" },
         data: {
           provider: "github",
           issuer: "https://github.com",
@@ -2754,7 +2764,7 @@ describe("Scheduler", () => {
         },
       });
       expect(mockGitHubAccountInfo).toHaveBeenCalledWith({
-        query: { providerId: "github", accountId: "77", userId: "slack-actor-user" },
+        query: { accountId: "github-account-77", userId: "slack-actor-user" },
       });
     });
 
@@ -2766,7 +2776,12 @@ describe("Scheduler", () => {
           sampleRunRow({ session_id: "sess-running" })
         );
         mockUserStoreGetIdentitiesForUser.mockResolvedValue([
-          { provider: "github", providerUserId: "77", providerLogin: null },
+          {
+            id: "github-account-77",
+            provider: "github",
+            providerUserId: "77",
+            providerLogin: null,
+          },
         ]);
         if (scenario === "empty") mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "" });
         else mockGetGitHubAccessToken.mockRejectedValue(new Error("revoked grant"));
@@ -2797,11 +2812,16 @@ describe("Scheduler", () => {
         sampleRunRow({ session_id: "sess-running" })
       );
       mockUserStoreGetIdentitiesForUser.mockResolvedValue([
-        { provider: "github", providerUserId: "77", providerLogin: null },
+        { id: "github-account-77", provider: "github", providerUserId: "77", providerLogin: null },
       ]);
       mockGetGitHubAccessToken.mockResolvedValue({ accessToken: "grant" });
       mockGitHubAccountInfo.mockResolvedValue({
-        user: { id: "42" },
+        account: {
+          id: "github-account-77",
+          providerId: "github",
+          accountId: "42",
+        },
+        user: { name: "Wrong" },
         data: {
           provider: "github",
           issuer: "https://github.com",

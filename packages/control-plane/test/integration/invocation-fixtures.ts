@@ -46,6 +46,7 @@ export function makeInvocation(
     id: `inv-${Math.random().toString(36).slice(2, 10)}`,
     automation_id: automationId,
     source: "manual",
+    actor_kind: "person",
     scheduled_at: null,
     trigger_key: null,
     concurrency_key: null,

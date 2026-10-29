@@ -82,10 +82,20 @@ describe("E2B terminal lifecycle", () => {
             new TextEncoder().encode(`${header}.${body}`)
           )
         ).toBe(true);
-        expect(storage.updateSandboxAccess).toHaveBeenCalledWith("ttyd", url, token);
+        expect(storage.commitProviderAccess).toHaveBeenCalledWith(
+          expect.any(Object),
+          expect.objectContaining({ ttyd: { url, token } }),
+          undefined,
+          expect.any(Boolean)
+        );
       } else {
         expect(token).toBeNull();
-        expect(storage.updateSandboxAccess).not.toHaveBeenCalled();
+        expect(storage.commitProviderAccess).not.toHaveBeenCalledWith(
+          expect.any(Object),
+          expect.objectContaining({ ttyd: expect.anything() }),
+          undefined,
+          expect.any(Boolean)
+        );
       }
       expect(broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
 
@@ -99,7 +109,7 @@ describe("E2B terminal lifecycle", () => {
       expect(client.createSandbox).toHaveBeenCalledOnce();
       expect(client.connectSandbox).toHaveBeenCalledExactlyOnceWith("e2b-id", 1800);
       expect(client.startProcess).toHaveBeenCalledOnce();
-      expect(storage.completeProviderResume).toHaveBeenCalledWith(
+      expect(storage.commitProviderAccess).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({ ttyd: terminalEnabled ? { url, token } : null })
       );

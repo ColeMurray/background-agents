@@ -16,6 +16,7 @@ import {
 } from "@open-inspect/shared/types/automations";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -85,6 +86,7 @@ interface AutomationTriggerFieldsProps {
 interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFieldsProps {
   eventTypeError: string;
   slackChannelError: string;
+  slackBotAllowListError: string;
   conditionErrors: string[];
 }
 
@@ -139,6 +141,7 @@ export function AutomationTriggerConfigurationFields({
   onChange,
   eventTypeError,
   slackChannelError,
+  slackBotAllowListError,
   conditionErrors,
 }: AutomationTriggerConfigurationFieldsProps) {
   const [droppedConditions, setDroppedConditions] = useState<TriggerCondition[]>([]);
@@ -409,6 +412,37 @@ export function AutomationTriggerConfigurationFields({
             <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
         </fieldset>
+      )}
+
+      {value.type === "slack_event" && (
+        <div>
+          <label className="flex items-center justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium text-foreground">
+                Trigger on bot messages
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Let messages posted by other bots and integrations start runs. Requires a Slack User
+                include condition listing the bot IDs (and any people) allowed to trigger it. This
+                app&apos;s own messages never trigger.
+              </span>
+            </span>
+            <Switch
+              aria-label="Trigger on bot messages"
+              checked={value.includeBotMessages}
+              onCheckedChange={(checked) => update({ includeBotMessages: checked })}
+            />
+          </label>
+          {value.includeBotMessages && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              Bot messages are untrusted input and can start autonomous work. List only bots you
+              trust in the Slack User condition.
+            </p>
+          )}
+          {slackBotAllowListError && (
+            <p className="mt-1 text-xs text-destructive">{slackBotAllowListError}</p>
+          )}
+        </div>
       )}
     </>
   );

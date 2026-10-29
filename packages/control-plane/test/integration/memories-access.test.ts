@@ -4,8 +4,9 @@ import { MemoryRecordStore } from "../../src/db/memory-records";
 import { SessionMemorySelectionStore } from "../../src/db/session-memory-selections";
 import { createScheduler } from "../../src/scheduler/factory";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
-import { memorySelectorForTest, seedMemorySession } from "./memory-test-helpers";
+import { memorySelectorForTest, seedMemorySession, seedPrompt } from "./memory-test-helpers";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import { SessionScopeStore } from "../../src/db/session-scope-store";
 import { memoryScopeToSearchParams, type MemoryScope } from "@open-inspect/shared/types/memories";
 import type { MemoryPartition } from "../../src/memory/partition";
 import { GitHubSourceControlProvider } from "../../src/source-control/providers/github-provider";
@@ -63,6 +64,7 @@ describe("memory shared-scope authorization", () => {
         "environments.read",
         "environments.manage",
         "environments.settings.manage",
+        "memories.manage_own",
       ]);
     }
     await seedTeam("engineering", [[MEMBER, "member"]]);
@@ -357,24 +359,24 @@ describe("memory shared-scope authorization", () => {
 
   /**
    * Commit-time fencing covers facts about the writing session (liveness, owner suspension,
-   * personal auto-save eligibility). Grant changes are not re-encoded in SQL: they are checked
-   * just before the write and on every later read, and shared-scope agent writes are proposals.
+   * personal auto-save eligibility, and for personal writes the owner's preference and
+   * `memories.manage_own`). Grant changes are not re-encoded in SQL: they are checked just before
+   * the write and on every later read, and shared-scope agent writes are proposals.
    */
   async function raceWrite(change: string, during: () => Promise<unknown>) {
     const sessionId = `race-${change.replaceAll(" ", "-")}`;
-    const workspaceOrPersonal = ["workspace membership removal", "personal failure"].includes(
-      change
-    );
+    const personal = change.startsWith("personal ");
+    const workspaceOrPersonal = personal || change === "workspace membership removal";
     await seedMemorySession(sessionId, {
       userId: MEMBER,
       ownerTeamId: workspaceOrPersonal ? null : "engineering",
-      visibility:
-        change === "personal failure" ? "private" : workspaceOrPersonal ? "workspace" : "team",
+      visibility: personal ? "private" : workspaceOrPersonal ? "workspace" : "team",
       repositories: [repo],
       environmentId: workspaceOrPersonal ? null : "dev",
     });
     const { stub } = await initNamedSessionDO(sessionId);
     await seedSandboxAuthHash(stub, { authToken: "race-token", sandboxId: "sandbox-race" });
+    await seedPrompt(stub, MEMBER);
     const original = MemoryRecordStore.prototype.create;
     vi.spyOn(MemoryRecordStore.prototype, "create").mockImplementationOnce(async function (
       this: MemoryRecordStore,
@@ -382,16 +384,15 @@ describe("memory shared-scope authorization", () => {
       author,
       options
     ) {
-      if (change === "personal failure") expect(options?.personalAutoSaveEligible).toBe(true);
+      if (personal) expect(options?.personalAutoSaveEligible).toBe(true);
       await during();
       return original.call(this, input, author, options);
     });
-    const scope =
-      change === "personal failure"
-        ? "personal"
-        : change === "environment transfer"
-          ? "environment"
-          : "repository";
+    const scope = personal
+      ? "personal"
+      : change === "environment transfer"
+        ? "environment"
+        : "repository";
     const sandbox = (path: string, body: object) =>
       routeRequest(
         new Request(`https://test.local/sessions/${sessionId}/sandbox-memory${path}`, {
@@ -408,34 +409,45 @@ describe("memory shared-scope authorization", () => {
     };
   }
 
-  it.each(["personal failure", "suspension", "failed", "completed", "cancelled", "archived"])(
-    "rejects a write when %s wins after route authorization",
-    async (change) => {
-      const { response } = await raceWrite(change, () =>
-        change === "personal failure"
-          ? env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
-              .bind(`race-${change.replaceAll(" ", "-")}`)
+  it.each([
+    "personal failure",
+    "personal revocation",
+    "suspension",
+    "failed",
+    "completed",
+    "cancelled",
+    "archived",
+  ])("rejects a write when %s wins after route authorization", async (change) => {
+    const { response } = await raceWrite(change, () =>
+      change === "personal failure"
+        ? env.DB.prepare("UPDATE sessions SET status = 'failed' WHERE id = ?")
+            .bind(`race-${change.replaceAll(" ", "-")}`)
+            .run()
+        : change === "personal revocation"
+          ? env.DB.prepare(
+              "DELETE FROM role_permissions WHERE role_id = ? AND permission_id = 'memories.manage_own'"
+            )
+              .bind(`role_custom_${MEMBER}`)
               .run()
           : change === "suspension"
             ? env.DB.prepare("UPDATE users SET suspended_at = 1 WHERE id = ?").bind(MEMBER).run()
             : env.DB.prepare("UPDATE sessions SET status = ? WHERE id = ?")
                 .bind(change, `race-${change}`)
                 .run()
-      );
-      expect(response.status).toBe(409);
-      expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
-        count: 0,
-      });
-      expect(
-        await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()
-      ).toEqual({ count: 0 });
-      expect(
-        await env.DB.prepare(
-          "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
-        ).first()
-      ).toEqual({ count: 0 });
-    }
-  );
+    );
+    expect(response.status).toBe(409);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memories").first()).toEqual({
+      count: 0,
+    });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM memory_revisions").first()).toEqual({
+      count: 0,
+    });
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM authorization_audit_events WHERE action = 'memory.created'"
+      ).first()
+    ).toEqual({ count: 0 });
+  });
 
   it.each([
     [
@@ -470,22 +482,20 @@ describe("memory shared-scope authorization", () => {
     }
   );
 
-  it("permanently revokes personal autosave when a collaborator was added and removed", async () => {
-    await seedMemorySession("private", { userId: MEMBER, status: "created" });
-    const collaborators = new SessionCollaboratorStore(env.DB);
-    await collaborators.add("private", OUTSIDER, MEMBER);
-    await collaborators.remove("private", OUTSIDER);
+  it("keeps personal autosave through audience changes", async () => {
+    await seedMemorySession("shared", { userId: MEMBER, status: "created" });
+    await new SessionCollaboratorStore(env.DB).add("shared", OUTSIDER, MEMBER);
+    await new SessionScopeStore(env.DB).updateVisibility(["shared"], "workspace");
     expect(
       await env.DB.prepare(
-        "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'private'"
+        "SELECT personal_auto_save_eligible FROM session_memory_manifests WHERE session_id = 'shared'"
       ).first()
-    ).toEqual({ personal_auto_save_eligible: 0 });
-    await expect(
-      new MemoryRecordStore(env.DB).create(
-        { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
-        { ...actor, kind: "agent", sessionId: "private" },
-        { personalAutoSaveEligible: true }
-      )
-    ).rejects.toThrow(/session access/);
+    ).toEqual({ personal_auto_save_eligible: 1 });
+    const saved = await new MemoryRecordStore(env.DB).create(
+      { partition: { type: "personal", userId: MEMBER }, scope: { type: "personal" }, content },
+      { ...actor, kind: "agent", sessionId: "shared" },
+      { personalAutoSaveEligible: true }
+    );
+    expect(saved.status).toBe("active");
   });
 });

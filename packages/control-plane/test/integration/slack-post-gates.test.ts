@@ -10,7 +10,7 @@ import { createSessionRuntime } from "../../src/session/components";
 import { AutomationStore } from "../../src/db/automation-store";
 import { createScheduler } from "../../src/scheduler/factory";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, seedActiveUser } from "./helpers";
+import { initSession, seedActiveUser, waitForSandboxStatus } from "./helpers";
 import { makeRunRow, seedRun } from "./run-helpers";
 import { runInSessionDO } from "./session-do-access";
 
@@ -129,6 +129,8 @@ describe("Slack outbound post gates (real D1)", () => {
   ])("session callback: $path", ({ path, logMessage }) => {
     it.each(refusals)("sends only a safe closure for $name", async (scope) => {
       const { stub, sessionName } = await initSession();
+      // Warming must settle before setScope can delete the session's D1 row.
+      await waitForSandboxStatus(stub, "failed");
       await setScope(sessionName, scope);
       const slackFetch = vi.fn().mockResolvedValue(new Response("ok"));
       const linearFetch = vi.fn();
@@ -190,7 +192,8 @@ describe("Slack outbound post gates (real D1)", () => {
   });
 
   it.each(refusals)("scheduler sends only a safe closure for $name", async (scope) => {
-    const { sessionName } = await initSession();
+    const { stub, sessionName } = await initSession();
+    await waitForSandboxStatus(stub, "failed");
     await setScope(sessionName, scope);
     const store = new AutomationStore(env.DB);
     await store.create({

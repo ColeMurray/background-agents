@@ -199,8 +199,13 @@ incurring compute costs.
 
 Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
 does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
-in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+in case the process is actually gone. A ready sandbox whose heartbeat is overdue gets a short
+reconnect grace before that check retires it. Explicit lifecycle paths such as inactivity and stale
 heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+While the coordinator that started their checkpoint is still capturing the sandbox, a refused bridge
+is told to retry rather than exit, so the save is not aborted by the container shutting down. After
+a control-plane restart the new coordinator cannot record such a checkpoint, so the bridge exits. A
+shutdown save that is `draining`, `prepared`, or `capturing` is persisted and still answers retry.
 
 ### Data Plane (Sandbox Backends)
 
@@ -213,7 +218,7 @@ development environment.
 - Node.js 24, Python 3.12, git, curl
 - Package managers: npm, pnpm, pip, uv
 - agent-browser CLI + headless Chrome (for browser automation)
-- OpenCode and the Claude Agent SDK (the coding agent harnesses)
+- OpenCode, the Claude Agent SDK, and the pinned Codex CLI (the coding agent harnesses)
 
 Open-Inspect supports these sandbox backends:
 
@@ -286,7 +291,7 @@ When you create a session for a repo without an existing snapshot:
 5. **Start script** (`start`): Runs `.openinspect/start.sh` for runtime startup (if present)
 6. **Managed skills** (`skills`): Installs the session's managed skills into the workspace
 7. **Agent start** (`harness`): The agent harness starts (the OpenCode server, or the Claude Agent
-   staging). The bridge attaches to it and sends `ready`
+   or Codex staging). The bridge attaches to it and sends `ready`
 8. **Ready**: The runtime's `ready` event, not the connection, marks the sandbox ready. Prompts that
    were waiting dispatch now
 
@@ -544,11 +549,21 @@ runs on exactly one harness, chosen at create:
   the bridge and spawns the `claude` binary as its own child, launched with a clean environment that
   carries exactly one Anthropic credential. This is the harness that can use a connected Claude
   subscription. See [Using the Claude Agent Harness](CLAUDE_AGENT.md).
+- **Codex**: the bridge launches OpenAI's Codex CLI as `codex app-server` and speaks JSON-RPC to it
+  over stdio. It always runs the image's pinned install (`/opt/openinspect/codex/bin/codex`), never
+  whatever `codex` is in `/usr/local/bin`, which a provider such as Boat replaces at boot. A small
+  subreaper owns the process and contains everything it spawns when the harness stops it.
+  `CODEX_HOME` is a per-sandbox directory (`~/.openinspect/codex`) that never holds the OpenAI
+  credential: the bridge hands Codex `OPENAI_API_KEY` or a short-lived ChatGPT access token fetched
+  from the control plane at login, and the process does not inherit the sandbox's `OPENAI_*` or
+  `CODEX_*` variables. Codex runs OpenAI models only and refuses a model, reasoning effort, or
+  credential it cannot use instead of substituting a default. See
+  [Using OpenAI Models](OPENAI_MODELS.md).
 
-Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so everything
-above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports the outcome
-of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts queue until
-the running turn ends on both harnesses.
+All three harnesses emit the same session events (tokens, tool calls, steps, warnings), so
+everything above the sandbox is harness-neutral. The bridge owns turn completion: a harness reports
+the outcome of a turn and the bridge emits the single `execution_complete` event. Follow-up prompts
+queue until the running turn ends on every harness.
 
 ### What the Agent Can Do
 
@@ -586,6 +601,12 @@ pushes the branch with the shared GitHub App credentials and returns a manual `p
 PR is attributed to the App bot rather than to you.
 
 This maintains proper code review workflows—you can't approve your own PRs.
+
+A PR opened while processing an automation run's own prompt (scheduled, webhook-triggered, or
+manually triggered with **Run now**) is created with the GitHub App, even though the prompt carries
+the owner's or requester's identity for commit attribution: unattended work is the App's, so that
+person can review and approve it. PRs opened from child sessions the run's agent spawns still use
+the prompting identity's OAuth.
 
 ---
 

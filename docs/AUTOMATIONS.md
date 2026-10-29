@@ -344,6 +344,35 @@ A message runs the automation only when **every** condition passes. The bot-ment
 stripped before matching, and messages that `@mention` the bot are handled by the interactive
 `@mention` flow instead — they never double-fire as triggers.
 
+### Bot messages
+
+By default, messages posted by other bots and integrations (alerting tools, CI notifications,
+incoming webhooks) do not trigger a Slack automation. Turn on **Trigger on bot messages** on the
+automation to let them start runs; the agent is told the message came from a bot. The automation
+must also have a **Slack User** include condition listing the bot IDs (`B…`) allowed to trigger it,
+and saving is refused without one. A bot matches by its bot ID, which works for app bots and for
+legacy integrations that post without a user. The list limits people too, so add the user IDs of
+anyone else who should still trigger the automation. The Open-Inspect bot's own messages never
+trigger an automation.
+
+Only a bot message's `text` is read. An integration that posts its content only in attachments or
+blocks, with empty `text`, triggers nothing, and one that sets `text` to a short fallback is matched
+on that fallback alone.
+
+A bot can start a run but never continues one: continuing a thread's session needs a Slack user
+linked to an Open-Inspect account, so a bot's reply in a thread that already has a session is
+dropped.
+
+Bot messages can start at most 10 runs of one automation per hour; later bot messages in that hour
+are skipped. The first skip in the hour appears in the automation's run history, and the rest are
+not recorded, so a busy bot does not flood it. This stops a loop in which a run makes another bot
+post in the watched channel, which starts the automation again. The limit can be overshot by bot
+messages that arrive at the same moment, since each is checked before the others are counted,
+including several bots answering one run at once. Messages from people are not limited.
+
+Bot output is untrusted input that can start autonomous work, so list only bots you trust. Anyone
+holding an incoming-webhook URL can post as that integration.
+
 ### Run feedback
 
 A triggering message is marked with the 👀 reaction while its run is in flight. When the run
@@ -447,7 +476,9 @@ created. It applies to recurring and one-shot schedules alike.
   one that exhausts its retries counts as a single failure. A waiting run counts as active for
   concurrency.
 - **Cancellation**: pausing or deleting the automation, or lowering **Retries** below the attempts a
-  waiting run has made, fails that run within a minute.
+  waiting run has made, prevents that run from relaunching. The scheduler marks it **Failed** during
+  its once-per-minute retry sweeps. Sweeps process a limited batch, so a backlog can delay the
+  status change across multiple sweeps.
 
 ---
 
@@ -506,6 +537,10 @@ Manual runs use the requester's authority and linked source-control credentials,
 executor's. In addition to trigger permission, the requester must pass runtime session/target checks
 and be a current member of the active owning team for a team automation, even if they are a
 workspace Owner or Administrator.
+
+No automation run, scheduled, event-driven or manual, loads anyone's personal memories or personal
+skill profiles: personal memory serves its owner's own prompts, and nobody prompts an automation
+run. Repository and environment memories apply as in any session.
 
 ### Edit
 

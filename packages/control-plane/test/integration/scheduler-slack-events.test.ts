@@ -16,6 +16,10 @@ import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import type { SlackAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { createScheduler } from "../../src/scheduler/factory";
+import {
+  SLACK_BOT_TRIGGER_LIMIT,
+  SLACK_BOT_TRIGGER_WINDOW_MS,
+} from "../../src/scheduler/slack-bot-trigger-policy";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { makeRunRow, seedRun, fetchRuns } from "./run-helpers";
 import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
@@ -151,6 +155,286 @@ describe("Scheduler slack event handling (integration)", () => {
     expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
 
     expect(await fetchRuns(id)).toHaveLength(0);
+  });
+
+  describe("bot-authored messages", () => {
+    const fromBot = { actorUserId: undefined, botId: "BALERTS", text: "Cost anomaly" };
+    // Accepting bots requires a Slack User include list; U1 keeps the person's
+    // messages triggering alongside the listed bot.
+    const botTriggerConfig = (includeBotMessages?: boolean) =>
+      JSON.stringify({
+        conditions: [
+          { type: "slack_channel", operator: "any_of", value: ["C1"] },
+          ...(includeBotMessages
+            ? [{ type: "slack_actor", operator: "include", value: ["BALERTS", "U1"] }]
+            : []),
+        ],
+        ...(includeBotMessages === undefined ? {} : { slack: { includeBotMessages } }),
+      });
+
+    it("does not trigger an automation that has not opted in", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig() });
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(await fetchRuns(id)).toHaveLength(0);
+    });
+
+    it("does not trigger when includeBotMessages is false", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(false) });
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result.triggered).toBe(0);
+      expect(await fetchRuns(id)).toHaveLength(0);
+    });
+
+    it("triggers an automation that opted in to bot messages", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result.triggered).toBe(1);
+      expect(await fetchRuns(id)).toHaveLength(1);
+    });
+
+    it("still triggers on a person's message when the automation opted in", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      const result = await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
+      expect(result.triggered).toBe(1);
+      expect(await fetchRuns(id)).toHaveLength(1);
+    });
+
+    async function actorKindOf(invocationId: string): Promise<string | undefined> {
+      const row = await env.DB.prepare("SELECT actor_kind FROM automation_invocations WHERE id = ?")
+        .bind(invocationId)
+        .first<{ actor_kind: string }>();
+      return row?.actor_kind;
+    }
+
+    async function seedBotFirings(automationId: string, count: number, createdAt: number) {
+      for (let i = 0; i < count; i++) {
+        await env.DB.prepare(
+          `INSERT INTO automation_invocations
+            (id, automation_id, source, actor_kind, trigger_key, concurrency_key,
+             trigger_metadata, created_at, updated_at)
+           VALUES (?, ?, 'event', 'bot', ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            `inv-bot-${automationId}-${i}`,
+            automationId,
+            `slack:msg:C1:seed-${i}`,
+            `slack:C1:seed-${i}`,
+            JSON.stringify({ channel: "C1", messageTs: `seed-${i}`, botId: "BALERTS" }),
+            createdAt,
+            createdAt
+          )
+          .run();
+      }
+    }
+
+    it("stops starting bot-triggered runs once the hourly limit is reached", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      await seedBotFirings(id, SLACK_BOT_TRIGGER_LIMIT, Date.now() - 60_000);
+
+      const botResult = await sendEvent(makeSlackEvent(fromBot));
+      expect(botResult).toMatchObject({ triggered: 0, skipped: 1 });
+      expect(await fetchRuns(id)).toHaveLength(0);
+      const skip = (await fetchInvocations(store, id)).find(
+        (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+      );
+      expect(skip).toBeDefined();
+      expect(botResult.invocationIds).toEqual([skip!.id]);
+      expect(await actorKindOf(skip!.id)).toBe("bot");
+
+      // Later refusals in the window are counted but leave no further rows.
+      const laterResult = await sendEvent(makeSlackEvent(fromBot));
+      expect(laterResult).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
+      expect(
+        (await fetchInvocations(store, id)).filter(
+          (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+        )
+      ).toHaveLength(1);
+
+      // People are not limited.
+      const personResult = await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
+      expect(personResult.triggered).toBe(1);
+    });
+
+    it("resolves a redelivered bot message to its firing instead of the limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      await seedBotFirings(id, SLACK_BOT_TRIGGER_LIMIT, Date.now() - 60_000);
+      const redelivered = makeSlackEvent({
+        ...fromBot,
+        triggerKey: "slack:msg:C1:seed-0",
+      });
+
+      const result = await sendEvent(redelivered);
+      expect(result.invocationIds).toEqual([`inv-bot-${id}-0`]);
+      expect(
+        (await fetchInvocations(store, id)).some(
+          (invocation) => invocation.skipReason === "slack_bot_trigger_limit"
+        )
+      ).toBe(false);
+    });
+
+    it("counts only bot firings inside the window", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      await seedBotFirings(
+        id,
+        SLACK_BOT_TRIGGER_LIMIT,
+        Date.now() - SLACK_BOT_TRIGGER_WINDOW_MS - 1
+      );
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result.triggered).toBe(1);
+    });
+
+    it("records bot-started firings as bot, keeping the bot's id in the metadata", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      await sendEvent(makeSlackEvent(fromBot));
+
+      const row = await env.DB.prepare(
+        "SELECT actor_kind, trigger_metadata FROM automation_invocations WHERE automation_id = ?"
+      )
+        .bind(id)
+        .first<{ actor_kind: string; trigger_metadata: string }>();
+      expect(row!.actor_kind).toBe("bot");
+      // A worker rolled back past actor_kind counts bot firings by this key.
+      expect(JSON.parse(row!.trigger_metadata)).toMatchObject({ botId: "BALERTS" });
+    });
+
+    it("records a person's firing as person", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      await sendEvent(makeSlackEvent({ text: "Cost anomaly" }));
+
+      const [invocation] = await fetchInvocations(store, id);
+      expect(await actorKindOf(invocation!.id)).toBe("person");
+    });
+
+    it("counts the automation's unskipped firings by actor kind since a time, up to a limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      const otherId = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      const now = Date.now();
+      const botMetadata = JSON.stringify({ channel: "C1", messageTs: "1", botId: "B1" });
+      const rows: Array<[string, string, string | null, string | null, number]> = [
+        [id, "bot", botMetadata, null, now],
+        // Counted by the column alone, whatever the metadata says.
+        [id, "bot", null, null, now],
+        [id, "person", JSON.stringify({ channel: "C1", messageTs: "3" }), null, now],
+        // Metadata naming a bot does not make a firing count.
+        [id, "person", botMetadata, null, now],
+        [id, "unknown", botMetadata, null, now],
+        [id, "bot", botMetadata, "slack_bot_trigger_limit", now],
+        [id, "bot", botMetadata, null, now - 10_000],
+        [otherId, "bot", botMetadata, null, now],
+      ];
+      for (const [
+        i,
+        [automationId, actorKind, metadata, skipReason, createdAt],
+      ] of rows.entries()) {
+        await env.DB.prepare(
+          `INSERT INTO automation_invocations
+            (id, automation_id, source, actor_kind, trigger_metadata, skip_reason, created_at,
+             updated_at)
+           VALUES (?, ?, 'event', ?, ?, ?, ?, ?)`
+        )
+          .bind(
+            `inv-count-${i}`,
+            automationId,
+            actorKind,
+            metadata,
+            skipReason,
+            createdAt,
+            createdAt
+          )
+          .run();
+      }
+
+      const since = now - 1_000;
+      expect(await store.countFiringsSince(id, { actorKind: "bot", since, limit: 10 })).toBe(2);
+      expect(await store.countFiringsSince(id, { actorKind: "person", since, limit: 10 })).toBe(2);
+      // Stops scanning once the limit is reached.
+      expect(await store.countFiringsSince(id, { actorKind: "bot", since, limit: 1 })).toBe(1);
+    });
+
+    it("ignores bot messages when the opted-in automation has no Slack User include list", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, {
+        trigger_config: JSON.stringify({
+          conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          slack: { includeBotMessages: true },
+        }),
+      });
+
+      const result = await sendEvent(makeSlackEvent(fromBot));
+      expect(result).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(await fetchRuns(id)).toHaveLength(0);
+    });
+
+    it("does not trigger on a bot missing from the include list", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+
+      const result = await sendEvent(makeSlackEvent({ ...fromBot, botId: "BOTHER" }));
+      expect(result.triggered).toBe(0);
+      expect(await fetchRuns(id)).toHaveLength(0);
+    });
+
+    it("does not let a bot's thread reply reach an excluded automation's session", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store);
+      const concurrencyKey = "slack:C1:thread-bot";
+
+      const rootResult = await sendEvent(
+        makeSlackEvent({ text: "deploy the api", concurrencyKey, triggerKey: "slack:msg:C1:r" })
+      );
+      expect(rootResult.triggered).toBe(1);
+
+      const replyResult = await sendEvent(
+        makeSlackEvent({
+          ...fromBot,
+          text: "deploy finished",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:bot-reply",
+        })
+      );
+      expect(replyResult).toEqual({ triggered: 0, skipped: 0, steered: 0, invocationIds: [] });
+      expect(await fetchRuns(id)).toHaveLength(1);
+    });
+
+    it("drops a bot's thread reply to an opted-in automation's session instead of steering", async () => {
+      const store = new AutomationStore(env.DB);
+      const id = await seedSlackAutomation(store, { trigger_config: botTriggerConfig(true) });
+      const concurrencyKey = "slack:C1:thread-opted-in";
+
+      const rootResult = await sendEvent(
+        makeSlackEvent({ concurrencyKey, triggerKey: "slack:msg:C1:root-opted-in" })
+      );
+      expect(rootResult.triggered).toBe(1);
+
+      const replyResult = await sendEvent(
+        makeSlackEvent({
+          ...fromBot,
+          text: "deploy finished",
+          concurrencyKey,
+          triggerKey: "slack:msg:C1:bot-reply-opted-in",
+        })
+      );
+      expect(replyResult).toEqual({ triggered: 0, skipped: 1, steered: 0, invocationIds: [] });
+      expect(await fetchRuns(id)).toHaveLength(1);
+    });
   });
 
   it("holds a reply until the thread's starting run has queued its first prompt", async () => {
@@ -496,5 +780,12 @@ describe("Scheduler slack event handling (integration)", () => {
       invocations.find((invocation) => invocation.skipReason === "concurrent_run_active")
     ).toBeUndefined();
     expect(invocations).toHaveLength(1);
+
+    // The follow-up queues another spawn after the first stubbed attempt fails.
+    // Keep it inside the test's lifetime, just like the init warming attempt.
+    await waitForSandboxStatus(
+      env.SESSION.get(env.SESSION.idFromName(rootRun.session_id!)),
+      "failed"
+    );
   });
 });

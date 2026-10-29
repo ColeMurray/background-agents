@@ -4,7 +4,7 @@ import {
   type SlackAutomationEvent,
   type TriggerConfig,
 } from "@open-inspect/shared/triggers";
-import { parseAutomationTriggerFields } from "../db/automation-store";
+import { parseAutomationTriggerFields, type AutomationRow } from "../db/automation-store";
 import type { SlackChannelStore } from "../db/slack-channel-store";
 import type { SessionContinuityService } from "./session-continuity-service";
 import type { Logger } from "../logger";
@@ -14,6 +14,11 @@ import type { AutomationSlackService } from "./slack-service";
 import type { SlackRunMetadata } from "./slack-completion";
 import type { SlackContinuationPolicyFactory } from "./slack-continuation-policy";
 import { composeAutomationPrompt } from "./event-prompt";
+import {
+  SLACK_BOT_TRIGGER_LIMIT,
+  SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON,
+  type SlackBotTriggerPolicy,
+} from "./slack-bot-trigger-policy";
 import { recordEventLaunch, recordContinuation, logEventResult } from "./event-outcome";
 
 export interface SlackEventHandlerDeps {
@@ -22,9 +27,10 @@ export interface SlackEventHandlerDeps {
     AutomationSlackService,
     "getSessionInstructions" | "contextWithThread" | "notifySkip"
   >;
-  invocations: Pick<AutomationInvocationService, "start">;
+  invocations: Pick<AutomationInvocationService, "start" | "skipEvent">;
   continuity: Pick<SessionContinuityService, "continueSession">;
   policies: Pick<SlackContinuationPolicyFactory, "create">;
+  bots: Pick<SlackBotTriggerPolicy, "accepts" | "limitState">;
   clock: Pick<DateConstructor, "now">;
   log: Logger;
 }
@@ -52,6 +58,11 @@ export class SlackEventHandler {
 
     for (const automation of candidates) {
       const now = deps.clock.now();
+      const config = readTriggerConfig(automation);
+      // Checked ahead of continuity, so a bot's reply cannot reach the session of
+      // an automation that has not opted in to bot messages either.
+      if (event.botId !== undefined && !deps.bots.accepts(config)) continue;
+
       // A reply need not repeat the keyword that started the original session.
       // A missing or refusing session falls through to new-trigger evaluation.
       const outcome = await deps.continuity.continueSession(
@@ -65,10 +76,7 @@ export class SlackEventHandler {
         continue;
       }
 
-      let config: TriggerConfig;
-      try {
-        config = parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
-      } catch {
+      if (!config) {
         deps.log.error("Skipped automation with invalid stored trigger fields", {
           event: "scheduler.invalid_trigger_fields",
           automation_id: automation.id,
@@ -77,6 +85,35 @@ export class SlackEventHandler {
         continue;
       }
       if (!matchesConditions(config.conditions, event, conditionRegistry)) continue;
+
+      const triggerMetadata = serializeSlackTriggerMetadata(event);
+      const actorKind = event.botId === undefined ? "person" : "bot";
+      const botLimit =
+        event.botId === undefined ? "under_limit" : await deps.bots.limitState(automation.id, now);
+      if (botLimit === "over_limit_recorded") {
+        summary.skipped++;
+        continue;
+      }
+      if (botLimit === "over_limit") {
+        deps.log.warn("Skipped a bot-triggered Slack firing over the hourly limit", {
+          event: "scheduler.slack_bot_trigger_limited",
+          automation_id: automation.id,
+          trigger_key: event.triggerKey,
+          limit: SLACK_BOT_TRIGGER_LIMIT,
+        });
+        const result = await deps.invocations.skipEvent(
+          {
+            automation,
+            actorKind,
+            triggerKey: event.triggerKey,
+            concurrencyKey: event.concurrencyKey,
+            triggerMetadata,
+          },
+          SLACK_BOT_TRIGGER_LIMIT_SKIP_REASON
+        );
+        recordEventLaunch(summary, result, automation, event, deps.log);
+        continue;
+      }
 
       if (!settingsLoaded) {
         sessionInstructions = await deps.slack.getSessionInstructions();
@@ -89,9 +126,10 @@ export class SlackEventHandler {
       const result = await deps.invocations.start({
         automation,
         source: "event",
+        actorKind,
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
-        triggerMetadata: serializeSlackTriggerMetadata(event),
+        triggerMetadata,
         instructionsOverride: composeAutomationPrompt(event.contextBlock, instructions),
         // Admission owns when this is evaluated: skipped firings do not read the thread.
         instructionsOverrideFactory: async () =>
@@ -100,9 +138,19 @@ export class SlackEventHandler {
       if (result.outcome === "skipped") concurrencySkipped = true;
       recordEventLaunch(summary, result, automation, event, deps.log);
     }
-    if (concurrencySkipped) await deps.slack.notifySkip(event);
+    // The "already active" notice is an ephemeral to the author, which a bot cannot receive.
+    if (concurrencySkipped && event.botId === undefined) await deps.slack.notifySkip(event);
     logEventResult(deps.log, event, summary, candidates.length);
     return summary;
+  }
+}
+
+/** The automation's trigger config, or null when its stored fields do not parse. */
+function readTriggerConfig(automation: AutomationRow): TriggerConfig | null {
+  try {
+    return parseAutomationTriggerFields(automation).triggerConfig ?? { conditions: [] };
+  } catch {
+    return null;
   }
 }
 
@@ -118,6 +166,7 @@ function serializeSlackTriggerMetadata(event: SlackAutomationEvent): string {
   const metadata: SlackRunMetadata = {
     channel: event.channelId,
     messageTs: event.ts,
+    botId: event.botId,
   };
   return JSON.stringify(metadata);
 }

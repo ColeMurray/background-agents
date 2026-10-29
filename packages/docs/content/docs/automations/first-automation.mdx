@@ -72,7 +72,7 @@ Schedule triggers also accept several repositories or environments. Leave that f
 <Step>
 ### Choose the agent, model, and provider authentication
 
-- **Agent**: the harness that runs each session, OpenCode or Claude Agent. It decides which models are listed below. See [Agent harnesses](/models/agent-harnesses).
+- **Agent**: the harness that runs each session: OpenCode, Claude Agent, or Codex. It decides which models are listed below. See [Agent harnesses](/models/agent-harnesses).
 - **Model**: the model used on every run. Only models enabled under Settings › Models that the harness can run are listed.
 - **Reasoning Effort**: for models that support it, pick a level or leave **Use model default**.
 - **Provider authentication**: for each subscription-capable provider, either keep **Use defaults when each run starts** (the provider's configured unattended mode is resolved at run time) or pin a specific connected account or API-key mode. Pins survive model changes and apply only to future sessions. Anthropic account pins reach only Claude Agent automations; OpenCode uses the API key. See [Provider accounts](/models/provider-accounts).

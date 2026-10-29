@@ -358,6 +358,7 @@ describe("AutomationSessionService", () => {
       principal: { userId: "user-1", ownerTeamId: team.id },
       repositories: input.admission.target.repositories,
       environmentId: "env-1",
+      includePersonalMemories: false,
     });
     expect(deps.initializeSession).toHaveBeenCalledWith(
       expect.objectContaining({ visibility: "team", ...input.admission.target }),

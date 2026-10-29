@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@open-inspect/shared": "file:../shared",
-    "@pierre/diffs": "1.2.12",
+    "@pierre/diffs": "1.6.1",
     "@radix-ui/react-alert-dialog": "^1.2.1",
     "@radix-ui/react-checkbox": "^1.4.1",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -36,7 +36,7 @@
     "@radix-ui/react-toggle-group": "^1.2.1",
     "@radix-ui/react-tooltip": "^1.4.1",
     "@tailwindcss/typography": "^0.5.19",
-    "@tanstack/react-virtual": "3.14.17",
+    "@tanstack/react-virtual": "3.14.21",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -47,7 +47,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "react-resizable-panels": "^4.14.5",
+    "react-resizable-panels": "^4.14.8",
     "recharts": "^3.10.1",
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
@@ -60,7 +60,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "1.20.12",
+    "@opennextjs/cloudflare": "1.20.13",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
@@ -69,13 +69,13 @@
     "@types/react-dom": "^19.0.3",
     "@vitest/coverage-v8": "^4.1.12",
     "autoprefixer": "^10.6.1",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "jsdom": "^28.1.0",
     "postcss": "^8.5.30",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vitest": "^4.1.12",
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.151.3"
   },
   "engines": {
     "node": ">=24.0.0"

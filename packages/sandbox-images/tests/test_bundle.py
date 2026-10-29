@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -109,7 +110,7 @@ def test_agent_browser_installs_as_checked_native_binary():
 
 @pytest.mark.parametrize("provider", PROVIDERS)
 def test_pack_rejects_stale_locks_before_creating_context(checkout, tmp_path, provider):
-    path = checkout / "packages/sandbox-images/locks/runtime.txt"
+    path = checkout / "packages/sandbox-images/locks/python-tools.txt"
     path.write_text(path.read_text() + "\n")
     with pytest.raises(ValueError, match="stale"):
         pack_bundle(checkout, provider, tmp_path / "bundles")
@@ -162,6 +163,25 @@ def test_boat_hash_covers_launcher_builder_and_deployment(checkout, source):
     path = checkout / source
     path.write_text(path.read_text() + "\n")
     assert plan_image(checkout, "boat")["buildHash"] != before
+
+
+def test_pack_exports_runtime_requirements_from_uv_lock(checkout, tmp_path):
+    lock = checkout / "packages/sandbox-runtime/uv.lock"
+    packed = pack_bundle(checkout, "e2b", tmp_path / "bundles")
+    requirements = (packed.directory / "runtime-requirements.txt").read_text()
+    pinned = re.search(r'name = "cryptography"\nversion = "([^"]+)"', lock.read_text())
+    assert pinned
+    assert f"cryptography=={pinned[1]} \\\n    --hash=sha256:" in requirements
+
+
+def test_pack_rejects_runtime_uv_lock_out_of_sync_with_pyproject(checkout, tmp_path):
+    pyproject = checkout / "packages/sandbox-runtime/pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace("dependencies = [", 'dependencies = [\n    "six",', 1)
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        pack_bundle(checkout, "e2b", tmp_path / "bundles")
+    assert not (tmp_path / "bundles").exists()
 
 
 def test_runtime_assets_are_packed_without_per_file_manifest(checkout, tmp_path):

@@ -43,7 +43,14 @@ const routes = [
   },
   {
     name: "PUT /api/image-builds/repo/[owner]/[name]/toggle",
-    call: () => toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params),
+    call: () =>
+      toggleBuild(
+        {
+          cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
+          json: async () => ({ enabled: true }),
+        } as NextRequest,
+        params
+      ),
   },
 ];
 
@@ -317,7 +324,13 @@ describe("proxied control-plane paths", () => {
   });
 
   it("toggle puts to the unified repo toggle route", async () => {
-    await toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params);
+    await toggleBuild(
+      {
+        cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
+        json: async () => ({ enabled: true }),
+      } as NextRequest,
+      params
+    );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/image-builds/toggle/repo/acme/web", {
       method: "PUT",
@@ -326,9 +339,15 @@ describe("proxied control-plane paths", () => {
   });
 
   it("toggle preserves nested namespace owners as one encoded route segment", async () => {
-    await toggleBuild({ json: async () => ({ enabled: false }) } as NextRequest, {
-      params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
-    });
+    await toggleBuild(
+      {
+        cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
+        json: async () => ({ enabled: false }),
+      } as NextRequest,
+      {
+        params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
+      }
+    );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/image-builds/toggle/repo/group%2Fsubgroup/web",

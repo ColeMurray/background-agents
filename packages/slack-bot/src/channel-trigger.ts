@@ -14,9 +14,9 @@ import {
   type SlackChannelMeta,
 } from "@open-inspect/shared/triggers";
 import type { Env } from "./types";
-import { isChannelTriggerCandidate } from "./dm-utils";
+import { channelTriggerAuthor } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
-import { getBotUserId } from "./bot-identity";
+import { getBotIdentity } from "./bot-identity";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { z } from "zod";
@@ -36,7 +36,9 @@ const slackTriggerForwardResponseSchema = z.object({
  *
  * All filtering happens here so the Slack event ack path stays cheap:
  * 1. Bot identity (fail closed — no id ⇒ skip, since mention suppression needs it).
- * 2. Structural candidacy + mention suppression (`isChannelTriggerCandidate`).
+ * 2. Structural candidacy, self-exclusion + mention suppression
+ *    (`channelTriggerAuthor`). Other bots' messages pass with their `bot_id`; the
+ *    control plane applies each automation's bot-message setting.
  * 3. Watched-channel pre-filter (cached) — avoids forwarding every channel message.
  * 4. Normalize (+ best-effort channel name/permalink) and forward.
  */
@@ -55,13 +57,14 @@ export async function handleChannelTrigger(
   env: Env,
   traceId: string | undefined
 ): Promise<void> {
-  const botUserId = await getBotUserId(env, traceId);
-  if (!botUserId) {
+  const identity = await getBotIdentity(env, traceId);
+  if (!identity) {
     log.warn("slack_trigger.skip", { trace_id: traceId, reason: "no_bot_user_id" });
     return;
   }
 
-  if (!isChannelTriggerCandidate(event, botUserId)) {
+  const author = channelTriggerAuthor(event, identity);
+  if (!author) {
     return;
   }
 
@@ -73,14 +76,8 @@ export async function handleChannelTrigger(
 
   const channelMeta = await fetchChannelMeta(env, channel, event.ts!);
   const normalized = normalizeSlackEvent(
-    {
-      channel,
-      ts: event.ts!,
-      thread_ts: event.thread_ts,
-      user: event.user!,
-      text: event.text!,
-    },
-    botUserId,
+    { ...author, channel, ts: event.ts!, thread_ts: event.thread_ts, text: event.text! },
+    identity.userId,
     channelMeta
   );
   // Null when the message was only the bot mention (no usable text after strip).

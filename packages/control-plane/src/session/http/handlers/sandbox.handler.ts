@@ -345,7 +345,7 @@ export class SandboxHandler {
    * Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map.
    *
    * `sandbox.tunnel_urls` is a JSON-encoded `{ [port: string]: string }`
-   * stored by `SandboxLifecycleManager#storeAndBroadcastTunnelUrls`. When the
+   * stored by `SandboxRepository#commitProviderAccess`. When the
    * control plane has resolved Modal tunnel URLs but the in-sandbox file write
    * (`sandbox.open` from outside) hasn't propagated to the sandbox's own
    * filesystem view — a real failure mode on the Modal provider — this

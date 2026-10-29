@@ -408,7 +408,10 @@ export const memorySelectionSummarySchema = z.object({
   items: z.array(selectionItemSummarySchema).max(MAX_SELECTION_ITEMS),
 });
 export type MemorySelectionSummary = z.infer<typeof memorySelectionSummarySchema>;
-/** A live session's pinned selection, with whether each item has since been revised or archived. */
+/**
+ * A live session's pinned selection, with whether each item has since been revised or archived.
+ * Personal items are listed only for their owner; other viewers get `hiddenPersonalCount`.
+ */
 export const sessionMemorySelectionStatusSchema = memorySelectionSummarySchema.extend({
   items: z
     .array(
@@ -418,6 +421,8 @@ export const sessionMemorySelectionStatusSchema = memorySelectionSummarySchema.e
       })
     )
     .max(MAX_SELECTION_ITEMS),
+  // Defaulted so a web build deployed before the control plane still parses responses.
+  hiddenPersonalCount: z.number().int().nonnegative().default(0),
 });
 export type SessionMemorySelectionStatus = z.infer<typeof sessionMemorySelectionStatusSchema>;
 
