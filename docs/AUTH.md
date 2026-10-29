@@ -86,8 +86,9 @@ editor is read-only and the server rejects mutations. To enable secure editing, 
 baseline and disable unsafe mode together, then verify that account's login/role.
 
 Migration `0093_workspace_admission_policy.sql` seeds empty managed rules at revision zero. Owners
-and Administrators can edit them as soon as the backend serves the settings routes. The frontend may
-deploy independently first; missing backend routes show unavailable.
+and Administrators can edit them as soon as the backend serves the settings routes; the table's
+`writes_frozen` column is no longer read. The frontend may deploy independently first; missing
+backend routes show unavailable.
 
 ### Policy Safety and Audit
 
@@ -602,16 +603,24 @@ Rolling back to old code that ignores managed rules drops every managed grant. B
 rollback, stop concurrent deployments, baseline edits, and Settings policy edits, and
 disable/control automated rollback. Nothing locks the editor or deployment configuration for you.
 
-While still on new code, copy the managed rules from Settings and protect the copy as sensitive
-data. It does not include the deployment baseline: separately retrieve the actual serving baseline,
+While still on new code, reload Settings, discard any unsaved draft, and copy the managed rules;
+protect the copy as sensitive data. If Settings is unavailable, read the same rules directly:
+
+```bash
+npx wrangler d1 execute <D1-name> --remote --json \
+  --command "SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1"
+```
+
+The copy does not include the deployment baseline: separately retrieve the actual serving baseline,
 normalize and union each list with the managed rules, and deploy that complete union with unsafe
 mode false. Verify the deployed union, provider compatibility, and intended login eligibility.
-Immediately before old-code rollback, confirm the managed rules and the deployed union are
-unchanged. Stop if either drifted.
+Immediately before old-code rollback, reload Settings again and confirm the managed rules and the
+deployed union are unchanged. Stop if either drifted.
 
 Only after those checks should old code serve traffic. Retain the policy table and audit history. A
 frontend-only rollback leaves backend enforcement intact; restore a compatible editor to change
-managed rules.
+managed rules. Code that still reads `writes_frozen` shows the editor read-only after a rollback,
+because the column keeps the value migration `0093` seeded.
 
 For a policy mistake, deploy a known valid recovery email in the baseline with unsafe mode false,
 then verify login and active administrative role. A corrupted/unavailable policy needs database

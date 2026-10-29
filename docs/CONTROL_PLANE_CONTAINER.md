@@ -117,8 +117,8 @@ curl -s http://localhost:8787/healthz
 
 Node startup applies the shared SQL migrations. Migration `0093` seeds the admission singleton with
 empty managed rules at revision zero; Owners and Administrators can edit them in Settings once the
-backend is running. The independently deployed frontend may arrive before the backend: missing
-routes show unavailable.
+backend is running, and its `writes_frozen` column is no longer read. The independently deployed
+frontend may arrive before the backend: missing routes show unavailable.
 
 Sign in once as the intended Owner. Then run the bootstrap script with their canonical 32-character
 lowercase hexadecimal user ID. The script needs Node.js 24+, a repository checkout, and exactly one
@@ -157,8 +157,15 @@ Older code ignores managed rules, so rolling back to it drops every managed gran
 deployments/configuration edits and Settings policy edits, and disable or control automated rollback
 first; nothing locks deployment configuration or the editor for you.
 
-While still on current code, copy the managed rules from Settings and treat the copy as sensitive
-data. It contains managed rules only, not the deployment baseline. Separately read the serving
+While still on current code, reload Settings, discard any unsaved draft, and copy the managed rules;
+treat the copy as sensitive data. If Settings is unavailable, read the same rules from the actual
+volume with the `operator_sql` helper above:
+
+```bash
+operator_sql -e 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync("/data/global.db", { readOnly: true }); console.log(JSON.stringify(db.prepare("SELECT revision, rules_json FROM workspace_admission_policy WHERE id = 1").get()))'
+```
+
+The copy contains managed rules only, not the deployment baseline. Separately read the serving
 container's admission configuration, normalize and union each baseline list with the managed list,
 and put that union in `.env` (or the AWS SSM source). Set unsafe mode false. Apply the reviewed
 configuration on current code; local Compose recreates the app with:
@@ -169,11 +176,11 @@ docker compose up -d --build app
 
 On AWS, use its normal SSM/deployment workflow and Compose overlay rather than relying on a local
 `.env` edit that a later deployment would replace. Verify the **deployed** union and intended login
-eligibility. Immediately before moving to old code, confirm the managed rules and the deployed union
-still match what you reviewed. If either changed, stop and repeat the review. Only then deploy the
-approved old image/source version with that union intact. Keep `global.db`, the policy row, and
-audit history; do not drop policy data. A frontend-only rollback does not stop the new backend from
-enforcing managed rules.
+eligibility. Immediately before moving to old code, reload Settings again and confirm the managed
+rules and the deployed union still match what you reviewed. If either changed, stop and repeat the
+review. Only then deploy the approved old image/source version with that union intact. Keep
+`global.db`, the policy row, and audit history; do not drop policy data. A frontend-only rollback
+does not stop the new backend from enforcing managed rules.
 
 ### Recover
 
