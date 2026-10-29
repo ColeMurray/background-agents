@@ -5,6 +5,7 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import {
   McpServerConflictError,
+  McpServerCredentialsUnreadableError,
   McpServerStore,
   McpServerValidationError,
   type McpServerMetadataOptions,
@@ -146,6 +147,15 @@ async function handleUpdateMcpServer(
     return json(updated);
   } catch (err) {
     if (err instanceof McpServerConflictError) {
+      return error(err.message, 409);
+    }
+    if (err instanceof McpServerCredentialsUnreadableError) {
+      logger.warn("MCP server update refused: kept credentials are unreadable", {
+        event: "mcp_server.update_credentials_unreadable",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        id,
+      });
       return error(err.message, 409);
     }
     if (err instanceof McpServerValidationError) {

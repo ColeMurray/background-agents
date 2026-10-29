@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import type { BuiltInRoleKey } from "@open-inspect/shared/rbac";
+import { encryptToken, generateEncryptionKey } from "../../src/auth/crypto";
 import { McpServerStore } from "../../src/db/mcp-servers";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, type ServiceRequestInit } from "./helpers";
@@ -304,6 +305,66 @@ describe("MCP Servers API", () => {
         Accept: "text/event-stream",
         "x-api-key": "new-key",
       });
+    });
+
+    it("keeps a saved header named in another letter case", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "case-headers",
+          type: "remote",
+          url: "https://mcp.example.com",
+          headers: { Authorization: "Bearer t", Accept: "text/event-stream" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ headers: {}, keepCredentialKeys: ["authorization"] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect((await response.json<McpServerMetadata>()).credentialKeys).toEqual(["Authorization"]);
+      expect(await storedCredentials(created.id)).toEqual({ Authorization: "Bearer t" });
+    });
+
+    it("refuses to keep saved credentials it cannot decrypt and changes nothing", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "unreadable-headers",
+          type: "remote",
+          url: "https://mcp.example.com",
+          headers: { Authorization: "Bearer t" },
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+      // Simulate credentials encrypted under a key this control plane does not hold.
+      const foreign = await encryptToken(
+        JSON.stringify({ Authorization: "Bearer t" }),
+        generateEncryptionKey()
+      );
+      await env.DB.prepare("UPDATE mcp_servers SET env = ? WHERE id = ?")
+        .bind(foreign, created.id)
+        .run();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: "renamed",
+          headers: {},
+          keepCredentialKeys: ["Authorization"],
+          revision: created.revision,
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      expect((await response.json<{ error: string }>()).error).toMatch(/cannot be decrypted/);
+      const row = await env.DB.prepare("SELECT name, env, revision FROM mcp_servers WHERE id = ?")
+        .bind(created.id)
+        .first<{ name: string; env: string; revision: number }>();
+      expect(row).toEqual({ name: "unreadable-headers", env: foreign, revision: created.revision });
     });
 
     it("keeps every saved env var when all are kept and none are sent", async () => {

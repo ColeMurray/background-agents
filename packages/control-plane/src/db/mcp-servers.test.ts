@@ -7,7 +7,11 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
-import { McpServerStore, McpServerValidationError } from "./mcp-servers";
+import {
+  McpServerCredentialsUnreadableError,
+  McpServerStore,
+  McpServerValidationError,
+} from "./mcp-servers";
 import { decryptToken, encryptToken, generateEncryptionKey } from "../auth/crypto";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
@@ -400,6 +404,21 @@ describe("McpServerStore", () => {
       ).toEqual({ "x-api-key": "old-key", "X-API-KEY": "new-key" });
     });
 
+    it("keeps a stored header named in another letter case, in its stored spelling", async () => {
+      expect(
+        await storedCredentialsAfterUpdate({ headers: {}, keepCredentialKeys: ["accept"] })
+      ).toEqual({ Accept: "text/event-stream" });
+    });
+
+    it("keeps only env vars named in their exact case", async () => {
+      expect(
+        await storedCredentialsAfterUpdate(
+          { env: {}, keepCredentialKeys: ["ACCEPT", "x-api-key"] },
+          sampleRow
+        )
+      ).toEqual({ "x-api-key": "old-key" });
+    });
+
     it("keeps every stored credential when all are kept and none are sent", async () => {
       expect(
         await storedCredentialsAfterUpdate({
@@ -435,6 +454,58 @@ describe("McpServerStore", () => {
           sampleRow
         )
       ).toEqual({});
+    });
+
+    describe("with credentials it cannot decrypt", () => {
+      async function unreadableRemoteRow() {
+        return {
+          ...remoteRow,
+          env: await encryptToken(
+            JSON.stringify({ Authorization: "Bearer t" }),
+            generateEncryptionKey()
+          ),
+        };
+      }
+
+      it("refuses to keep them and writes nothing", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const { db, statements } = createFakeD1({ firstResult: await unreadableRemoteRow() });
+          const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+
+          await expect(
+            store.update("def456", { name: "renamed", keepCredentialKeys: ["Authorization"] }, 1)
+          ).rejects.toThrow(McpServerCredentialsUnreadableError);
+          expect(statements.some((s) => s.sql.includes("UPDATE"))).toBe(false);
+        } finally {
+          errorSpy.mockRestore();
+        }
+      });
+
+      it("writes them back unchanged when the update sends none", async () => {
+        const row = await unreadableRemoteRow();
+        const { db, statements } = createFakeD1({ firstResult: row });
+
+        await new McpServerStore(db, TEST_ENCRYPTION_KEY).update("def456", {
+          name: "renamed",
+          type: "remote",
+        });
+
+        expect(statements.find((s) => s.sql.includes("UPDATE"))!.params[4]).toBe(row.env);
+      });
+
+      it("replaces them without decrypting when sent credentials replace the set", async () => {
+        const { db, statements } = createFakeD1({ firstResult: await unreadableRemoteRow() });
+
+        await new McpServerStore(db, TEST_ENCRYPTION_KEY).update("def456", {
+          headers: { Authorization: "Bearer new" },
+        });
+
+        const written = statements.find((s) => s.sql.includes("UPDATE"))!.params[4] as string;
+        expect(JSON.parse(await decryptToken(written, TEST_ENCRYPTION_KEY))).toEqual({
+          Authorization: "Bearer new",
+        });
+      });
     });
 
     it("returns credential names but not values from an update when asked", async () => {

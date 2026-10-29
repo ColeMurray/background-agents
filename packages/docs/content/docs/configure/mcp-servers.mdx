@@ -77,7 +77,7 @@ When someone with `mcp_servers.manage` edits a server, the form lists each saved
 
 Nothing changes until you click Save Changes. Header names match without regard to case, so a new `authorization` row replaces a saved `Authorization` header. Environment variable names are case-sensitive. Switching between Local and Remote hides the saved rows, because headers and environment variables are not interchangeable. Switching back before saving restores them, but saving under the other type deletes the saved credentials.
 
-API clients make the same per-name edits by sending `keepCredentialKeys` with `PUT /mcp-servers/:id`. Listed names keep their saved values, names sent in `env` or `headers` take the new values, and saved names that are neither kept nor sent are deleted. Without `keepCredentialKeys`, the credentials sent replace the whole saved set.
+API clients make the same per-name edits by sending `keepCredentialKeys` with `PUT /mcp-servers/:id`. Listed names keep their saved values, names sent in `env` or `headers` take the new values, and saved names that are neither kept nor sent are deleted. Without `keepCredentialKeys`, the credentials sent replace the whole saved set. If the saved credentials cannot be decrypted, for example after the encryption key changed, a request with `keepCredentialKeys` is refused with `409` and nothing changes; send the full set without it to replace them.
 
 ## Scope and enablement
 

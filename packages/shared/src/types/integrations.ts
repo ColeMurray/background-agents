@@ -748,9 +748,9 @@ export const updateMcpServerInputSchema = z
     headers: mcpServerCredentialMapSchema,
     /**
      * Stored credential names to keep, values unchanged, beside the `env` or
-     * `headers` sent. A sent name replaces a kept one (header names match
-     * case-insensitively), and stored names neither kept nor sent are deleted.
-     * Without it, sent credentials replace the stored set.
+     * `headers` sent. A sent name replaces a kept one, and stored names neither
+     * kept nor sent are deleted. Header names match case-insensitively, env var
+     * names exactly. Without it, sent credentials replace the stored set.
      */
     keepCredentialKeys: z.array(z.string()),
   })
