@@ -20,7 +20,11 @@ from sandbox_runtime import bridge as bridge_module
 from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 from sandbox_runtime.harness import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessStartError
+from sandbox_runtime.harness.codex import CodexHarness, CodexHarnessConfig
+from sandbox_runtime.harness.opencode import OpencodeHarness
 from sandbox_runtime.reconnect_backoff import RECONNECT_BACKOFF_BASE
+from tests.claude_fakes import LIMITS
+from tests.claude_fakes import Harness as WiredClaudeHarness
 from tests.conftest import ScriptedHarness
 
 
@@ -602,6 +606,55 @@ class TestConnectSnapshot:
                 break
             if event["type"] == "ready":
                 assert event["activeMessageId"] == "msg-x"
+
+    @pytest.mark.parametrize(
+        ("build_harness", "reports"),
+        [
+            pytest.param(
+                lambda tmp_path: OpencodeHarness(
+                    client=MagicMock(),
+                    attachment_processor=MagicMock(),
+                    log=MagicMock(),
+                    limits=LIMITS,
+                ),
+                True,
+                id="opencode",
+            ),
+            pytest.param(lambda tmp_path: WiredClaudeHarness(tmp_path).harness, False, id="claude"),
+            pytest.param(
+                lambda tmp_path: CodexHarness(
+                    config=CodexHarnessConfig(tmp_path, tmp_path / "native", "gpt-6.1-sol", False),
+                    log=MagicMock(),
+                    limits=LIMITS,
+                    client_factory=MagicMock(),
+                    environ={},
+                ),
+                False,
+                id="codex",
+            ),
+        ],
+    )
+    async def test_a_restarted_bridge_reports_only_when_its_harness_contains_the_predecessor(
+        self, tmp_path, monkeypatch, build_harness, reports
+    ):
+        """A restarted bridge owes nothing. OpenCode stops what its server still
+        runs for the predecessor before attaching, so its ``ready`` says so and
+        the control plane fails the lost prompt. Claude and Codex cannot stop a
+        child the dead bridge left running (#2605): their ``ready`` carries no
+        report, and the control plane keeps the prompt."""
+        harness = build_harness(tmp_path)
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness, early_connect=False)
+        ws = self._connect(bridge, monkeypatch)
+
+        await bridge._connect_and_run()
+
+        [ready] = [event for event in ws.sent if event["type"] == "ready"]
+        assert ready["harness"] == harness.id.value
+        assert harness.contains_inherited_execution is reports
+        if reports:
+            assert ready["activeMessageId"] is None
+        else:
+            assert "activeMessageId" not in ready
 
     async def test_nothing_relayed_while_booting_is_buffered(self, tmp_path, monkeypatch):
         """A warning with nowhere to go is held by the relay, not buffered."""

@@ -128,6 +128,17 @@ class AgentHarness(Protocol):
     @property
     def id(self) -> HarnessId: ...
 
+    @property
+    def contains_inherited_execution(self) -> bool:
+        """Whether attaching stops whatever an earlier bridge process left running.
+
+        Only then may ``ready`` name the prompt this process owes: a restarted
+        bridge that owes none releases the control plane's queue, and the next
+        prompt must not run beside a turn the vendor still runs for its
+        predecessor.
+        """
+        ...
+
     async def open(self) -> None:
         """Connect to the vendor. Raises ``HarnessStartError`` on a final failure."""
         ...

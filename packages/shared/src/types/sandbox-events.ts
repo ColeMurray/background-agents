@@ -117,9 +117,10 @@ const nonArtifactSandboxEventSchemas = [
      * plane has not acknowledged (it may still be in flight on the socket
      * that died). Null for none, which a restarted process reports only after
      * it has stopped whatever the vendor session still ran for its
-     * predecessor. Absent from runtimes that predate the field. On a
-     * reconnect it tells a process that still owes a prompt's result from a
-     * restarted one that lost it.
+     * predecessor. Absent from runtimes that predate the field and from
+     * harnesses that cannot stop what a dead predecessor left running (Claude,
+     * Codex), whose prompts are then kept. On a reconnect it tells a process
+     * that still owes a prompt's result from a restarted one that lost it.
      */
     activeMessageId: z.string().min(1).nullable().optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),

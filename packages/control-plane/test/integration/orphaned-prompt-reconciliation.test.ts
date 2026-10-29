@@ -43,6 +43,12 @@ async function messageState(stub: DurableObjectStub, id: string): Promise<Messag
   return row;
 }
 
+const HARNESS_MODELS = {
+  opencode: "anthropic/claude-haiku-4-5",
+  claude: "anthropic/claude-haiku-4-5",
+  codex: "openai/gpt-6.1-sol",
+} as const;
+
 /**
  * A session whose sandbox instance was reserved at `instanceReservedAt`,
  * with a prompt processing since `startedAt` and another waiting behind it.
@@ -52,8 +58,13 @@ async function seedSession(opts: {
   status: "connecting" | "ready";
   instanceReservedAt: number;
   startedAt: number;
+  harness?: keyof typeof HARNESS_MODELS;
 }) {
-  const { stub } = await initNamedSession(opts.name);
+  const harness = opts.harness ?? "opencode";
+  const { stub } = await initNamedSession(opts.name, {
+    harness,
+    model: HARNESS_MODELS[harness],
+  });
   await seedSandboxAuth(stub, {
     authToken: AUTH_TOKEN,
     sandboxId: SANDBOX_ID,
@@ -126,7 +137,7 @@ describe("processing prompt reconciliation (via SELF.fetch)", () => {
     }
   });
 
-  it("fails a prompt a reconnecting bridge does not hold when it was dispatched before the socket attached", async () => {
+  it("fails a prompt a restarted OpenCode bridge does not hold when it was dispatched before the socket attached", async () => {
     const name = `orphan-restarted-${Date.now()}`;
     const instanceReservedAt = Date.now() - 5_000;
     const stub = await seedSession({
@@ -191,34 +202,47 @@ describe("processing prompt reconciliation (via SELF.fetch)", () => {
   });
 
   it.each([
-    { report: "the prompt it holds", extra: { activeMessageId: "msg-running" } },
-    { report: "no report at all", extra: {} },
-  ])("keeps the prompt when a reconnecting bridge sends $report", async ({ extra }) => {
-    const name = `orphan-kept-${Date.now()}`;
-    const instanceReservedAt = Date.now() - 5_000;
-    const stub = await seedSession({
-      name,
-      status: "ready",
-      instanceReservedAt,
-      startedAt: instanceReservedAt + 1_000,
-    });
-
-    const ws = await connectSandbox(name);
-    try {
-      const delivery = collectMessages(ws, {
-        until: (message) => message.type === "prompt",
-        timeoutMs: 500,
+    {
+      harness: "opencode",
+      report: "the prompt it holds",
+      extra: { activeMessageId: "msg-running" },
+    },
+    // A runtime that predates the report.
+    { harness: "opencode", report: "no report", extra: {} },
+    // A restarted Claude or Codex bridge sends none: it cannot stop a vendor
+    // child its predecessor left running, so the queue must not move (#2605).
+    { harness: "claude", report: "no report", extra: {} },
+    { harness: "codex", report: "no report", extra: {} },
+  ] as const)(
+    "keeps the prompt when a reconnecting $harness bridge sends $report",
+    async ({ harness, extra }) => {
+      const name = `orphan-kept-${harness}-${Date.now()}`;
+      const instanceReservedAt = Date.now() - 5_000;
+      const stub = await seedSession({
+        name,
+        status: "ready",
+        instanceReservedAt,
+        startedAt: instanceReservedAt + 1_000,
+        harness,
       });
-      ws.send(readyEvent(extra));
 
-      expect((await delivery).find((message) => message.type === "prompt")).toBeUndefined();
-      expect(await messageState(stub, "msg-running")).toEqual({
-        status: "processing",
-        error_message: null,
-      });
-      expect(await messageState(stub, "msg-next")).toMatchObject({ status: "pending" });
-    } finally {
-      await closeWebSocket(ws);
+      const ws = await connectSandbox(name);
+      try {
+        const delivery = collectMessages(ws, {
+          until: (message) => message.type === "prompt",
+          timeoutMs: 500,
+        });
+        ws.send(readyEvent({ harness, ...extra }));
+
+        expect((await delivery).find((message) => message.type === "prompt")).toBeUndefined();
+        expect(await messageState(stub, "msg-running")).toEqual({
+          status: "processing",
+          error_message: null,
+        });
+        expect(await messageState(stub, "msg-next")).toMatchObject({ status: "pending" });
+      } finally {
+        await closeWebSocket(ws);
+      }
     }
-  });
+  );
 });

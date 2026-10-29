@@ -255,8 +255,11 @@ current sandbox instance was reserved (`instance_reserved_at_ms`, advanced by a 
 restore but not by an in-place resume), so it went to a sandbox since replaced.
 `reason="runtime_restarted"` means the bridge's `ready` named a different prompt it still owes a
 result for, or none (`runtime_active_message_id`), and the prompt was dispatched before that socket
-attached (`socket_attached_at_ms`), so the process that received it is gone. The prompt fails with
-the matching user-facing message and the next pending prompt dispatches.
+attached (`socket_attached_at_ms`), so the process that received it is gone. Only OpenCode sends
+that report, since it stops what its server still runs for a dead bridge before reporting ready;
+Claude and Codex send none, so after a bridge restart their prompt stays processing until the
+execution timeout or a Stop ([#2605](https://github.com/ColeMurray/background-agents/issues/2605)).
+The prompt fails with the matching user-facing message and the next pending prompt dispatches.
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 

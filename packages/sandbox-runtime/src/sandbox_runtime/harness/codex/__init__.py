@@ -77,6 +77,9 @@ class CodexHarnessConfig:
 
 class CodexHarness:
     id = HarnessId.CODEX
+    # A bridge that dies without its own cleanup can leave its app-server
+    # child running, and nothing here stops it (#2605).
+    contains_inherited_execution = False
 
     def __init__(
         self,

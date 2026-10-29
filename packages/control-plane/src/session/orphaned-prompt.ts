@@ -9,7 +9,9 @@ export type OrphanedPromptReason = "sandbox_replaced" | "runtime_restarted";
 /**
  * The bridge's `ready` report: the prompt it still owes a result for (the one
  * it runs, else the newest whose terminal event is unacknowledged), or null
- * for none. A runtime that predates the report sends none at all.
+ * for none. A runtime that predates the report, or whose harness cannot stop
+ * what the vendor still runs for a dead predecessor (Claude, Codex), sends
+ * none at all.
  */
 export interface RuntimeReport {
   owedMessageId: string | null;
@@ -49,10 +51,11 @@ export function runtimeBoundaries(
  *   received it is gone. A prompt dispatched on the current socket is never
  *   judged by the report: on a reconnect the bridge reports before it reads
  *   any command on the new socket, and on a first connect a prompt it received
- *   while booting is in its report. A restarted bridge reports no owner only
- *   after it has stopped whatever its vendor session still ran for its
- *   predecessor, so the next prompt does not share an execution with this one.
- *   Without a report only the instance rule applies.
+ *   while booting is in its report. Only a harness that stops whatever its
+ *   vendor still ran for a predecessor before it reports ready sends the
+ *   report (OpenCode), so the next prompt never runs beside a lost one; Claude
+ *   and Codex send none (#2605). Without a report only the instance rule
+ *   applies.
  */
 export function orphanedPromptReason(
   prompt: { id: string; started_at: number | null },

@@ -320,8 +320,15 @@ class AgentBridge:
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
             # On a reconnect the control plane uses this to tell a process that
-            # still owes a prompt's result from a restarted one that lost it.
-            "activeMessageId": self._owed_message_id(),
+            # still owes a prompt's result from a restarted one that lost it,
+            # and fails a lost prompt to release the queue. Without the field it
+            # keeps the prompt, which is all a harness that cannot stop a
+            # predecessor's execution may ask for.
+            **(
+                {"activeMessageId": self._owed_message_id()}
+                if harness.contains_inherited_execution
+                else {}
+            ),
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {

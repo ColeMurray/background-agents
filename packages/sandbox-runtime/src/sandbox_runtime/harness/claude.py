@@ -181,6 +181,9 @@ def mcp_server_options(servers: tuple[Mapping[str, Any], ...]) -> dict[str, Any]
 
 class ClaudeHarness:
     id = HarnessId.CLAUDE
+    # A bridge that dies without its own cleanup can leave its CLI child
+    # running, and nothing here stops it (#2605).
+    contains_inherited_execution = False
 
     def __init__(
         self,

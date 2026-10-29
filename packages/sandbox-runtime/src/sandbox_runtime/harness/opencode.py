@@ -40,6 +40,9 @@ class OpencodeHarness:
     """
 
     id = HarnessId.OPENCODE
+    # ``resume_session`` stops what the server still runs for an earlier
+    # bridge process before the session is adopted.
+    contains_inherited_execution = True
 
     def __init__(
         self,

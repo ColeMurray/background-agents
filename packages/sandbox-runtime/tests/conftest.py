@@ -148,6 +148,7 @@ class ScriptedHarness:
     from sandbox_runtime.harness import HarnessId
 
     id = HarnessId.OPENCODE
+    contains_inherited_execution = True
 
     def __init__(
         self,
