@@ -35,9 +35,17 @@ import {
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 
 type ScopeMode = "global" | "selected";
+/** Credential names saved for an existing server, snapshotted when its editor opens. */
+type SavedCredentials = { type: "local" | "remote"; keys: string[] };
 type Editor =
   | { kind: "new"; draftId: string }
-  | { kind: "existing"; draftId: string; id: string; revision: number };
+  | {
+      kind: "existing";
+      draftId: string;
+      id: string;
+      revision: number;
+      savedCredentials: SavedCredentials;
+    };
 
 /** `saved` rows name a credential stored on the server; its value never reaches the browser. */
 type EnvRow = { id: string; key: string; value: string; saved?: boolean };
@@ -69,9 +77,6 @@ type FormState = {
   repoScopes: string[];
   scopeMode: ScopeMode;
   enabled: boolean;
-  /** Credential names stored for `savedType`. */
-  savedKeys: string[];
-  savedType: "local" | "remote" | null;
 };
 
 const emptyForm: FormState = {
@@ -83,25 +88,33 @@ const emptyForm: FormState = {
   repoScopes: [],
   scopeMode: "global",
   enabled: DEFAULT_MCP_SERVER_ENABLED,
-  savedKeys: [],
-  savedType: null,
 };
 
-/** Rows for a credential type: the saved names for the saved type, else one blank row. */
-function envRowsFor(
-  saved: Pick<FormState, "savedKeys" | "savedType">,
+/** Whether the form edits a server's saved credentials by name. */
+function editsSavedCredentials(
+  saved: SavedCredentials | undefined,
   type: FormState["type"]
-): EnvRow[] {
-  return type === saved.savedType && saved.savedKeys.length > 0
-    ? saved.savedKeys.map((key) => createEnvRow({ key, value: "", saved: true }))
+): saved is SavedCredentials {
+  return saved?.type === type && saved.keys.length > 0;
+}
+
+/** Rows for a credential type: the saved names for the saved type, else one blank row. */
+function envRowsFor(saved: SavedCredentials | undefined, type: FormState["type"]): EnvRow[] {
+  return editsSavedCredentials(saved, type)
+    ? saved.keys.map((key) => createEnvRow({ key, value: "", saved: true }))
     : [createEnvRow()];
 }
 
+/**
+ * Names are absent for callers without `mcp_servers.manage` and from older
+ * control planes; the form then falls back to the generic configured notice.
+ */
+function savedCredentialsOf(metadata: McpServerMetadata): SavedCredentials {
+  return { type: metadata.type, keys: metadata.credentialKeys ?? [] };
+}
+
 function metadataToForm(metadata: McpServerMetadata): FormState {
-  // An older control plane sends no names.
-  const saved = { savedKeys: metadata.credentialKeys ?? [], savedType: metadata.type };
   return {
-    ...saved,
     name: metadata.name,
     type: metadata.type,
     command:
@@ -111,7 +124,7 @@ function metadataToForm(metadata: McpServerMetadata): FormState {
         )
         .join(" ") ?? "",
     url: metadata.url ?? "",
-    envRows: envRowsFor(saved, metadata.type),
+    envRows: envRowsFor(savedCredentialsOf(metadata), metadata.type),
     repoScopes: metadata.repoScopes ?? [],
     scopeMode: metadata.repoScopes?.length ? "selected" : "global",
     enabled: metadata.enabled,
@@ -296,6 +309,8 @@ interface McpServerFormProps {
   repos: { fullName: string; private?: boolean }[];
   loadingRepos: boolean;
   radioPrefix: string;
+  /** Saved credential names of the server being edited; switching back to its type restores them. */
+  savedCredentials?: SavedCredentials;
   hasUnnamedCredentials?: boolean;
 }
 
@@ -305,6 +320,7 @@ function McpServerForm({
   repos,
   loadingRepos,
   radioPrefix,
+  savedCredentials,
   hasUnnamedCredentials,
 }: McpServerFormProps) {
   const selectedRepoScopes = new Set(form.repoScopes);
@@ -329,7 +345,8 @@ function McpServerForm({
               setForm({
                 ...form,
                 type: "local",
-                envRows: form.type === "local" ? form.envRows : envRowsFor(form, "local"),
+                envRows:
+                  form.type === "local" ? form.envRows : envRowsFor(savedCredentials, "local"),
               })
             }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
@@ -347,7 +364,8 @@ function McpServerForm({
               setForm({
                 ...form,
                 type: "remote",
-                envRows: form.type === "remote" ? form.envRows : envRowsFor(form, "remote"),
+                envRows:
+                  form.type === "remote" ? form.envRows : envRowsFor(savedCredentials, "remote"),
               })
             }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
@@ -495,6 +513,7 @@ export function McpServersSettings() {
         draftId: crypto.randomUUID(),
         id: server.id,
         revision: server.revision,
+        savedCredentials: savedCredentialsOf(server),
       });
     }
   }
@@ -534,14 +553,13 @@ export function McpServersSettings() {
       };
 
       const envRecord = envRowsToRecord(form.envRows);
-      const hasEnvValues = Object.keys(envRecord).length > 0;
-      // Saved rows left blank keep their hidden values; removed saved rows are deleted.
-      const editsSaved = form.type === form.savedType && form.savedKeys.length > 0;
-      const keptKeys = form.envRows.filter((r) => r.saved && !r.value).map((r) => r.key);
+      // Editing saved names always sends the per-name update: blank saved rows
+      // keep their hidden values, and removed saved rows are deleted.
+      const editsSaved =
+        saveOwner.kind === "existing" &&
+        editsSavedCredentials(saveOwner.savedCredentials, form.type);
       const includeCredentials =
-        hasEnvValues ||
-        saveOwner.kind === "new" ||
-        (editsSaved && keptKeys.length < form.savedKeys.length);
+        editsSaved || saveOwner.kind === "new" || Object.keys(envRecord).length > 0;
       const payload: CreateMcpServerRequest =
         form.type === "remote"
           ? {
@@ -561,9 +579,12 @@ export function McpServersSettings() {
         await createMcpServer(payload);
         toast.success("MCP server created");
       } else {
+        const keepCredentialKeys = form.envRows
+          .filter((r) => r.saved && !r.value)
+          .map((r) => r.key);
         await updateMcpServer(saveOwner.id, {
           ...payload,
-          ...(includeCredentials && editsSaved ? { keepCredentialKeys: keptKeys } : {}),
+          ...(editsSaved ? { keepCredentialKeys } : {}),
           revision: saveOwner.revision,
         });
         toast.success("MCP server updated");
@@ -741,10 +762,11 @@ export function McpServersSettings() {
                       repos={repos}
                       loadingRepos={loadingRepos}
                       radioPrefix={server.id}
+                      savedCredentials={editor.savedCredentials}
                       hasUnnamedCredentials={
                         server.type === form.type &&
                         (server.hasEnv || server.hasHeaders) &&
-                        form.savedKeys.length === 0
+                        editor.savedCredentials.keys.length === 0
                       }
                     />
                     <div className="flex gap-2 pt-2">

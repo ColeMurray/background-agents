@@ -169,14 +169,12 @@ describe("McpServersSettings", () => {
     );
   });
 
-  it("sends no credentials when no saved header changes", async () => {
+  it("keeps every saved header by name when none is edited", async () => {
     mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
     const user = userEvent.setup();
     render(<McpServersSettings />);
 
     await user.click(screen.getByRole("button", { name: /Server C/ }));
-    await user.click(screen.getByRole("button", { name: "Local" }));
-    await user.click(screen.getByRole("button", { name: "Remote" }));
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() =>
@@ -186,14 +184,118 @@ describe("McpServersSettings", () => {
         repoScopes: null,
         type: "remote",
         url: "https://c.example.com",
+        headers: {},
+        keepCredentialKeys: ["x-api-key", "Accept"],
         revision: 2,
       })
     );
   });
 
-  it("keeps the generic notice when the control plane names no saved credentials", async () => {
+  it("restores the saved headers when the type is switched away and back", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getByRole("button", { name: "Local" }));
+    expect(screen.queryByDisplayValue("x-api-key")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remote" }));
+    expect(screen.getByDisplayValue("x-api-key")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({ headers: {}, keepCredentialKeys: ["x-api-key", "Accept"] })
+      )
+    );
+  });
+
+  it("clears every saved header when all saved rows are removed", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[1]);
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({ headers: {}, keepCredentialKeys: [] })
+      )
+    );
+  });
+
+  it("renames a saved header by removing it and adding a new row", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+    await user.click(screen.getByRole("button", { name: "+ Add" }));
+    await user.type(screen.getAllByPlaceholderText("Header-Name").at(-1)!, "X-Token");
+    await user.type(screen.getByPlaceholderText("value"), "tok");
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({ headers: { "X-Token": "tok" }, keepCredentialKeys: ["Accept"] })
+      )
+    );
+  });
+
+  it("sends no per-name update when the saved type changes", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], type: "local", revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getByRole("button", { name: "Local" }));
+    await user.type(screen.getByPlaceholderText("npx -y @playwright/mcp"), "npx tool");
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith("server-c", {
+        name: "Server C",
+        enabled: true,
+        repoScopes: null,
+        type: "local",
+        command: ["npx", "tool"],
+        revision: 2,
+      })
+    );
+  });
+
+  it("sends no credentials for a server without saved names", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[0], revision: 4 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server A/ }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith("server-a", {
+        name: "Server A",
+        enabled: true,
+        repoScopes: null,
+        type: "remote",
+        url: "https://a.example.com",
+        revision: 3,
+      })
+    );
+  });
+
+  it("falls back to the generic notice when saved credentials come without names", async () => {
+    // Callers without mcp_servers.manage and older control planes get no credentialKeys.
     const { credentialKeys: _omitted, ...unnamed } = servers[2];
-    servers.push({ ...unnamed, id: "server-d", name: "Server D" } as McpServerMetadata);
+    servers.push({ ...unnamed, id: "server-d", name: "Server D" });
+    mocks.updateMcpServer.mockResolvedValue({ ...unnamed, id: "server-d", revision: 3 });
     try {
       const user = userEvent.setup();
       render(<McpServersSettings />);
@@ -205,6 +307,19 @@ describe("McpServersSettings", () => {
           "Credentials are configured. Enter new values to replace them, or leave empty to keep existing."
         )
       ).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("••••••••")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() =>
+        expect(mocks.updateMcpServer).toHaveBeenCalledWith("server-d", {
+          name: "Server D",
+          enabled: true,
+          repoScopes: null,
+          type: "remote",
+          url: "https://c.example.com",
+          revision: 2,
+        })
+      );
     } finally {
       servers.pop();
     }
