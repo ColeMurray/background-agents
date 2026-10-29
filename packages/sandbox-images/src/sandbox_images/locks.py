@@ -46,14 +46,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
         f'dependencies = ["hatchling=={tools["hatchling"]}", "websockify=={tools["websockify"]}"]\n\n[tool.uv]\npackage = false\n'
     )
     for path, expected in generated.items():
-        if check:
-            if not path.exists() or path.read_text() != expected:
-                raise ValueError(
-                    f"Generated image input is stale: {path.relative_to(root)}; run sandbox:images lock"
-                )
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(expected)
+        _sync(root, path, expected, check=check)
     for name in manifests:
         directory = package / "locks" / name
         if check:
@@ -84,13 +77,18 @@ def update_locks(root: Path, *, check: bool = False) -> None:
             )
     if not check:
         subprocess.run(["uv", "lock", "--project", str(python_tools)], check=True)
-    output = package / "locks/python-tools.txt"
-    exported = export_requirements(python_tools)
+    _sync(root, package / "locks/python-tools.txt", export_requirements(python_tools), check=check)
+
+
+def _sync(root: Path, path: Path, expected: str, *, check: bool) -> None:
     if check:
-        if not output.exists() or output.read_text() != exported:
-            raise ValueError(f"Python image lock is stale: {output.relative_to(root)}")
+        if not path.exists() or path.read_text() != expected:
+            raise ValueError(
+                f"Generated image input is stale: {path.relative_to(root)}; run sandbox:images lock"
+            )
     else:
-        output.write_text(exported)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(expected)
 
 
 def export_requirements(project: Path) -> str:

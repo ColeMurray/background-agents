@@ -20,7 +20,7 @@ npm run sandbox:images -- plan --provider all
 `toolchain.json` owns tool versions and archive checksums. `targets.json` owns native substrate and
 runtime-user differences. `locks/` contains frozen npm closures and hash-checked Python tool
 exports. Runtime requirements are exported from `sandbox-runtime/uv.lock` when a bundle is packed,
-so they are never committed. Runtime environments are calculated directly from target configuration.
+to `runtime-requirements.txt` at the bundle root, so they are never committed. Runtime environments are calculated directly from target configuration.
 Ordinary builds do not resolve new dependency versions. To intentionally refresh distro packages,
 change `osRefresh`. OS packages remain substrate-dependent; builds are not byte-for-byte
 attestations.
