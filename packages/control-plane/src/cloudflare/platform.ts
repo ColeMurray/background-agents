@@ -7,14 +7,23 @@
  */
 
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import { createLogger } from "../logger";
 import type { Env, EnvConfig, Platform } from "../types";
 import { createQueueJobs, type JobQueueBindings } from "./job-queue";
 import { R2ObjectStorage } from "./object-storage";
-import { createDurableObjectSessionRuntimeDispatch } from "./session-runtime-dispatch";
+import {
+  createDurableObjectSessionRuntimeDispatch,
+  parseSessionDoLocationHint,
+} from "./session-runtime-dispatch";
+
+const logger = createLogger("cloudflare-platform");
+let cachedLocationHint:
+  { raw: string | undefined; value: DurableObjectLocationHint | undefined } | undefined;
 
 /** The bindings Cloudflare hands the Worker and its Durable Objects, with the deployment's configuration. */
 export interface WorkerBindings extends EnvConfig, JobQueueBindings {
   SESSION: DurableObjectNamespace;
+  SESSION_DO_LOCATION_HINT?: string; // Placement hint for newly created session Durable Objects
   REPOS_CACHE: KVNamespace;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
@@ -25,8 +34,8 @@ export interface WorkerBindings extends EnvConfig, JobQueueBindings {
 
 /**
  * The application environment over the Worker's bindings: every binding
- * taken off the record and put behind its port, the configuration passed
- * through as given. A binding this function does not name is refused at
+ * taken off the record and put behind its port, the application configuration
+ * passed through as given. A binding this function does not name is refused at
  * compile time (below), so adding one is an explicit composition decision.
  */
 export function createCloudflareEnv(bindings: WorkerBindings): Env {
@@ -40,11 +49,17 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
     AUTOFIX_QUEUE,
     AUTOFIX_DLQ,
     IMAGE_BUILD_FINALIZATION_QUEUE,
+    SESSION_DO_LOCATION_HINT: raw,
     ...config
   } = bindings;
+  // Reuse the deployment setting across requests, including its invalid-value warning.
+  if (!cachedLocationHint || cachedLocationHint.raw !== raw) {
+    cachedLocationHint = { raw, value: parseSessionDoLocationHint(raw, logger) };
+  }
+  const locationHint = cachedLocationHint.value;
   const platform: Platform = {
     DB,
-    SESSION: createDurableObjectSessionRuntimeDispatch(SESSION),
+    SESSION: createDurableObjectSessionRuntimeDispatch(SESSION, { locationHint }),
     REPOS_CACHE: createKvCacheStore(REPOS_CACHE),
     MEDIA_BUCKET: new R2ObjectStorage(MEDIA_BUCKET),
     SLACK_BOT,
@@ -57,10 +72,10 @@ export function createCloudflareEnv(bindings: WorkerBindings): Env {
 }
 
 // Every field of WorkerBindings is either a platform port (adapted above), a
-// queue behind the jobs port, or configuration: a new binding that is none
-// of these fails to compile here.
+// queue behind the jobs port, or application/Cloudflare-local configuration:
+// a new binding that is none of these fails to compile here.
 type _AssertExtends<A extends B, B> = A;
 type _BindingsAreConfigOrPlatform = _AssertExtends<
   Exclude<keyof WorkerBindings, keyof Platform | keyof JobQueueBindings>,
-  keyof EnvConfig
+  keyof EnvConfig | "SESSION_DO_LOCATION_HINT"
 >;

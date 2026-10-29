@@ -1,3 +1,5 @@
+import type { MouseEvent } from "react";
+import Link from "next/link";
 import type {
   AutomationExecutionSummary,
   AutomationInvocationStatus,
@@ -18,6 +20,7 @@ const TONE_CLASSES: Record<AutomationInvocationTone, string> = {
 const SHAPE_CLASSES: Record<Exclude<AutomationInvocationStatus, "failed">, string> = {
   starting: "h-2 w-2 rounded-full border border-current motion-safe:animate-pulse",
   running: "h-2 w-2 rounded-full bg-current motion-safe:animate-pulse",
+  retrying: "h-2 w-2 rounded-full border border-dashed border-current",
   completed: "h-3 w-1 rounded-[1px] bg-current",
   partial_failed: "h-3 w-1 border border-dashed border-current",
   skipped: "h-px w-2 bg-current",
@@ -37,9 +40,33 @@ function StatusShape({ status }: { status: AutomationInvocationStatus }) {
   return <span className={SHAPE_CLASSES[status]} aria-hidden="true" />;
 }
 
-export function ExecutionActivity({ executions }: { executions: AutomationExecutionSummary[] }) {
+export function ExecutionActivity({
+  executions,
+  href,
+  automationName,
+}: {
+  executions: AutomationExecutionSummary[];
+  href: string;
+  automationName: string;
+}) {
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.detail > 0 && window.getSelection()?.toString()) {
+      event.preventDefault();
+    }
+  };
+
   if (executions.length === 0) {
-    return <span className="text-[10px] text-muted-foreground">No runs</span>;
+    return (
+      <Link
+        href={href}
+        aria-label={`No runs for ${automationName}`}
+        draggable={false}
+        onClick={onClick}
+        className="rounded-sm text-[10px] text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        No runs
+      </Link>
+    );
   }
 
   const chronologicalExecutions = [...executions].reverse();
@@ -55,13 +82,19 @@ export function ExecutionActivity({ executions }: { executions: AutomationExecut
         return (
           <li
             key={execution.id}
-            className={`flex h-4 w-2 items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring ${TONE_CLASSES[presentation.tone]}`}
-            title={`${presentation.label} - ${occurredAt}`}
-            aria-label={`${presentation.label}, ${occurredAt}`}
+            className={TONE_CLASSES[presentation.tone]}
             data-status-shape={execution.status}
-            tabIndex={0}
           >
-            <StatusShape status={execution.status} />
+            <Link
+              href={href}
+              title={`${presentation.label} - ${occurredAt}`}
+              aria-label={`${presentation.label}, ${occurredAt}, ${automationName}`}
+              draggable={false}
+              onClick={onClick}
+              className="flex h-4 w-2 items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <StatusShape status={execution.status} />
+            </Link>
           </li>
         );
       })}

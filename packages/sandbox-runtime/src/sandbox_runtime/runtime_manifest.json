@@ -1,12 +1,12 @@
 {
-  "runtimeVersion": "v76-child-output-discovery",
-  "generation": 76,
+  "runtimeVersion": "v79-persistent-model-prices",
+  "generation": 79,
   "minimumCompatibleGeneration": 62,
   "minimumPreservationGeneration": 71,
-  "minimumRebuildGeneration": 76,
+  "minimumRebuildGeneration": 79,
   "harnessMinimumGeneration": {
     "claude": 76,
     "opencode": 76,
-    "codex": 76
+    "codex": 79
   }
 }

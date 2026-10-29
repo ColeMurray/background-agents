@@ -128,6 +128,38 @@ describe("LinearIntegrationSettings repository overrides", () => {
   });
 });
 
+describe("LinearIntegrationSettings repository scope", () => {
+  it("saves the selected repository allowlist", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      settings: null,
+      availableRepos: [
+        {
+          id: 1,
+          owner: "Group/Subgroup",
+          name: "Repository",
+          fullName: "Group/Subgroup/Repository",
+          description: null,
+          private: false,
+          archived: false,
+          defaultBranch: "main",
+        },
+      ],
+    });
+    vi.mocked(browserApiFetch).mockResolvedValueOnce(Response.json({ ok: true }));
+
+    render(<LinearIntegrationSettings />);
+
+    await user.click(screen.getByRole("radio", { name: /Selected repositories/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Group/Subgroup/Repository" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(browserApiFetch).toHaveBeenCalled());
+    const body = JSON.parse(String(vi.mocked(browserApiFetch).mock.calls[0][1]?.body));
+    expect(body.settings.enabledRepos).toEqual(["group/subgroup/repository"]);
+  });
+});
+
 describe("LinearIntegrationSettings unbound policy", () => {
   it("closes the open policy menu when permission is revoked without changing the value", async () => {
     const user = userEvent.setup();

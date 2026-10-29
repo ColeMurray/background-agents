@@ -11,6 +11,16 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: monorepoRoot,
   },
+  async headers() {
+    return [
+      {
+        source: "/mermaid-renderer.html",
+        // Also isolate direct navigation, not just embeds with the sandbox attribute.
+        // The generated document supplies its stricter hash-based resource policy.
+        headers: [{ key: "Content-Security-Policy", value: "sandbox allow-scripts" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

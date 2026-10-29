@@ -8,20 +8,24 @@ export function SessionWithChildren({
   session,
   environmentName,
   childrenMap,
+  hasUnreadDescendants,
   currentSessionId,
   isMobile,
   onArchive,
   onSessionSelect,
   onMarkLatestMessageRead,
+  onMarkHierarchyRead,
 }: {
   session: SessionItem;
   environmentName?: string;
   childrenMap: Map<string, SessionItem[]>;
+  hasUnreadDescendants: boolean;
   currentSessionId: string | null;
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
+  onMarkHierarchyRead: (rootSessionId: string) => Promise<void>;
 }) {
   return (
     <>
@@ -30,9 +34,11 @@ export function SessionWithChildren({
         environmentName={environmentName}
         isActive={session.id === currentSessionId}
         isMobile={isMobile}
+        hasUnreadDescendants={hasUnreadDescendants}
         onArchive={onArchive}
         onSessionSelect={onSessionSelect}
         onMarkLatestMessageRead={onMarkLatestMessageRead}
+        onMarkHierarchyRead={onMarkHierarchyRead}
       />
       <ChildSessionTree
         parentId={session.id}

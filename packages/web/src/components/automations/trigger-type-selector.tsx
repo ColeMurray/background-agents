@@ -13,7 +13,7 @@ const TRIGGER_OPTIONS: TriggerOption[] = [
   {
     type: "schedule",
     label: "Schedule",
-    description: "Run on a cron schedule",
+    description: "Run once or on a recurring schedule",
   },
   {
     type: "sentry",

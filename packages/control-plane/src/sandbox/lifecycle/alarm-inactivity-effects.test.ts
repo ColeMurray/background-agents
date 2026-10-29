@@ -1,6 +1,12 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { DEFAULT_LIFECYCLE_CONFIG } from "./manager";
-import { createAlarmFixture, createMockSandbox, createMockProvider } from "./test-helpers";
+import {
+  createAlarmFixture,
+  createMockSandbox,
+  createMockProvider,
+  createMockSession,
+  noLifetime,
+} from "./test-helpers";
 
 describe("inactivity alarm effects", () => {
   afterEach(() => {
@@ -11,47 +17,120 @@ describe("inactivity alarm effects", () => {
   it.each([
     {
       name: "heartbeat before remaining inactivity",
+      source: "user",
       ageMs: 120_000,
       clients: 0,
       delayMs: DEFAULT_LIFECYCLE_CONFIG.heartbeat.timeoutMs + 1,
     },
     {
       name: "minimum interval",
+      source: "user",
       ageMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs - 1,
       clients: 0,
       delayMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.minCheckIntervalMs,
     },
     {
       name: "client extension",
+      source: "user",
       ageMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.timeoutMs,
       clients: 2,
       delayMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.extensionMs,
     },
-  ])("schedules $name at an absolute deadline", async ({ ageMs, clients, delayMs }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000_000);
-    const now = Date.now();
-    const sandbox = createMockSandbox({ last_heartbeat: now, last_activity: now - ageMs });
-    const h = createAlarmFixture(sandbox, createMockProvider(), clients);
+    {
+      name: "unattended client extension",
+      source: "automation",
+      ageMs: 120_000,
+      clients: 2,
+      delayMs: DEFAULT_LIFECYCLE_CONFIG.inactivity.extensionMs,
+    },
+  ] as const)(
+    "schedules $name at an absolute deadline",
+    async ({ source, ageMs, clients, delayMs }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const output = vi.spyOn(console, "log").mockImplementation(() => {});
+      const now = Date.now();
+      const sandbox = createMockSandbox({ last_heartbeat: now, last_activity: now - ageMs });
+      const h = createAlarmFixture(sandbox, createMockProvider(), clients);
+      vi.mocked(h.storage.getSession).mockReturnValue(createMockSession({ spawn_source: source }));
+      const requestShutdown = vi.spyOn(h.shutdown, "requestShutdown");
 
-    await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+      await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
 
-    expect(h.alarmScheduler.schedule).toHaveBeenCalledExactlyOnceWith(now + delayMs);
-    expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
-    expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
-    expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
-    expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
-    expect(h.broadcaster.messages).toEqual(
-      clients
-        ? [
-            {
-              type: "sandbox_warning",
-              message:
-                "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
-            },
-          ]
-        : []
-    );
+      expect(h.alarmScheduler.schedule).toHaveBeenCalledExactlyOnceWith(now + delayMs);
+      expect(h.storage.updateSandboxStatus).not.toHaveBeenCalled();
+      expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+      expect(h.wsManager.sendToSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.detachSandboxWebSocket).not.toHaveBeenCalled();
+      expect(requestShutdown).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalledWith(
+        expect.stringContaining('"event":"sandbox.inactivity_timeout"')
+      );
+      expect(h.broadcaster.messages).toEqual(
+        clients
+          ? [
+              {
+                type: "sandbox_warning",
+                message:
+                  "Sandbox will stop in 5 minutes due to inactivity. Send a message to keep it alive.",
+              },
+            ]
+          : []
+      );
+    }
+  );
+
+  describe.each(["owned", "unmanaged"] as const)("%s inactivity shutdown event", (ownership) => {
+    it.each([
+      ["automation", 120_000],
+      ["github-bot", 120_000],
+      ["agent", 120_000],
+      ["user", 600_000],
+      ["linear-bot", 600_000],
+      ["slack-bot", 600_000],
+      [undefined, 600_000],
+    ] as const)("logs the current %s source once before shutdown", async (source, timeoutMs) => {
+      const now = 10_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const output = vi.spyOn(console, "log").mockImplementation(() => {});
+      const sandbox = createMockSandbox({ last_heartbeat: now, last_activity: now - 120_000 });
+      const h = createAlarmFixture(
+        sandbox,
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+          stopSandbox: vi.fn(async () => ({ success: true })),
+        })
+      );
+      const requestShutdown = vi.spyOn(h.shutdown, "requestShutdown").mockResolvedValue(ownership);
+      vi.mocked(h.storage.getSession).mockReturnValue(null);
+
+      await expect(h.manager.handleAlarm()).resolves.toBe("no_action");
+      expect(requestShutdown).not.toHaveBeenCalled();
+
+      vi.mocked(h.storage.getSession).mockReturnValue(
+        source ? createMockSession({ spawn_source: source }) : null
+      );
+      sandbox.last_activity = now - timeoutMs - 17;
+      await expect(h.manager.handleAlarm()).resolves.toBe(
+        ownership === "unmanaged" ? "sandbox_terminated" : "no_action"
+      );
+
+      expect(requestShutdown).toHaveBeenCalledExactlyOnceWith("inactivity_timeout");
+      const events = output.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(events.filter((event) => event.event === "sandbox.inactivity_timeout")).toEqual([
+        expect.objectContaining({
+          event: "sandbox.inactivity_timeout",
+          spawn_source: source ?? null,
+          timeout_ms: timeoutMs,
+          idle_ms: timeoutMs + 17,
+        }),
+      ]);
+      const eventIndex = events.findIndex((event) => event.event === "sandbox.inactivity_timeout");
+      expect(output.mock.invocationCallOrder[eventIndex]).toBeLessThan(
+        requestShutdown.mock.invocationCallOrder[0]
+      );
+      expect(events).not.toContainEqual(expect.objectContaining({ event: "sandbox.timeout" }));
+    });
   });
 
   it.each(["owned", "held"] as const)(
@@ -269,5 +348,38 @@ describe("inactivity alarm effects", () => {
     expect(h.storage.calls).toContain("clearSandboxAccess:vnc");
     expect(sandbox.vnc_url).toBeNull();
     expect(sandbox.vnc_password).toBeNull();
+  });
+
+  it("resumes the retained workspace after an unattended inactivity stop", async () => {
+    const now = 10_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const sandbox = createMockSandbox({ last_heartbeat: now, last_activity: now - 120_000 });
+    const providerObjectId = sandbox.modal_object_id;
+    const sandboxId = sandbox.modal_sandbox_id;
+    const h = createAlarmFixture(
+      sandbox,
+      createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox: vi.fn(async () => ({ success: true })),
+        resumeSandbox: vi.fn(async () => ({ success: true as const, lifetime: noLifetime() })),
+      })
+    );
+    vi.mocked(h.storage.getSession).mockReturnValue(
+      createMockSession({ spawn_source: "automation" })
+    );
+
+    await expect(h.manager.handleAlarm()).resolves.toBe("sandbox_terminated");
+    expect(sandbox.status).toBe("stopped");
+
+    await h.manager.spawnSandbox();
+
+    expect(h.provider.resumeSandbox).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ providerObjectId, sandboxId })
+    );
+    expect(h.provider.createSandbox).not.toHaveBeenCalled();
+    expect(h.provider.restoreFromSnapshot).not.toHaveBeenCalled();
+    expect(h.provider.takeSnapshot).not.toHaveBeenCalled();
+    expect(sandbox.status).toBe("connecting");
+    expect(sandbox.modal_object_id).toBe(providerObjectId);
   });
 });

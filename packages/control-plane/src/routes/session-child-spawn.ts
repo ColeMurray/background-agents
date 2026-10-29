@@ -19,6 +19,7 @@ import {
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
+import { SessionMemorySelectionStore } from "../db/session-memory-selections";
 import { TeamMembershipStore } from "../db/team-memberships";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -233,7 +234,7 @@ export async function handleSpawnChild(
   const harness = spawnContext.harness;
   let selection;
   try {
-    selection = await resolveChildHarnessSelection(ctx.db, env, spawnContext, body, enabledModels);
+    selection = await resolveChildHarnessSelection(ctx.db, spawnContext, body, enabledModels);
   } catch (cause) {
     if (cause instanceof HarnessAdmissionError) return error(cause.message, cause.status);
     throw cause;
@@ -285,6 +286,12 @@ export async function handleSpawnChild(
     spawnContext.repoName,
     parentEnvironmentId
   );
+  // The account the spawning prompt was queued under: the parent owner's personal memory carries
+  // over only on their own prompt, and the child's first prompt counts as that prompt did.
+  const promptAccountUserId = spawnContext.promptAccountUserId ?? null;
+  const inheritedEstimatedTokens = await new SessionMemorySelectionStore(
+    ctx.db
+  ).inheritedEstimatedTokens(parentId, promptAccountUserId);
 
   const input: SessionInitInput = {
     ownerTeamId: teamId,
@@ -319,7 +326,12 @@ export async function handleSpawnChild(
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
     managedSkills: inheritedPin(parentId),
-    memory: inheritedPin(parentId),
+    memory: {
+      kind: "inherited",
+      parentSessionId: parentId,
+      promptAuthorUserId: promptAccountUserId,
+      estimatedTokens: inheritedEstimatedTokens,
+    },
     providerAuth: providerAuth.map((auth) => ({
       ...auth,
       inheritedFromSessionId: parentId,
@@ -356,6 +368,7 @@ export async function handleSpawnChild(
       content: body.prompt,
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
+      promptAccountUserId,
       source: "agent",
     } satisfies EnqueuePromptRequest;
 

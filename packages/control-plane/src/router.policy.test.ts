@@ -39,15 +39,28 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(235);
+    expect(routes).toHaveLength(241);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(179);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(235);
+    expect(new Set(paths).size).toBe(184);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
+    });
+  });
+
+  it("gates member merges on the merge grant, with member reads for previews", () => {
+    expect(routeFor("POST", "/members/merge/preview")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ permission: "workspace.members.merge" }, { permission: "workspace.members.read" }],
+      service: { kind: "deny" },
+    });
+    expect(routeFor("POST", "/members/merge")?.authorization).toMatchObject({
+      kind: "active-user",
+      allOf: [{ permission: "workspace.members.merge" }],
+      service: { kind: "deny" },
     });
   });
 

@@ -158,21 +158,16 @@ export async function evaluateEnvironmentAdmission(
   id: string,
   need: EnvironmentNeed
 ): Promise<OwnedResourceAdmissionOutcome> {
+  return new EnvironmentAdmissionEvaluator(ctx, new EnvironmentStore(ctx.db)).evaluate(id, need);
+}
+
+/** Apply the canonical visibility and action rules to one loaded environment snapshot. */
+function evaluateLoadedEnvironmentAdmission(
+  environment: EnvironmentRow | null,
+  viewer: SessionViewer,
+  need: EnvironmentNeed
+): OwnedResourceAdmissionOutcome {
   const permission = `environments.${need}` as const;
-  if (
-    ctx.principal?.kind === "service" &&
-    !serviceAllowsPermission(ctx.principal.service, permission)
-  ) {
-    return {
-      kind: "denied",
-      response: { error: "Forbidden", code: "service_capability_required" },
-      status: 403,
-      reasonCode: "service_capability_required",
-      reason: "Forbidden",
-    };
-  }
-  const environment = await new EnvironmentStore(ctx.db).getById(id);
-  const viewer = await resourceViewer(ctx);
   const admission = environment ? { environment, viewer } : undefined;
   const read =
     environment &&
@@ -227,10 +222,44 @@ export function admittedEnvironment(ctx: RequestContext): EnvironmentAdmission {
 
 /** Environment admission bound to one request, for policies that receive it as a dependency. */
 export class EnvironmentAdmissionEvaluator {
-  constructor(private readonly ctx: RequestContext) {}
+  private readonly environments = new Map<string, Promise<EnvironmentRow | null>>();
+  private viewer: Promise<SessionViewer> | undefined;
 
-  evaluate(id: string, need: EnvironmentNeed): Promise<OwnedResourceAdmissionOutcome> {
-    return evaluateEnvironmentAdmission(this.ctx, id, need);
+  constructor(
+    private readonly ctx: RequestContext,
+    private readonly store: Pick<EnvironmentStore, "getById" | "getByIds">
+  ) {}
+
+  async preload(ids: readonly string[]): Promise<void> {
+    const missing = [...new Set(ids)].filter((id) => !this.environments.has(id));
+    if (!missing.length) return;
+    const rows = new Map((await this.store.getByIds(missing)).map((row) => [row.id, row]));
+    for (const id of missing) this.environments.set(id, Promise.resolve(rows.get(id) ?? null));
+  }
+
+  async evaluate(id: string, need: EnvironmentNeed): Promise<OwnedResourceAdmissionOutcome> {
+    if (
+      this.ctx.principal?.kind === "service" &&
+      !serviceAllowsPermission(this.ctx.principal.service, `environments.${need}`)
+    ) {
+      return {
+        kind: "denied",
+        response: { error: "Forbidden", code: "service_capability_required" },
+        status: 403,
+        reasonCode: "service_capability_required",
+        reason: "Forbidden",
+      };
+    }
+    let environment = this.environments.get(id);
+    if (!environment) {
+      environment = this.store.getById(id);
+      this.environments.set(id, environment);
+    }
+    return evaluateLoadedEnvironmentAdmission(
+      await environment,
+      await (this.viewer ??= resourceViewer(this.ctx)),
+      need
+    );
   }
 }
 

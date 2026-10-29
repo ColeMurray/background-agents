@@ -5,6 +5,8 @@ import {
   type SendPromptResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
+import { enrollActor as enrollServiceActor } from "@open-inspect/shared/actor-enrollment";
 import { listArtifactsResponseSchema } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { HarnessId } from "@open-inspect/shared/harnesses";
@@ -13,6 +15,7 @@ import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
+import type { SlackActorIdentity } from "../user-identity";
 import { z } from "zod";
 
 const log = createLogger("handler");
@@ -44,6 +47,8 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
+  /** A one-to-one conversation with the actor, the only Slack origin that uses personal memory. */
+  directMessage?: boolean;
 }
 
 export type SendPromptResult =
@@ -95,6 +100,42 @@ export async function requirePublicationAccess(
     );
 }
 
+/**
+ * Present the actor's Slack profile before any other request that carries the
+ * actor. The control plane links a new actor to an existing user by email
+ * only when it enrolls the actor, and refuses a new Slack actor that has no
+ * email (`email_required`); a known actor enrolls with or without one.
+ * Callers stop on any other outcome rather than send requests carrying an
+ * actor the control plane has not linked.
+ */
+export async function enrollActor(
+  env: ControlPlaneEnv,
+  actor: SlackActorIdentity,
+  traceId?: string
+): Promise<ActorEnrollmentOutcome> {
+  const result = await enrollServiceActor(
+    "slack-bot",
+    env,
+    {
+      actor: `slack:${actor.userId}`,
+      profile: { displayName: actor.displayName, email: actor.email },
+      traceId,
+    },
+    AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS)
+  );
+  if (result.outcome !== "enrolled") {
+    log.warn("control_plane.enroll_actor", {
+      trace_id: traceId,
+      slack_user_id: actor.userId,
+      outcome: result.outcome,
+      http_status: result.httpStatus,
+      error_code: result.errorCode,
+      error: result.error,
+    });
+  }
+  return result.outcome;
+}
+
 export async function createSession(
   env: ControlPlaneEnv,
   options: CreateSessionOptions
@@ -110,6 +151,7 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
+    directMessage,
   } = options;
   const startTime = Date.now();
   const base = {
@@ -131,6 +173,7 @@ export async function createSession(
       reasoningEffort,
       actorDisplayName,
       actorEmail,
+      ...(directMessage ? { directMessage } : {}),
     });
     const response = await signedControlPlaneFetch(
       env,

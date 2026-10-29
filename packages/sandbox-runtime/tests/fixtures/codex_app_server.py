@@ -13,7 +13,7 @@ for line in sys.stdin:
     frame = json.loads(line)
     method = frame.get("method")
     if method == "initialize":
-        send({"id": frame["id"], "result": {"userAgent": "fixture/0.160.0"}})
+        send({"id": frame["id"], "result": {"userAgent": "fixture/0.163.0"}})
     elif method == "callbacks":
         send({"id": "slow", "method": "item/tool/call", "params": {}})
         send({"id": 71, "method": "account/chatgptAuthTokens/refresh", "params": {}})

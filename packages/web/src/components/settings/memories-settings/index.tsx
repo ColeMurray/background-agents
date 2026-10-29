@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   memoryScopeFromSearchParams,
   memoryScopeDisplayKey,
+  type MemoryListScope,
   type MemoryScope,
 } from "@open-inspect/shared/types/memories";
 import { setMemoryPreferences, useMemoryPreferences } from "@/hooks/use-memories";
@@ -21,7 +22,7 @@ import {
 import { ChevronDownIcon } from "@/components/ui/icons";
 import { MemoryCollection } from "./memory-collection";
 
-/** Persist the account-wide default and disclose the audience of included personal context. */
+/** Persist the account-wide preference and disclose who personal context reaches. */
 function PersonalMemoryDefault() {
   const switchId = useId();
   const { preferences, error: loadError, mutate } = useMemoryPreferences();
@@ -47,11 +48,12 @@ function PersonalMemoryDefault() {
           disabled={!preferences || saving}
           onCheckedChange={(checked) => void save(checked)}
         />
-        <label htmlFor={switchId}>Include my personal memories in new sessions</label>
+        <label htmlFor={switchId}>Use my personal memories in my sessions</label>
       </div>
       <p className="text-xs text-muted-foreground">
-        Applies to all new web, integration-created and scheduled sessions. Existing sessions keep
-        their original selection.
+        Applies to sessions you start on the web or in a Slack direct message. Turning it off also
+        stops your existing sessions from searching, reading or saving them. Sessions started from
+        now on by automations, Slack channels, Linear or GitHub don&apos;t include them.
       </p>
       <p className="text-xs text-muted-foreground">{PERSONAL_MEMORY_DISCLOSURE}</p>
       {(saveError || loadError) && (
@@ -64,8 +66,9 @@ function PersonalMemoryDefault() {
 }
 
 /**
- * Combine owner-only memory management with the future-session inclusion default. The default is
- * available to every session creator; only the catalog requires `memories.manage_own`.
+ * Combine owner-only memory management with the personal memory preference. The preference is
+ * available to every session creator so anyone can opt out; only the catalog requires
+ * `memories.manage_own`, and sessions use personal memory only while the owner holds it.
  */
 export function MemoriesSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
@@ -84,7 +87,7 @@ export function MemoriesSettings() {
   );
 }
 
-/** Select an accessible repository/environment; management capabilities come from the API. */
+/** Browse all shared memories or one scope; management capabilities come from the API. */
 export function SharedMemoriesSettings() {
   const params = useSearchParams();
   const { repos, loading: reposLoading, error: reposError } = useRepos();
@@ -93,9 +96,9 @@ export function SharedMemoriesSettings() {
     loading: environmentsLoading,
     error: environmentsError,
   } = useEnvironments();
-  const [selection, setSelection] = useState<MemoryScope | null>(null);
+  const [selection, setSelection] = useState<MemoryListScope | null>(null);
   const linkedScope = memoryScopeFromSearchParams(params);
-  const scope = selection ?? (linkedScope?.type === "personal" ? null : linkedScope);
+  const scope = selection ?? (linkedScope?.type === "personal" ? null : linkedScope) ?? "shared";
   // Searchable and grouped, like the repository picker in Secrets: deployments can have many repos.
   const scopeOptions = new Map<string, { scope: MemoryScope; label: string }>();
   const group = (category: string, entries: { scope: MemoryScope; label: string }[]) => ({
@@ -107,6 +110,7 @@ export function SharedMemoriesSettings() {
     }),
   });
   const groups: ComboboxGroup[] = [
+    { category: "Shared memories", options: [{ value: "shared", label: "All" }] },
     group(
       "Repositories",
       repos.map((repo) => ({
@@ -122,15 +126,16 @@ export function SharedMemoriesSettings() {
       }))
     ),
   ].filter((entry) => entry.options.length > 0);
-  const selectedKey = scope ? memoryScopeDisplayKey(scope) : "";
-  const selectedLabel = scopeOptions.get(selectedKey)?.label;
+  const selectedKey = scope === "shared" ? "shared" : memoryScopeDisplayKey(scope);
+  const selectedLabel = scope === "shared" ? "All" : scopeOptions.get(selectedKey)?.label;
   return (
     <section className="space-y-6">
       <div>
         <h2 className="text-lg font-medium">Shared memories</h2>
         <p className="text-sm text-muted-foreground">
           Curate repository and environment knowledge. Agent proposals require approval before other
-          sessions load them.
+          sessions load them. Choose Proposed to review pending memories across all accessible
+          scopes.
         </p>
       </div>
       <div>
@@ -145,7 +150,9 @@ export function SharedMemoriesSettings() {
           id="shared-memory-scope"
           labelId="shared-memory-scope-label"
           value={selectedKey}
-          onChange={(key) => setSelection(scopeOptions.get(key)?.scope ?? null)}
+          onChange={(key) =>
+            setSelection(key === "shared" ? "shared" : (scopeOptions.get(key)?.scope ?? null))
+          }
           items={groups}
           searchable
           searchPlaceholder="Search repositories and environments..."
@@ -165,11 +172,7 @@ export function SharedMemoriesSettings() {
           Some memory scopes could not be loaded.
         </p>
       )}
-      {scope ? (
-        <MemoryCollection key={memoryScopeDisplayKey(scope)} scope={scope} />
-      ) : (
-        <p className="text-sm text-muted-foreground">Select a scope to view its memories.</p>
-      )}
+      <MemoryCollection key={selectedKey} scope={scope} />
     </section>
   );
 }

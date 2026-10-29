@@ -6,7 +6,7 @@ import json
 import subprocess
 from typing import TYPE_CHECKING
 
-from .configuration import IMAGE_PACKAGE, RUNTIME_PACKAGE, read_json
+from .configuration import IMAGE_PACKAGE, read_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,6 +34,7 @@ def update_locks(root: Path, *, check: bool = False) -> None:
                     "private": True,
                     "type": "module",
                     "dependencies": dependencies,
+                    "overrides": tools["npmOverrides"],
                 },
                 indent=2,
             )
@@ -45,20 +46,21 @@ def update_locks(root: Path, *, check: bool = False) -> None:
         f'dependencies = ["hatchling=={tools["hatchling"]}", "websockify=={tools["websockify"]}"]\n\n[tool.uv]\npackage = false\n'
     )
     for path, expected in generated.items():
-        if check:
-            if not path.exists() or path.read_text() != expected:
-                raise ValueError(
-                    f"Generated image input is stale: {path.relative_to(root)}; run sandbox:images lock"
-                )
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(expected)
+        _sync(root, path, expected, check=check)
     for name in manifests:
         directory = package / "locks" / name
         if check:
             lock = read_json(directory / "package-lock.json")
             if lock["packages"][""]["dependencies"] != manifests[name]:
                 raise ValueError(f"{name} npm lock is stale; run sandbox:images lock")
+            # The root lock entry does not record overrides, so check resolved versions.
+            for package_name, pin in tools["npmOverrides"].items():
+                for key, entry in lock["packages"].items():
+                    if key.endswith(f"node_modules/{package_name}") and entry["version"] != pin:
+                        raise ValueError(
+                            f"{name} npm lock resolves {package_name} to {entry['version']}; "
+                            "run sandbox:images lock"
+                        )
         else:
             subprocess.run(
                 [
@@ -75,28 +77,35 @@ def update_locks(root: Path, *, check: bool = False) -> None:
             )
     if not check:
         subprocess.run(["uv", "lock", "--project", str(python_tools)], check=True)
-    for project, output in (
-        (root / RUNTIME_PACKAGE, package / "locks/runtime.txt"),
-        (python_tools, package / "locks/python-tools.txt"),
-    ):
-        exported = subprocess.run(
-            [
-                "uv",
-                "export",
-                "--project",
-                str(project),
-                "--locked",
-                "--no-dev",
-                "--no-emit-project",
-                "--no-header",
-                "--no-annotate",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        if check:
-            if not output.exists() or output.read_text() != exported:
-                raise ValueError(f"Python image lock is stale: {output.relative_to(root)}")
-        else:
-            output.write_text(exported)
+    _sync(root, package / "locks/python-tools.txt", export_requirements(python_tools), check=check)
+
+
+def _sync(root: Path, path: Path, expected: str, *, check: bool) -> None:
+    if check:
+        if not path.exists() or path.read_text() != expected:
+            raise ValueError(
+                f"Generated image input is stale: {path.relative_to(root)}; run sandbox:images lock"
+            )
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(expected)
+
+
+def export_requirements(project: Path) -> str:
+    """Export a uv project's locked, hash-pinned requirements without resolving."""
+    return subprocess.run(
+        [
+            "uv",
+            "export",
+            "--project",
+            str(project),
+            "--locked",
+            "--no-dev",
+            "--no-emit-project",
+            "--no-header",
+            "--no-annotate",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout

@@ -71,7 +71,11 @@ export interface SessionPrincipal {
   ownerTeamId: string | null;
 }
 
-/** A session as memory operations see it: who it acts for and which memory it reaches. */
+/**
+ * A session as memory operations see it: who it acts for and which memory it reaches. Its
+ * `sources.personalOwnerUserId` is null when personal memory was excluded at creation or the
+ * owner has turned personal memory off since.
+ */
 export interface MemorySession {
   id: string;
   /** Who shared-partition access is evaluated for (owning team, or the workspace owner). */
@@ -83,10 +87,25 @@ export interface MemorySession {
   /** Agent-spawned children consume their parent's pinned selection rather than their own. */
   isChildSession: boolean;
   /**
-   * Whether personal facts written by this session may skip review. Only private,
-   * collaborator-free root sessions are eligible; the store rechecks at commit time.
+   * Whether personal facts written by this session may skip review: root sessions may, children
+   * may not, and the store rechecks at commit time. Prompts from anyone else end it
+   * (`MemoryPromptContext.othersPrompted`).
    */
   personalAutoSaveEligible: boolean;
+}
+
+/**
+ * The prompt a sandbox memory call runs under, from the session runtime. Prompts run one at a
+ * time, so the processing prompt's author is the person the agent is acting for.
+ */
+export interface MemoryPromptContext {
+  /** Account behind the processing prompt; null when idle or the author has no account. */
+  authorUserId: string | null;
+  /**
+   * Whether a prompt from anyone else has been dispatched to this session's agent, or to the agent
+   * of any session that spawned it.
+   */
+  othersPrompted: boolean;
 }
 
 /** One pinned revision ready to render: directives in full, facts as a summary. */
@@ -125,6 +144,24 @@ export interface SessionMemorySelection {
   omittedCount: number;
   items: SessionMemoryItem[];
 }
+
+/**
+ * Memory fixed at session creation: a resolved selection for a root session, or the parent's
+ * pinned selection for an agent-spawned child. The child keeps the parent's personal owner and
+ * personal records only when it was spawned on that owner's own prompt.
+ */
+export type SessionMemoryPin =
+  | { kind: "resolved"; value: SessionMemorySelection }
+  | {
+      kind: "inherited";
+      parentSessionId: string;
+      promptAuthorUserId: string | null;
+      /**
+       * The child's token estimate when it differs from the parent's because personal records are
+       * left out (`SessionMemorySelectionStore.inheritedEstimatedTokens`); absent keeps the parent's.
+       */
+      estimatedTokens?: number | null;
+    };
 
 /** How a pinned item's record has changed since the selection was made. */
 export interface PinnedItemDrift {

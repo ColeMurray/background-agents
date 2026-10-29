@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubProviderIdentityResolver } from "./github-identity";
+import { GitHubEmailPermissionError, GitHubProviderIdentityResolver } from "./github-identity";
+
+/** Like a real fetch body, this stalled stream errors once the request signal aborts. */
+function stalledBody(signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      signal?.addEventListener("abort", () => controller.error(signal.reason));
+    },
+  });
+}
 
 describe("GitHubProviderIdentityResolver", () => {
   const config = {
@@ -168,6 +177,49 @@ describe("GitHubProviderIdentityResolver", () => {
     });
   });
 
+  it("aborts the request instead of waiting on a stalled GitHub error body", async () => {
+    let emailSignal: AbortSignal | null | undefined;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "https://api.github.com/user") {
+        return Response.json({ id: 583_231, login: "octocat" });
+      }
+      emailSignal = init?.signal;
+      return new Response(stalledBody(init?.signal), { status: 403 });
+    });
+    const logger = { error: vi.fn() };
+    const resolver = new GitHubProviderIdentityResolver(config, {
+      fetch,
+      logger,
+      requestTimeoutMs: 10,
+    });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+    });
+    expect(emailSignal?.aborted).toBe(true);
+  });
+
+  it("aborts the request instead of waiting on a stalled GitHub success body", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "https://api.github.com/user") {
+        return new Response(stalledBody(init?.signal), { status: 200 });
+      }
+      return Response.json([
+        { email: "octocat@example.com", primary: true, verified: true, visibility: null },
+      ]);
+    });
+    const resolver = new GitHubProviderIdentityResolver(config, {
+      fetch,
+      logger: { error: vi.fn() },
+      requestTimeoutMs: 10,
+    });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+      message: "GitHub user response was not read",
+    });
+  });
+
   it("constructs subsequent GitHub email page URLs locally", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       email: `unverified-${index}@example.com`,
@@ -256,27 +308,143 @@ describe("GitHubProviderIdentityResolver", () => {
   it("names the missing Email addresses permission on a 403 from /user/emails", async () => {
     const logger = { error: vi.fn() };
     const resolver = new GitHubProviderIdentityResolver(config, {
-      fetch: emailsFetch(403),
+      fetch: emailsFetch(403, undefined, { message: "Resource not accessible by integration" }),
       logger,
     });
 
-    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
-      name: "OAuthProviderError",
-      failure: "provider_unavailable",
+    const lookup = resolver.resolveIdentity("ghu-access");
+    await expect(lookup).rejects.toBeInstanceOf(GitHubEmailPermissionError);
+    await expect(lookup).rejects.toMatchObject({
+      name: "GitHubEmailPermissionError",
+      failure: "provider_rejected",
       message:
         "GitHub email lookup was not successful (status 403; Grant the GitHub App the Account -> Email addresses: Read-only permission and approve the installation update (see docs/GETTING_STARTED.md step 7))",
     });
     expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
       event: "auth.github_email_lookup_failed",
       status: 403,
+      githubMessage: "Resource not accessible by integration",
       hint: "Grant the GitHub App the Account -> Email addresses: Read-only permission and approve the installation update (see docs/GETTING_STARTED.md step 7)",
+    });
+  });
+
+  it.each([
+    ["empty", ""],
+    ["missing message", "{}"],
+    ["unrelated denial", JSON.stringify({ message: "Access to this resource has been blocked" })],
+    ["invalid JSON", "not JSON"],
+    ["plain-text permission message", "Resource not accessible by integration"],
+  ])("leaves a 403 with %s unclassified", async (_label, body) => {
+    const logger = { error: vi.fn() };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async (input) =>
+        String(input) === "https://api.github.com/user"
+          ? Response.json({ id: 583231, login: "octocat" })
+          : new Response(body, { status: 403 })
+      );
+    const resolver = new GitHubProviderIdentityResolver(config, { fetch, logger });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+      message: "GitHub email lookup was not successful (status 403)",
+    });
+    expect(logger.error.mock.calls[0][1]).not.toHaveProperty("hint");
+  });
+
+  it("leaves an unreadable 403 unclassified", async () => {
+    const logger = { error: vi.fn() };
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
+      String(input) === "https://api.github.com/user"
+        ? Response.json({ id: 583231, login: "octocat" })
+        : new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error("read failed"));
+              },
+            }),
+            { status: 403 }
+          )
+    );
+    const resolver = new GitHubProviderIdentityResolver(config, { fetch, logger });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+    });
+    expect(logger.error.mock.calls[0][1]).not.toHaveProperty("hint");
+  });
+
+  it.each(["json", "text"])(
+    "cancels an oversized %s error body before reading it all",
+    async (format) => {
+      const body =
+        format === "json"
+          ? JSON.stringify({
+              message: "Resource not accessible by integration",
+              padding: "x".repeat(65536),
+            })
+          : "x".repeat(65536);
+      const bytes = new TextEncoder().encode(body);
+      let offset = 0;
+      const cancel = vi.fn();
+      const logger = { error: vi.fn() };
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
+        String(input) === "https://api.github.com/user"
+          ? Response.json({ id: 583231, login: "octocat" })
+          : new Response(
+              new ReadableStream({
+                pull(controller) {
+                  if (offset >= bytes.byteLength) {
+                    controller.close();
+                    return;
+                  }
+                  controller.enqueue(bytes.slice(offset, offset + 1024));
+                  offset += 1024;
+                },
+                cancel,
+              }),
+              { status: 403 }
+            )
+      );
+      const resolver = new GitHubProviderIdentityResolver(config, { fetch, logger });
+
+      await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+        failure: "provider_unavailable",
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(offset).toBeLessThan(bytes.byteLength);
+      expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
+        event: "auth.github_email_lookup_failed",
+        status: 403,
+      });
+    }
+  );
+
+  it("caps a JSON diagnostic message before logging it", async () => {
+    const logger = { error: vi.fn() };
+    const resolver = new GitHubProviderIdentityResolver(config, {
+      fetch: emailsFetch(403, undefined, { message: "x".repeat(1000) }),
+      logger,
+    });
+
+    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
+      failure: "provider_unavailable",
+    });
+    expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
+      event: "auth.github_email_lookup_failed",
+      status: 403,
+      githubMessage: "x".repeat(200),
     });
   });
 
   it("withholds the permission hint when a 403 is rate limiting", async () => {
     const logger = { error: vi.fn() };
     const resolver = new GitHubProviderIdentityResolver(config, {
-      fetch: emailsFetch(403, { "x-ratelimit-remaining": "0" }),
+      fetch: emailsFetch(
+        403,
+        { "x-ratelimit-remaining": "0" },
+        { message: "Resource not accessible by integration" }
+      ),
       logger,
     });
 
@@ -287,13 +455,18 @@ describe("GitHubProviderIdentityResolver", () => {
     expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
       event: "auth.github_email_lookup_failed",
       status: 403,
+      githubMessage: "Resource not accessible by integration",
     });
   });
 
   it("withholds the permission hint on a secondary rate limit", async () => {
     const logger = { error: vi.fn() };
     const resolver = new GitHubProviderIdentityResolver(config, {
-      fetch: emailsFetch(403, { "retry-after": "60" }),
+      fetch: emailsFetch(
+        403,
+        { "retry-after": "60" },
+        { message: "Resource not accessible by integration" }
+      ),
       logger,
     });
 
@@ -304,6 +477,7 @@ describe("GitHubProviderIdentityResolver", () => {
     expect(logger.error).toHaveBeenCalledWith("GitHub email lookup failed", {
       event: "auth.github_email_lookup_failed",
       status: 403,
+      githubMessage: "Resource not accessible by integration",
     });
   });
 

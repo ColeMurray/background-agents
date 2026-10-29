@@ -84,9 +84,9 @@ The most common example:
 
 > **Claude models**: add `ANTHROPIC_API_KEY` as a global secret after deploying. A deployment can
 > instead set `anthropic_api_key` in Terraform to inject one fleet-wide key into Modal session
-> sandboxes and OpenComputer sandboxes; that is optional, and a global secret of the same name takes
-> precedence over it. With neither, Claude sessions fail with "Model not found." See
-> [Getting Started](GETTING_STARTED.md) for details.
+> sandboxes; that is optional, and a global secret of the same name takes precedence over it. With
+> neither, Claude sessions fail with "Model not found." See [Getting Started](GETTING_STARTED.md)
+> for details.
 
 ### When to use repository secrets
 

@@ -21,18 +21,24 @@ export function createMemoryManagementPolicy(
     userId: ctx.principal.userId,
     authorization: ctx.authorization,
     repositories: new InstalledRepositoryResolver(env, ctx, logger),
-    environments: new EnvironmentAdmissionEvaluator(ctx),
-    repositoryGrants: new RepositoryGrantAuthorizer(ctx),
+    environments: new EnvironmentAdmissionEvaluator(ctx, new EnvironmentStore(ctx.db)),
+    repositoryGrants: new RepositoryGrantAuthorizer(
+      ctx,
+      new TeamRepositoryGrantStore(ctx.db),
+      new TeamStore(ctx.db)
+    ),
   });
 }
 
 /** Wire session-principal access checks to D1 for one request. */
 export function createSessionMemoryAccessPolicy(ctx: RequestContext): SessionMemoryAccessPolicy {
+  const grants = new TeamRepositoryGrantStore(ctx.db);
+  const teams = new TeamStore(ctx.db);
   return new SessionMemoryAccessPolicy({
-    teams: new TeamStore(ctx.db),
-    grants: new TeamRepositoryGrantStore(ctx.db),
+    teams,
+    grants,
     environments: new EnvironmentStore(ctx.db),
     authorization: new AuthorizationService(ctx.db),
-    repositoryGrants: new RepositoryGrantAuthorizer(ctx),
+    repositoryGrants: new RepositoryGrantAuthorizer(ctx, grants, teams),
   });
 }

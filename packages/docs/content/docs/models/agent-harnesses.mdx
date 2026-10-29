@@ -1,21 +1,29 @@
 ---
-title: "Agent harnesses: OpenCode and Claude Agent"
-description: Compare the two agent harnesses, choose one when you create a session, and learn how Claude Agent sessions authenticate and run.
+title: "Agent harnesses: OpenCode, Claude Agent, and Codex"
+description: Compare the three agent harnesses, choose one when you create a session, and learn how Claude Agent and Codex sessions authenticate and run.
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-26"
 relatedCode:
   - packages/shared/src/harnesses.ts
+  - packages/shared/src/models.ts
   - docs/CLAUDE_AGENT.md
+  - docs/OPENAI_MODELS.md
   - packages/slack-bot/src/sessions/session-launcher.ts
   - packages/github-bot/src/model-selection.ts
   - docs/HOW_IT_WORKS.md
   - packages/web/src/components/model-reasoning-selector.tsx
   - packages/web/src/components/provider-auth-controls.tsx
+  - packages/control-plane/src/harness-admission.ts
+  - packages/control-plane/src/sandbox/managed-provider-env.ts
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/__init__.py
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/env.py
+  - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/events.py
+  - packages/sandbox-runtime/src/sandbox_runtime/codex_stager.py
 ---
 
-This page explains what an agent harness is, how OpenCode and Claude Agent differ, and what to expect from a Claude Agent session.
+This page explains what an agent harness is, how OpenCode, Claude Agent, and Codex differ, and what to expect from Claude Agent and Codex sessions.
 
 ## One harness per session
 
@@ -23,28 +31,30 @@ The agent harness is the coding agent that runs inside the sandbox. Every sessio
 
 - Child sessions inherit their parent's harness.
 - An automation carries a harness for the sessions it creates.
-- Sessions started by Linear run on the harness chosen in Settings › Integrations › Linear, globally or per repository (OpenCode by default). A model the chosen harness cannot run, such as one from a `model:gpt-*` label, is refused with an error activity and no coding session. Choose a compatible `model:*` label, user preference, or default model, or change the integration harness, then delegate again.
-- Sessions started by Slack run on the harness the user chose in the Slack app's Home tab, else the one chosen in Settings › Integrations › Slack (OpenCode by default). A request whose model that harness cannot run, such as one from `!model openai/gpt-5.4` or an App Home preference, is refused rather than started on OpenCode. A Slack thread keeps its session's harness.
+- Sessions started by Linear run on the harness chosen in Settings › Integrations › Linear, globally or per repository (OpenCode by default). A model the chosen harness cannot run, such as one from a `model:gpt-*` label on Claude Agent, is refused with an error activity and no coding session. Choose a compatible `model:*` label, user preference, or default model, or change the integration harness, then delegate again.
+- Sessions started by Slack run on the harness the user chose in the Slack app's Home tab, else the one chosen in Settings › Integrations › Slack (OpenCode by default). A request whose model that harness cannot run, such as one from `!model openai/gpt-5.4` or an App Home preference on Claude Agent, is refused rather than started on OpenCode. A Slack thread keeps its session's harness.
 - Sessions started by GitHub run on the harness chosen in Settings › Integrations › GitHub, globally or per repository (OpenCode by default). A model the chosen harness cannot run is refused with a reply on the PR and no session. Retry a mention with a compatible `!model`, update the default model, or change the integration harness.
 - OpenCode is the default harness.
 
-All three integrations preserve the selected harness rather than falling back to OpenCode. For GitHub and Linear, explicitly selecting a restricted harness such as Claude Agent requires a compatible default model at the same settings level (global or repository). Omitted repository harness and model fields inherit individually. Save validation checks each explicit level, not the merged global/repository pair; cross-level mismatches are refused at launch. See [GitHub settings](/integrations/github#repository-overrides) and [Linear settings](/integrations/linear).
+All three integrations preserve the selected harness rather than falling back to OpenCode. For GitHub and Linear, explicitly selecting a restricted harness such as Claude Agent or Codex requires a compatible default model at the same settings level (global or repository). Omitted repository harness and model fields inherit individually. Save validation checks each explicit level, not the merged global/repository pair; cross-level mismatches are refused at launch. See [GitHub settings](/integrations/github#repository-overrides) and [Linear settings](/integrations/linear).
 
 Existing GitHub and Linear settings that select Claude Agent without a default model are not automatically migrated. They remain readable, and rejected saves leave them unchanged. Before saving any edits, including unrelated settings, an administrator must open **Settings > Integrations > GitHub** or **Linear** and choose a compatible Anthropic default model at every global or repository level that explicitly selects Claude Agent. A global model alone does not repair an explicit repository harness override. Alternatively, switch that level to OpenCode, or remove the repository harness override to inherit global settings.
 
-Both harnesses emit the same session events (tokens, tool calls, steps, warnings), so the session page, timeline, and diff work the same way on either one.
+All three harnesses emit the same session events (tokens, tool calls, steps, warnings), so the session page, timeline, and diff work the same way on any of them.
 
 ## Comparison
 
-|                                | OpenCode                                                             | Claude Agent                                                                                         |
-| ------------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Models                         | Every model in the catalog                                           | Anthropic models only                                                                                |
-| Anthropic authentication       | `ANTHROPIC_API_KEY` only                                             | `ANTHROPIC_API_KEY` or a connected Claude account                                                    |
-| OpenAI and xAI authentication  | API key or a connected account                                       | Not applicable (cannot run those models)                                                             |
-| Repository instruction files   | The repository's `.opencode/` directory and `.openinspect/setup.sh`  | Reads the repository's `CLAUDE.md` natively; loads `.claude/` settings, hooks, and agents            |
-| Sub-agents                     | The `task` tool; the timeline groups a sub-agent's activity under it | The `Agent` tool; returns only when the sub-agent has finished, grouped in the timeline the same way |
-| Follow-up prompts              | Queue until the running turn completes                               | Queue until the running turn completes                                                               |
-| Resume after a sandbox restore | By session id                                                        | By session id                                                                                        |
+|                                | OpenCode                                                             | Claude Agent                                                                                         | Codex                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Models                         | Every model in the catalog                                           | Anthropic models only                                                                                | OpenAI models that support Codex (see [the OpenAI catalog](/models/choosing-a-model#openai))          |
+| Reasoning efforts              | The model's efforts from the catalog                                 | The model's efforts from the catalog                                                                 | No **None**; some models add **Max**, and some have their own default                                 |
+| Anthropic authentication       | `ANTHROPIC_API_KEY` only                                             | `ANTHROPIC_API_KEY` or a connected Claude account                                                    | Not applicable (cannot run those models)                                                              |
+| OpenAI authentication          | `OPENAI_API_KEY` or a connected ChatGPT account                      | Not applicable (cannot run those models)                                                             | `OPENAI_API_KEY` or a connected ChatGPT account                                                       |
+| xAI authentication             | `XAI_API_KEY` or a connected SuperGrok account                       | Not applicable (cannot run those models)                                                             | Not applicable (cannot run those models)                                                              |
+| Repository instruction files   | The repository's `.opencode/` directory and `.openinspect/setup.sh`  | Reads the repository's `CLAUDE.md` natively; loads `.claude/` settings, hooks, and agents            | Reads the repository's `AGENTS.md` natively; refuses a repository `.codex/config.toml`                |
+| Sub-agents                     | The `task` tool; the timeline groups a sub-agent's activity under it | The `Agent` tool; returns only when the sub-agent has finished, grouped in the timeline the same way | None (Codex's multi-agent feature is disabled); [child sessions](/sessions/child-sessions) still work |
+| Follow-up prompts              | Queue until the running turn completes                               | Queue until the running turn completes                                                               | Queue until the running turn completes                                                                |
+| Resume after a sandbox restore | By session id                                                        | By session id                                                                                        | By Codex thread id                                                                                    |
 
 <Callout type="info" title="Installation default Anthropic account">
   A default Claude account set under Settings › Accounts (provider accounts) takes effect only on
@@ -56,9 +66,9 @@ Both harnesses emit the same session events (tokens, tool calls, steps, warnings
 ## Choose a harness in the composer
 
 1. Open the model control in the new-session composer. It reads `<harness>: <model> <effort>`.
-2. Choose **Agent**, then **OpenCode** or **Claude Agent**. Your last choice is remembered for the next new session.
-3. Choose **Model**. The list is filtered to enabled models the chosen harness can run. If none of the enabled models can run on the harness, the composer says `No enabled models can run on Claude Agent.` and blocks submission until you enable one or switch harness.
-4. Choose **Effort** if the model supports it, then send your prompt.
+2. Choose **Agent**, then **OpenCode**, **Claude Agent**, or **Codex**. Your last choice is remembered for the next new session.
+3. Choose **Model**. The list is filtered to enabled models the chosen harness can run. If none of the enabled models can run on the harness, the composer says so, for example `No enabled models can run on Codex.`, and blocks submission until you enable one or switch harness.
+4. Choose **Effort** if the model supports it, then send your prompt. The efforts listed are the ones the model offers on the chosen harness.
 
 Switching harness drops any provider authentication pin the new harness cannot honor (for example a connected Claude account selected for a session you then switch to OpenCode), so you never submit a selection the server would refuse.
 
@@ -80,7 +90,7 @@ Claude Agent runs Anthropic models through the Claude Agent SDK inside the sandb
 - On every start of the agent (fresh spawn, supervised restart, or snapshot restore), the sandbox fetches the token from the control plane and keeps it in memory only. Nothing is written to disk, so a snapshot carries no credential and a restore fetches again.
 - The `claude` process sees the ordinary sandbox environment (user secrets, proxies, session context) plus exactly one Anthropic credential: the connected account's token in account mode, or `ANTHROPIC_API_KEY` in key mode, never both. OpenCode, code-server, the terminal, and user shells never see the Claude token.
 
-Code the agent runs from Bash, and any hooks the repository's `.claude/` settings register, run as children of the `claude` process and inherit its environment. That is the same exposure as the sandbox token and user secrets under either harness.
+Code the agent runs from Bash, and any hooks the repository's `.claude/` settings register, run as children of the `claude` process and inherit its environment. That is the same exposure as the sandbox token and user secrets under any harness.
 
 ### Tools served to the agent
 
@@ -122,6 +132,38 @@ Claude Agent reports the SDK's client-side cost estimate per turn (the running t
 
 In every case a sandbox that already holds a token keeps it in memory until it exits (inactivity timeout, hard timeout, or a stop), so a turn already running finishes on the old token. To end that sooner, stop the session from the session page. A runtime authentication failure fails the prompt with reconnect guidance and posts an error event; quota and rate-limit warnings keep the account active and appear on the timeline.
 
+## Codex sessions
+
+Codex runs OpenAI models through OpenAI's Codex CLI inside the sandbox, on every sandbox provider. The runtime always launches the Codex CLI version pinned in the sandbox image, so an image built before Codex shipped must be rebuilt before Codex sessions can start on it.
+
+### Strict selection
+
+Codex never swaps a selection it cannot honor for a default. A model it cannot run, a reasoning effort the model does not offer on Codex, a model disabled under Settings › Models, or a credential mode it cannot use is refused with an error when the session is created, when a prompt is sent or dispatched, and when an automation or integration starts a session. Fix the selection and try again.
+
+### How the credential reaches the sandbox
+
+- The session's OpenAI authentication choice (a connected ChatGPT account or `OPENAI_API_KEY`) is fixed when the session is created. The legacy `OPENAI_OAUTH_*` secrets are not used.
+- With a connected account, the sandbox fetches a short-lived access token from the control plane before every turn, and again whenever Codex asks for a refresh. Codex keeps the OpenAI credential in memory only, so it is never written to Codex's state directory or captured in a snapshot. A session stays bound to the ChatGPT workspace it started with.
+- The `codex` process does not inherit the sandbox's `OPENAI_*` or `CODEX_*` environment variables; the credential is handed to Codex directly. Custom OpenAI endpoints are not supported: secrets such as `OPENAI_BASE_URL`, `OPENAI_API_BASE`, or `CODEX_API_ENDPOINT` are dropped before a Codex sandbox starts, so Codex uses the standard OpenAI endpoint. If one of those variables is set in the sandbox's runtime environment instead (for example by the image), Codex refuses to start.
+- Codex runs with no approval prompts and without its own command sandbox. The OpenInspect sandbox is the isolation boundary, as under the other harnesses.
+
+### Tools, MCP servers, and skills
+
+- Codex gets the same OpenInspect tools as Claude Agent (child session tools, `upload-media`, `create-pull-request`, `slack-notify`), under the same conditions, as Codex tools in an `oi` namespace.
+- Session MCP servers configured under Settings › MCP Servers are translated to Codex's own server configuration. A server named `oi`, or a remote server whose URL carries credentials, a query string, or a fragment, is refused; put credentials in headers instead.
+- Managed skills and the bundled skills are staged under the per-sandbox Codex directory (`~/.openinspect/codex/skills`), and Codex reads the repository's `AGENTS.md` natively.
+- A repository `.codex/config.toml` is not supported, because it can reroute credentials and register hooks: Codex refuses to run in a repository that has one. Move MCP servers to Settings › MCP Servers and instructions to `AGENTS.md`.
+- Codex's own hooks, plugins, apps, memories, and multi-agent features are disabled, as are its analytics, feedback, update checks, and history file.
+
+### Tasks, errors, and warnings
+
+- Each plan update Codex publishes replaces the **Tasks** list in the session's right sidebar, with pending, in-progress, and completed steps, the same as a task list from the other harnesses.
+- Codex errors and warnings appear on the timeline. An error Codex is retrying shows as a warning; a failed turn shows Codex's reason, with guidance for common causes such as an unauthorized credential, a usage or rate limit, or a conversation that no longer fits the context window. Configuration warnings, model reroutes, and OpenAI rate limits that are reached or nearly used up also appear as warnings.
+
+### Cost reporting
+
+Codex prices each model request from the model price list cached in the sandbox image. Under a ChatGPT subscription the figure is informational, but a session spend limit still applies to it as configured. A model missing from the price list is recorded at $0 with a timeline warning. See [Spend limits](/sessions/spend-limits).
+
 ## Troubleshooting
 
 <Accordions>
@@ -140,6 +182,16 @@ In every case a sandbox that already holds a token keeps it in memory until it e
     The bound account is disabled, fenced for expiry, or hit an authentication failure at runtime.
     Reconnect it under Settings › Accounts (provider accounts) and send the prompt again. If the
     account is archived, start a new session with another account or an API key.
+
+</Accordion>
+  <Accordion title='A Codex prompt fails with "check Settings before retrying"'>
+    The full message is `Codex rejected this session's configuration or credential; check Settings
+    before retrying`. Check that an API-key session has `OPENAI_API_KEY` in scope, that a bound
+    ChatGPT account is active under Settings › Accounts, that the repository has no
+    `.codex/config.toml`, and that the sandbox image does not set a custom OpenAI endpoint
+    variable. Then send the prompt
+    again. `Codex could not obtain a credential right now; retry shortly` is a transient token fetch
+    failure; retry without changing settings.
 
 </Accordion>
 </Accordions>

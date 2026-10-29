@@ -118,6 +118,8 @@ Vercel sandboxes are explicitly stopped by Open-Inspect when they should no long
 - Inactive Vercel sessions are snapshotted and stopped by the lifecycle manager.
 - Runtime-created snapshots use `VERCEL_SNAPSHOT_EXPIRATION_MS`; the base runtime snapshot does not
   expire by default.
+- Every sandbox is created with `persistent: false`, so a stop never leaves an automatic Vercel
+  snapshot. Open-Inspect takes every snapshot it needs explicitly.
 
 Existing generated base snapshots are not automatically deleted. Treat them like deploy artifacts:
 keep the current snapshot, and delete old snapshots manually if you need to reclaim quota.

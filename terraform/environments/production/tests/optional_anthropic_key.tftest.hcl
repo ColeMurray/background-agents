@@ -88,66 +88,6 @@ run "a_blank_key_is_not_treated_as_configured" {
   }
 }
 
-# OpenComputer sandboxes read the key from the control plane. An unset key must
-# not reach the worker, where an empty binding would shadow the key a repository
-# supplies through the secret store.
-run "opencomputer_without_a_key_binds_none" {
-  command = plan
-
-  variables {
-    sandbox_provider      = "opencomputer"
-    opencomputer_api_url  = "https://api.opencomputer.example"
-    opencomputer_api_key  = "test-opencomputer-key"
-    opencomputer_template = "test-template"
-  }
-
-  assert {
-    condition = (
-      contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
-      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
-    )
-    error_message = "An unset Anthropic key must not be bound on the control plane worker."
-  }
-}
-
-run "opencomputer_with_a_key_binds_it" {
-  command = plan
-
-  variables {
-    sandbox_provider      = "opencomputer"
-    opencomputer_api_url  = "https://api.opencomputer.example"
-    opencomputer_api_key  = "test-opencomputer-key"
-    opencomputer_template = "test-template"
-    anthropic_api_key     = "test-anthropic-key"
-  }
-
-  assert {
-    condition     = contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
-    error_message = "A configured Anthropic key must reach OpenComputer sandboxes via the control plane."
-  }
-}
-
-# Whitespace is not a credential here either. The provider's own validation only
-# guards sandbox_provider = "opencomputer", so a blank key on any other provider
-# would otherwise bind an unusable OPENCOMPUTER_API_KEY.
-run "a_blank_opencomputer_key_does_not_enable_its_bindings" {
-  command = plan
-
-  variables {
-    opencomputer_api_url = "https://api.opencomputer.example"
-    opencomputer_api_key = "   "
-    anthropic_api_key    = "test-anthropic-key"
-  }
-
-  assert {
-    condition = (
-      !contains(module.control_plane_worker.secret_binding_names, "OPENCOMPUTER_API_KEY") &&
-      !contains(module.control_plane_worker.secret_binding_names, "ANTHROPIC_API_KEY")
-    )
-    error_message = "A whitespace-only OpenComputer key must not enable its control plane bindings."
-  }
-}
-
 # The classifier bots have no per-repository fallback, so they keep their
 # requirement: this is the one place a key is still mandatory.
 run "an_anthropic_classifier_still_requires_the_key" {

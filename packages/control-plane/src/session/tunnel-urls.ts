@@ -4,7 +4,7 @@ import type { Logger } from "../logger";
  * Parse a stored `sandbox.tunnel_urls` blob into a `{ [port]: url }` map.
  *
  * `tunnel_urls` is a JSON-encoded `Record<string, string>` written by
- * `SandboxLifecycleManager#storeAndBroadcastTunnelUrls`. Returns `null` when the
+ * `SandboxRepository#commitProviderAccess`. Returns `null` when the
  * stored value is malformed — not valid JSON, not a plain JSON object, or holds
  * a non-string value — so callers can tell corrupt data apart from an empty map
  * and decide how to react (the DO state path falls open to `null`; the

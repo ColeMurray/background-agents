@@ -211,6 +211,9 @@ export class VercelSandboxClient {
           source: request.sourceSnapshotId
             ? { type: "snapshot", snapshotId: request.sourceSnapshotId }
             : undefined,
+          // Vercel snapshots a persistent sandbox on every stop. Open-Inspect
+          // takes and records its own snapshots, so those would only leak storage.
+          persistent: false,
         }),
       },
       vercelCreateSandboxResponseSchema,

@@ -65,7 +65,7 @@ export const mockProviderAccountStore = {
 };
 
 export const mockUserStore = {
-  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
+  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", outcome: "existing" }),
 };
 
 export const mockEnvironmentStore = {
@@ -163,6 +163,7 @@ export const sampleRow = {
   instructions: "Run tests",
   trigger_type: "schedule",
   schedule_cron: "0 9 * * *",
+  schedule_once_at: null,
   schedule_tz: "UTC",
   model: "anthropic/claude-sonnet-4-6",
   reasoning_effort: null,

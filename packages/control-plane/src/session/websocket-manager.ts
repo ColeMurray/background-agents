@@ -136,6 +136,7 @@ export interface SessionWebSocketManager {
 
   enforceAuthTimeout(ws: SessionWebSocket, wsId: string): Promise<void>;
   getAuthenticatedClients(): IterableIterator<ClientInfo>;
+  /** Count open client sockets with unexpired cached or persisted authorization leases. */
   getConnectedClientCount(): number;
 }
 
@@ -562,14 +563,36 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     }
   }
 
+  /**
+   * Read-only: expired leases are retired by `expireAuthorizationLeases`, not
+   * by counting. The inactivity alarm calls this, so a lease that cannot be
+   * read counts as absent rather than failing the alarm that would stop an
+   * idle sandbox.
+   */
   getConnectedClientCount(): number {
+    const now = Date.now();
     let count = 0;
     for (const ws of this.host.sockets()) {
       const parsed = this.classify(ws);
-      if (parsed.kind !== "sandbox" && isSocketOpen(ws)) {
-        count++;
-      }
+      if (parsed.kind === "sandbox" || !isSocketOpen(ws)) continue;
+      const expiresAt = this.readAuthorizationExpiry(ws, parsed);
+      if (expiresAt !== null && expiresAt > now) count++;
     }
     return count;
+  }
+
+  private readAuthorizationExpiry(
+    ws: SessionWebSocket,
+    parsed: Extract<ConnectionClassification, { kind: "client" }>
+  ): number | null {
+    try {
+      return this.authorizationExpiry(ws, parsed);
+    } catch (error) {
+      this.log.warn("Client authorization lease lookup failed", {
+        ws_id: parsed.wsId,
+        error: error instanceof Error ? error : String(error),
+      });
+      return null;
+    }
   }
 }

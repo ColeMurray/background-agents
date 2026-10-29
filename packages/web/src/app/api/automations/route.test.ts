@@ -16,6 +16,7 @@ import { GET, POST } from "./route";
 
 function postRequest(body: unknown) {
   return {
+    cookies: { getAll: () => [{ name: "openinspect.session_token", value: "test-session" }] },
     json: async () => body,
   } as unknown as NextRequest;
 }
@@ -51,7 +52,6 @@ describe("automations API route (GET)", () => {
   });
 
   it("forwards only automation list parameters", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automations: [], hasMore: false, nextCursor: null })
     );
@@ -81,42 +81,34 @@ describe("automations API route (POST)", () => {
   });
 
   it.each(["team-1", null])("forwards create teamId=%s", async (teamId) => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } });
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ automation: {} }));
     await POST(postRequest({ ...validBody, teamId }));
     expect(controlPlaneBody()).toEqual({ ...validBody, teamId });
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("forwards a one-shot timestamp without adding cron", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: {} }, { status: 201 })
+    );
+    const { scheduleCron: _cron, ...oneShot } = validBody;
+    const body = { ...oneShot, scheduleOnceAt: Date.now() + 60_000 };
+    expect((await POST(postRequest(body))).status).toBe(201);
+    expect(controlPlaneBody()).toEqual(body);
+  });
+
+  it("relays a control-plane 401 without a separate session lookup", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(postRequest(validBody));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      provider: "GitHub",
-      user: {
-        id: "0123456789abcdef0123456789abcdef",
-        name: "Ada Lovelace",
-        email: "ada@example.com",
-        image: "https://avatars.githubusercontent.com/u/12345",
-      },
-    },
-    {
-      provider: "Google",
-      user: {
-        id: "fedcba9876543210fedcba9876543210",
-        name: "Pat PM",
-        email: "pm@gmail.com",
-        image: "https://lh3.googleusercontent.com/a/pat",
-      },
-    },
-  ])("sends the same profile-independent body for a $provider session", async ({ user }) => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user } as never);
+  it("sends a profile-independent body without resolving the user session", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto1" } }, { status: 201 })
     );
@@ -130,12 +122,10 @@ describe("automations API route (POST)", () => {
     );
     const sent = controlPlaneBody();
     expect(sent).toEqual(validBody);
+    expect(getServerAuthSession).not.toHaveBeenCalled();
   });
 
   it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "0123456789abcdef0123456789abcdef" },
-    } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto3" } }, { status: 201 })
     );
@@ -152,8 +142,17 @@ describe("automations API route (POST)", () => {
     expect(sent).toEqual(validBody);
   });
 
+  it("forwards the launch retry limit", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automation: { id: "auto-retries" } }, { status: 201 })
+    );
+
+    await POST(postRequest({ ...validBody, maxRetries: 3 }));
+
+    expect(controlPlaneBody()).toEqual({ ...validBody, maxRetries: 3 });
+  });
+
   it("allowlists provider selections while dropping hydrated provider auth", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto-provider" } }, { status: 201 })
     );

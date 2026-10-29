@@ -172,9 +172,9 @@ export interface ImageBuildCallbackEnvValues {
   failureCallbackUrl: string;
   token: string;
   /**
-   * Omitted from the returned map when absent: OpenComputer and E2B bake the
-   * callback env at create time, before the provider session id exists, and
-   * deliver the id separately when starting the runtime.
+   * Omitted from the returned map when absent: E2B bakes the callback env at
+   * create time, before the provider session id exists, and delivers the id
+   * separately when starting the runtime.
    */
   providerSessionId?: string;
 }
@@ -210,7 +210,7 @@ export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS: readonly string[] = [
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
 ];
 /** One-shot clone token used only by image-build sandboxes. */
-export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
+const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
 /** Host/username pair git pairs with the brokered clone token in the sandbox. */
 export interface ScmCloneIdentity {
@@ -293,18 +293,12 @@ export interface SandboxEnvVarsOptions {
   portPlan?: SandboxPortPlan;
   /** Override terminal state inherited from a captured provider image when disabled. */
   emitDisabledTerminalEnv?: boolean;
-  /**
-   * Overrides `config.userEnvVars` as the user layer when a provider composes
-   * it differently (OpenComputer layers provider LLM credentials underneath
-   * user secrets). System vars still overlay whatever is passed here.
-   */
-  baseEnvVars?: Record<string, string>;
 }
 
 /**
  * Build the per-session env map delivered to the sandbox runtime — the one
  * canonical assembly shared by the REST-style providers (Daytona, E2B,
- * OpenComputer, Vercel), which used to hand-roll near-identical copies.
+ * Vercel), which used to hand-roll near-identical copies.
  *
  * User env vars (repo secrets) come first, system vars are overlaid so they
  * can't be shadowed. Provider-specific additions (platform paths, image-mode
@@ -315,7 +309,7 @@ export function buildSandboxEnvVars(
   config: CreateSandboxConfig | RestoreConfig,
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
-  const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
   delete envVars.CODE_SERVER_PORT;
   delete envVars.CODE_SERVER_PASSWORD;
   delete envVars.VNC_PASSWORD;
@@ -386,8 +380,7 @@ export function buildSandboxEnvVars(
   // installation tokens) — exactly the failure that broke long-running and
   // resumed sessions before brokered credentials landed. User-defined secrets
   // are passed through verbatim, though, so a user-supplied VCS_CLONE_TOKEN
-  // survives — OpenComputer deliberately preserves one on prebuilt-image
-  // boots (see its provider tests).
+  // survives.
 
   return envVars;
 }
@@ -399,7 +392,7 @@ export function buildSandboxEnvVars(
  * timestamp (`Date.now()`) as `now` so the impure input is visible at the
  * call site and one config yields one name per trigger attempt;
  * `labels` are the canonical build identity shared by providers (tags on
- * Vercel, labels on OpenComputer). Providers with extra or legacy label
+ * Vercel, metadata on E2B). Providers with extra or legacy label
  * conventions spread and extend `labels`.
  *
  * The `build-env-` prefix is deliberately scope-agnostic legacy: it predates
@@ -433,9 +426,7 @@ export interface ImageBuildEnvVarsOptions {
   /** One-shot clone token delivered as `VCS_CLONE_TOKEN`. */
   cloneToken?: string;
   /**
-   * User env vars (repo secrets), or a provider-composed base layer
-   * (OpenComputer layers provider LLM credentials underneath user secrets).
-   * Reserved image-build keys are scrubbed from this layer so user-defined
+   * User env vars (repo secrets). Reserved image-build keys are scrubbed from this layer so user-defined
    * secrets can never hijack the build callback contract.
    */
   baseEnvVars?: Record<string, string>;
@@ -443,8 +434,8 @@ export interface ImageBuildEnvVarsOptions {
 
 /**
  * Build the env map for an image-build sandbox — the build-mode sibling of
- * {@link buildSandboxEnvVars}, shared by the Vercel and OpenComputer
- * providers (which used to hand-roll byte-identical copies) and mirrored by
+ * {@link buildSandboxEnvVars}, shared by the Vercel and E2B
+ * providers and mirrored by
  * Modal's Python `ModalBuildSessionService.create` in
  * `packages/modal-infra/src/sandbox/build_session.py`.
  *

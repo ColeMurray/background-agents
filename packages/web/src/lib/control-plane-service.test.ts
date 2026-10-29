@@ -42,7 +42,7 @@ describe("dispatchWebServiceRequest", () => {
       },
       body,
       traceId: "trace-1",
-      transportTimeoutMs: 120_000,
+      timeoutMs: 120_000,
       transportOptions: {
         redirect: "manual",
         cache: "no-store",

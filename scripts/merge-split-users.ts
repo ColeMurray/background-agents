@@ -15,7 +15,7 @@
  * graph mutation as one result-bearing D1 batch.
  *
  * Usage:
- *   node --experimental-transform-types scripts/merge-split-users.ts \
+ *   node scripts/merge-split-users.ts \
  *     --database <d1-database-name> --survivor <user-id> --loser <user-id>
  *     [--execute]
  *
@@ -120,19 +120,31 @@ function inlineParams(sql: string, params: unknown[]): string {
   return rendered;
 }
 
+type WranglerStatement = SqlStatement & { render(): string };
+
 export class WranglerD1Database implements SqlDatabase {
+  private readonly databaseName: string;
+  private readonly remote: boolean;
+  private readonly verbose: boolean;
+  private readonly runner: WranglerRunner;
+
   constructor(
-    private readonly databaseName: string,
-    private readonly remote: boolean,
-    private readonly verbose: boolean,
-    private readonly runner: WranglerRunner = runWrangler
-  ) {}
+    databaseName: string,
+    remote: boolean,
+    verbose: boolean,
+    runner: WranglerRunner = runWrangler
+  ) {
+    this.databaseName = databaseName;
+    this.remote = remote;
+    this.verbose = verbose;
+    this.runner = runner;
+  }
 
   prepare(query: string): SqlStatement {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const db = this;
     let params: unknown[] = [];
-    const statement: SqlStatement & { render(): string } = {
+    const statement: WranglerStatement = {
       bind(...values: unknown[]) {
         params = values;
         return statement;
@@ -160,7 +172,7 @@ export class WranglerD1Database implements SqlDatabase {
   // batch API. D1 executes the batch transactionally and Wrangler preserves
   // one positional result (including meta.changes) per statement.
   async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
-    const rendered = statements.map((entry) => (entry as { render(): string }).render());
+    const rendered = statements.map((entry) => (entry as WranglerStatement).render());
     const results = this.execute(rendered);
     return results.map((result) => toSqlResult<T>(result));
   }

@@ -15,7 +15,7 @@ export interface WebServiceRequest {
   readonly correlationFields?: Record<string, string>;
   readonly transportOptions?: Omit<RequestInit, "method" | "headers" | "body">;
   readonly streamResponse?: boolean;
-  readonly transportTimeoutMs?: number;
+  readonly timeoutMs?: number;
 }
 
 function getSignableBody(
@@ -82,6 +82,6 @@ export async function dispatchWebServiceRequest(request: WebServiceRequest): Pro
     },
     request.correlationFields ?? {},
     request.streamResponse,
-    request.transportTimeoutMs
+    request.timeoutMs
   );
 }

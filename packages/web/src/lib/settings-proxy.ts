@@ -26,16 +26,20 @@ type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
 type ProxyActions = Partial<Record<ProxyMethod, string>>;
 
 interface SettingsProxyOptions {
+  maxBodyBytes?: number;
   timeoutMs?: number;
 }
 
 /** JSON mutation budget kept below portable web-function request limits. */
 export const SETTINGS_PROXY_MAX_BODY_BYTES = 4 * 1024 * 1024;
 
-async function readMutationBody(request: NextRequest): Promise<Uint8Array | null> {
+async function readMutationBody(
+  request: NextRequest,
+  maxBodyBytes: number
+): Promise<Uint8Array | null> {
   const contentLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(contentLength) && contentLength > SETTINGS_PROXY_MAX_BODY_BYTES) return null;
-  return readBodyCapped(request.body, SETTINGS_PROXY_MAX_BODY_BYTES);
+  if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) return null;
+  return readBodyCapped(request.body, maxBodyBytes);
 }
 
 async function relaySettingsResource(
@@ -43,7 +47,8 @@ async function relaySettingsResource(
   buildPath: () => string | Promise<string>,
   action: string,
   method: ProxyMethod,
-  options?: SettingsProxyOptions
+  maxBodyBytes: number,
+  timeoutMs?: number
 ): Promise<NextResponse> {
   try {
     // The revision ID is an opaque CAS token; forwarding it unchanged keeps
@@ -60,7 +65,7 @@ async function relaySettingsResource(
             { status: 401, headers: PRIVATE_NO_STORE_HEADERS }
           );
         }
-        const body = await readMutationBody(request);
+        const body = await readMutationBody(request, maxBodyBytes);
         if (!body) {
           return NextResponse.json(
             { error: "Request body is too large" },
@@ -72,9 +77,10 @@ async function relaySettingsResource(
       if (ifMatch) init.headers = { "If-Match": ifMatch };
     }
     const path = await buildPath();
-    const response = options
-      ? await controlPlaneUserFetch(path, init, options)
-      : await controlPlaneUserFetch(path, init);
+    const response =
+      timeoutMs === undefined
+        ? await controlPlaneUserFetch(path, init)
+        : await controlPlaneUserFetch(path, init, { timeoutMs });
     return relayJsonResponse(response);
   } catch (error) {
     console.error(`Failed to ${action}:`, error);
@@ -94,7 +100,7 @@ export function settingsProxy<P>(
   buildPath: (params: P, request: NextRequest) => string,
   label: string,
   actions: ProxyActions = {},
-  options?: SettingsProxyOptions
+  options: SettingsProxyOptions = {}
 ): ProxyHandlers<P> {
   const handler =
     (method: ProxyMethod): RouteHandler<P> =>
@@ -104,7 +110,8 @@ export function settingsProxy<P>(
         async () => buildPath(await context.params, request),
         actions[method] ?? `${METHOD_VERBS[method]} ${label}`,
         method,
-        options
+        options.maxBodyBytes ?? SETTINGS_PROXY_MAX_BODY_BYTES,
+        options.timeoutMs
       );
 
   return {

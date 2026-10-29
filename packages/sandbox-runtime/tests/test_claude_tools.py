@@ -1,5 +1,6 @@
 """Claude decorates shared tools and maps their results to native MCP responses."""
 
+import json
 from unittest.mock import MagicMock
 
 import anyio
@@ -62,11 +63,15 @@ async def test_sdk_server_preserves_specs_and_maps_native_results(
                     assert wire_result["content"][0]["type"] == "text"
                     text = wire_result["content"][0]["text"]
                     if status == 200:
-                        assert text == (
-                            '{"children":[],"error":"forbidden"}'
-                            if name == "memory_search"
-                            else "No child sessions found."
-                        )
+                        if name == "memory_search":
+                            assert text == '{"children":[],"error":"forbidden"}'
+                        else:
+                            assert json.loads(text) == {
+                                "version": 1,
+                                "kind": "list",
+                                "children": [],
+                                "agentMessage": "No child sessions found.",
+                            }
                     else:
                         assert ("unavailable" if status is None else "403") in text
             tasks.cancel_scope.cancel()

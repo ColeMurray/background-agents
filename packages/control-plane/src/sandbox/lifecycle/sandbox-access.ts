@@ -9,10 +9,8 @@ export const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 
 /** Encryption and persistence remain repository-owned. */
 export interface SandboxAccessStorage {
-  updateSandboxAccess(kind: SandboxAccessKind, url: string, secret: string): void | Promise<void>;
   clearSandboxAccess(kind: SandboxAccessKind): void;
   clearSandboxAccessUrl?(kind: SandboxAccessKind): void;
-  updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
   clearSandboxTunnelUrls(): void;
 }
 
@@ -53,36 +51,6 @@ export class SandboxAccess {
   retireShutdownAccess(): void {
     this.clearAccess();
     this.deps.sockets.detachSandboxWebSocket(1000, "Sandbox state preserved");
-  }
-
-  async storeCodeServer(url: string, password: string): Promise<void> {
-    this.deps.getLogger().info("Storing code-server info", { url });
-    await this.deps.storage.updateSandboxAccess("codeServer", url, password);
-  }
-
-  async storeVnc(url: string, password: string): Promise<void> {
-    this.deps.getLogger().info("Storing VNC info", { url });
-    await this.deps.storage.updateSandboxAccess("vnc", url, password);
-  }
-
-  async storeAndBroadcastTunnelUrls(urls: Record<string, string> | undefined): Promise<void> {
-    if (!urls || Object.keys(urls).length === 0) return;
-    this.deps
-      .getLogger()
-      .info("Storing and broadcasting tunnel URLs", { ports: Object.keys(urls) });
-    await this.deps.storage.updateSandboxTunnelUrls(urls);
-    this.deps.broadcaster.broadcast({ type: "sandbox_access_changed" });
-  }
-
-  async storeTtyd(
-    url: string,
-    sandboxAuthToken: string,
-    sessionId: string,
-    sandboxId: string
-  ): Promise<void> {
-    const token = await this.mintTtydToken(sandboxAuthToken, sessionId, sandboxId);
-    this.deps.getLogger().info("Storing ttyd info", { url });
-    await this.deps.storage.updateSandboxAccess("ttyd", url, token);
   }
 
   mintTtydToken(sandboxAuthToken: string, sessionId: string, sandboxId: string): Promise<string> {

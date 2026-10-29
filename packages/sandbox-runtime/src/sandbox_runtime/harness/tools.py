@@ -24,7 +24,11 @@ import httpx
 
 from ..memory_contract import MEMORY_TOOL_SPECS
 from ..repo_config import load_repo_manifest
-from .child_status_format import format_stored_files
+from .child_status_format import (
+    child_status_detail_output,
+    child_status_list_output,
+    format_stored_files,
+)
 from .memory_tools import MemoryTools
 from .tool_results import ToolResult, error_result, error_text, text_result
 
@@ -365,7 +369,7 @@ class OpenInspectTools:
             )
         children = response.json().get("children") or []
         if not children:
-            return text_result("No child sessions found.")
+            return text_result(child_status_list_output([], "No child sessions found."))
         counts = {"pending": 0, "running": 0, "done": 0, "failed": 0}
         lines: list[str] = []
         for child in children:
@@ -386,7 +390,7 @@ class OpenInspectTools:
             f"{len(children)} child session(s): {counts['running']} running, "
             f"{counts['pending']} pending, {counts['done']} done, {counts['failed']} failed"
         )
-        return text_result("\n".join([header, "", *lines]))
+        return text_result(child_status_list_output(children, "\n".join([header, "", *lines])))
 
     async def _child_detail(self, child_id: str, args: Mapping[str, Any]) -> ToolResult:
         include: list[str] = []
@@ -414,11 +418,21 @@ class OpenInspectTools:
                 f"Failed to get child: {error_text(response)} (HTTP {response.status_code})"
             )
         detail = response.json()
-        return text_result(self._format_child_detail(detail, child_id, args))
+        return text_result(
+            child_status_detail_output(
+                detail,
+                child_id,
+                self._format_child_detail(detail, child_id, args, include_response_text=False),
+            )
+        )
 
     @staticmethod
     def _format_child_detail(
-        detail: Mapping[str, Any], child_id: str, args: Mapping[str, Any]
+        detail: Mapping[str, Any],
+        child_id: str,
+        args: Mapping[str, Any],
+        *,
+        include_response_text: bool = True,
     ) -> str:
         # ``ChildSessionDetail``: the session row sits under ``session``;
         # sandbox, artifacts, responses and events sit beside it.
@@ -461,7 +475,12 @@ class OpenInspectTools:
             if final.get("error"):
                 lines.append(f"    Error: {final['error']}")
             lines.append("    Text:")
-            text = str(final.get("textContent") or "(empty)")
+            # The envelope carries the response body once in finalResponse.textContent.
+            text = (
+                str(final.get("textContent") or "(empty)")
+                if include_response_text
+                else "(see finalResponse.textContent)"
+            )
             lines.extend(f"      {line}" for line in text.split("\n"))
             calls = final.get("toolCalls") or []
             if calls:

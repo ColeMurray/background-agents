@@ -12,7 +12,6 @@ interface BudgetSectionProps {
   totalCost: number;
   maxSessionCostUsd?: number | null;
   canManageBudget: boolean;
-  harness?: string;
 }
 
 /** The session's cost row; render it inside a `PropertyList`. */
@@ -21,23 +20,11 @@ export function BudgetSection({
   totalCost,
   maxSessionCostUsd,
   canManageBudget,
-  harness,
 }: BudgetSectionProps) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  if (harness === "codex") {
-    return (
-      <PropertyRow label="Cost">
-        <span>{formatSessionCost(0)}</span>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          Codex dollar costs are not tracked. Token usage is recorded; dollar limits do not apply.
-        </p>
-      </PropertyRow>
-    );
-  }
 
   if (!canManageBudget && maxSessionCostUsd == null && totalCost <= 0) {
     return null;
