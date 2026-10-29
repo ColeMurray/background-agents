@@ -3,9 +3,9 @@
 import {
   ACTOR_ADMISSION_DENIED_CODE,
   ACTOR_EMAIL_REQUIRED_CODE,
+  type ActorProfileClaims,
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
 import type { Principal } from "../auth/principal";
 import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
 import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
@@ -467,6 +467,8 @@ async function finalizeServiceActor(
       }
     );
     const knownActor: KnownActor = { ...actor, canonicalUserId: user.id };
+    // Enrolled by a concurrent request after this one authenticated (#2470):
+    // apply claims exactly as for an actor known at authentication.
     if (user.outcome === "existing" && claims) {
       await claimKnownActorProfile(ctx, knownActor, claims);
     }
