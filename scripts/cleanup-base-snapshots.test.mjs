@@ -198,7 +198,9 @@ test("every protected managed name must resolve before preview or deletion", asy
             apply,
             nowMs: NOW_MS,
           }),
-          /Protected managed reference is absent from inventory/
+          new RegExp(
+            `Protected references match no managed snapshot in inventory: .*${baseName(11)}$`
+          )
         );
         assert.deepEqual(deleted, []);
       }
@@ -206,13 +208,49 @@ test("every protected managed name must resolve before preview or deletion", asy
   }
 });
 
-test("manual and out-of-scope protections may accompany resolved managed protections", () => {
-  const plan = planCleanup(
-    [artifact(0), artifact(1), artifact(2)],
-    { ...policy, protectedReferences: [name(0), "manual-base", "another-prefix-000000000000000b"] },
+test("a mistyped protected ID or name aborts preview and apply beside a valid protection", async () => {
+  // snap_1 is the intended rollback target; snap_7 is the deployed base.
+  const inventory = Array.from({ length: 8 }, (_, i) =>
+    artifact(i, { id: `snap_${i}`, createdAtMs: NOW_MS - (40 - i) * DAY_MS })
+  );
+  const intended = planCleanup(
+    inventory,
+    { provider: "vercel", protectedReferences: [name(7), "snap_1"] },
     NOW_MS
   );
-  assert.deepEqual(plan.delete, [{ id: "snap-1", name: name(1) }]);
+  assert.deepEqual(
+    intended.delete.map((item) => item.id),
+    ["snap_0", "snap_2"]
+  );
+  for (const typo of ["snap_l", name(1).replace(/1$/, "l")]) {
+    for (const apply of [false, true]) {
+      const deleted = [];
+      await assert.rejects(
+        cleanup(
+          { list: async () => inventory, delete: async (item) => deleted.push(item) },
+          { provider: "vercel", protectedReferences: [name(7), typo] },
+          { apply, nowMs: NOW_MS }
+        ),
+        (error) => error.message.endsWith(`in inventory: ${typo}`)
+      );
+      assert.deepEqual(deleted, []);
+    }
+  }
+});
+
+test("every unmatched protection is listed, including manual and out-of-scope entries", () => {
+  assert.throws(
+    () =>
+      planCleanup(
+        [artifact(0), artifact(1), artifact(2)],
+        {
+          ...policy,
+          protectedReferences: [name(0), "manual-base", "another-prefix-000000000000000b"],
+        },
+        NOW_MS
+      ),
+    /in inventory: manual-base, another-prefix-000000000000000b$/
+  );
 });
 
 function mockFetch(handler) {

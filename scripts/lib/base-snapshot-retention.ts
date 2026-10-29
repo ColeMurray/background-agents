@@ -105,19 +105,18 @@ export function planCleanup(
     seen.add(snapshot.id);
   }
   const protectedReferences = new Set(policy.protectedReferences);
-  const managedNames = new Set(managed.map((snapshot) => snapshot.name));
-  for (const reference of protectedReferences) {
-    if (pattern.test(reference) && !managedNames.has(reference) && !seen.has(reference)) {
-      throw new Error(`Protected managed reference is absent from inventory: ${reference}`);
-    }
+  // A mistyped ID or name would leave its intended artifact eligible for deletion.
+  const managedReferences = new Set(managed.flatMap((snapshot) => [snapshot.id, snapshot.name]));
+  const unmatched = [...protectedReferences].filter(
+    (reference) => !managedReferences.has(reference)
+  );
+  if (unmatched.length) {
+    throw new Error(
+      `Protected references match no managed snapshot in inventory: ${unmatched.join(", ")}`
+    );
   }
   const isProtected = (snapshot: BaseSnapshot) =>
     protectedReferences.has(snapshot.id) || protectedReferences.has(snapshot.name);
-  if (managed.length && !managed.some(isProtected)) {
-    throw new Error(
-      "No protected reference matches the managed inventory; check account and policy"
-    );
-  }
   const newest = new Set(
     managed
       .filter((snapshot) => snapshot.ready && Number.isFinite(snapshot.createdAtMs))
