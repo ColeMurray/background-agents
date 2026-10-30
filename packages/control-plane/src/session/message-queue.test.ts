@@ -2740,6 +2740,24 @@ describe("SessionMessageQueue", () => {
       }
     );
 
+    it("refuses a used request id from a new author before creating its participant", async () => {
+      const h = buildQueue();
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({ id: "msg-existing", client_request_id: staleRetry.clientRequestId })
+      );
+
+      await expect(h.queue.enqueuePromptFromApi(staleRetry)).rejects.toMatchObject({
+        name: "PromptRequestConflictError",
+      });
+
+      expect(h.participantService.create).not.toHaveBeenCalled();
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "prompt.enqueue",
+        expect.objectContaining({ outcome: "conflict", source: "github" })
+      );
+    });
+
     it("does not store the identity of a request deduplicated during the strict-auth await", async () => {
       const h = buildQueue();
       h.repository.getSession.mockReturnValue(

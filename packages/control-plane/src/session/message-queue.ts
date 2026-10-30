@@ -23,6 +23,7 @@ import {
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { isSessionPromptable } from "@open-inspect/shared/types/session-activity";
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
@@ -754,15 +755,22 @@ export class SessionMessageQueue {
     // A request id naming a prompt already queued is answered by enqueuePromptCore's
     // idempotency lookup, whatever the budget or capacity is now. New work is refused
     // here, before any participant changes.
-    if (
-      !data.clientRequestId ||
-      !this.messageRepository.getMessageByClientRequestId(data.clientRequestId)
-    ) {
+    const requested = data.clientRequestId
+      ? this.messageRepository.getMessageByClientRequestId(data.clientRequestId)
+      : null;
+    if (!requested) {
       this.assertBudgetAvailable();
       this.assertQueueCapacity();
     }
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
+      // An author new to the session cannot have sent the prompt this request id names.
+      if (requested) {
+        throw this.promptRequestConflict(
+          data.source,
+          this.messageRepository.getPendingOrProcessingCount()
+        );
+      }
       const name = data.scmEnrichment?.name || data.authorId;
       participant = data.canonicalUserId
         ? this.participantService.create(data.authorId, name, data.canonicalUserId)
@@ -805,14 +813,7 @@ export class SessionMessageQueue {
         existing.author_id !== data.participant.id ||
         existing.request_fingerprint !== requestFingerprint
       ) {
-        this.log.warn("prompt.enqueue", {
-          event: "prompt.enqueue",
-          outcome: "conflict",
-          source: data.source,
-          queue_depth_before: queueDepthBefore,
-          queue_depth_after: queueDepthBefore,
-        });
-        throw new PromptRequestConflictError();
+        throw this.promptRequestConflict(data.source, queueDepthBefore);
       }
       this.log.info("prompt.enqueue", {
         event: "prompt.enqueue",
@@ -828,6 +829,20 @@ export class SessionMessageQueue {
       };
     }
     return null;
+  }
+
+  private promptRequestConflict(
+    source: MessageSource,
+    queueDepth: number
+  ): PromptRequestConflictError {
+    this.log.warn("prompt.enqueue", {
+      event: "prompt.enqueue",
+      outcome: "conflict",
+      source,
+      queue_depth_before: queueDepth,
+      queue_depth_after: queueDepth,
+    });
+    return new PromptRequestConflictError();
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {

@@ -128,6 +128,29 @@ describe("POST /internal/prompt", () => {
     }
   );
 
+  it("refuses a used request id from a new author without adding its participant", async () => {
+    const { stub } = await initSession();
+    const enqueue = (authorId: string, canonicalUserId: string) =>
+      stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "Fix the bug",
+          authorId,
+          source: "github",
+          clientRequestId: "original-request",
+          canonicalUserId,
+        }),
+      });
+    expect((await enqueue("github:1001", "first-user")).status).toBe(200);
+
+    expect((await enqueue("github:2002", "other-user")).status).toBe(409);
+
+    expect(
+      await queryDO(stub, "SELECT id FROM participants WHERE user_id = ?", "github:2002")
+    ).toEqual([]);
+  });
+
   it("enqueues prompt and returns messageId", async () => {
     const { stub } = await initSession();
 
