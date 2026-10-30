@@ -793,6 +793,12 @@ variable "sandbox_unattended_inactivity_timeout_ms" {
   }
 }
 
+variable "provider_account_random_enabled" {
+  description = "Admit random provider-account pools for new sessions. Off by default; fixed defaults keep working, and turning it off refuses new random draws."
+  type        = bool
+  default     = false
+}
+
 variable "teams_enforcement" {
   description = "Session team authorization mode; private visibility applies in every mode."
   type        = string

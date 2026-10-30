@@ -192,6 +192,41 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     );
   });
 
+  it("inherits a randomly allocated parent account instead of drawing again", async () => {
+    const store = makeStore();
+    store.getCompleteProviderAuth.mockResolvedValue([
+      { ...parentProviderAuth[0], selectionSource: "installation_random" },
+      parentProviderAuth[1],
+    ]);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerAuth: [
+          {
+            provider: "openai",
+            authMode: "provider_account",
+            providerAccountId: "1".repeat(32),
+            selectionSource: "installation_random",
+            inheritedFromSessionId: parentId,
+          },
+          {
+            provider: "xai",
+            authMode: "api_key",
+            selectionSource: "fallback_api_key",
+            inheritedFromSessionId: parentId,
+          },
+        ],
+      })
+    );
+  });
+
   it("rejects a child whose model needs an auth mode the harness cannot select", async () => {
     const store = makeStore();
     store.getCompleteProviderAuth.mockResolvedValue([

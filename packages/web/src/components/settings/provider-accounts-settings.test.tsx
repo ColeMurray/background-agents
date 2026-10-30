@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import type {
   ModelProviderAccount,
   ModelProviderAccountDefault,
+  ProviderAccountRouting,
 } from "@open-inspect/shared/types/provider-accounts";
+import userEvent from "@testing-library/user-event";
 import { ProviderAccountsSettings } from "./provider-accounts-settings";
 import { CHATGPT_DEVICE_AUTHORIZATION_SETTINGS_URL } from "./provider-device-authorization-dialog";
 import { ANTHROPIC_CREDENTIAL_ROTATION_WARNING } from "./provider-authorization-code-dialog";
@@ -19,6 +21,8 @@ afterEach(cleanup);
 const refresh = vi.fn();
 const runAction = vi.fn();
 const setDefault = vi.fn();
+const setRouting = vi.fn();
+const refreshRouting = vi.fn();
 const startAuthorization = vi.fn();
 const pollAuthorization = vi.fn();
 const cancelAuthorization = vi.fn();
@@ -64,6 +68,7 @@ const authorizationCodeStart = {
 };
 let accountsResult: ModelProviderAccount[];
 let defaultsResult: ModelProviderAccountDefault[];
+let routingResult: { randomEnabled: boolean; routing: ProviderAccountRouting[] };
 let allowedPermissions: Set<string> | null;
 
 vi.mock("@/hooks/use-current-user-authorization", () => ({
@@ -89,6 +94,14 @@ vi.mock("@/hooks/use-provider-accounts", () => ({
   reconnectProviderAccount: (...args: unknown[]) => reconnectAccount(...args),
   renameProviderAccount: vi.fn(),
   setProviderAccountDefault: (...args: unknown[]) => setDefault(...args),
+  setProviderAccountRouting: (...args: unknown[]) => setRouting(...args),
+  useProviderAccountRouting: () => ({
+    randomEnabled: routingResult.randomEnabled,
+    routing: routingResult.routing,
+    loading: false,
+    error: undefined,
+    refresh: refreshRouting,
+  }),
   startProviderDeviceAuthorization: (...args: unknown[]) => startAuthorization(...args),
   pollProviderDeviceAuthorization: (...args: unknown[]) => pollAuthorization(...args),
   cancelProviderDeviceAuthorization: (...args: unknown[]) => cancelAuthorization(...args),
@@ -105,6 +118,8 @@ describe("ProviderAccountsSettings", () => {
     refresh.mockResolvedValue(undefined);
     runAction.mockResolvedValue(undefined);
     setDefault.mockResolvedValue(undefined);
+    setRouting.mockResolvedValue(undefined);
+    refreshRouting.mockResolvedValue(undefined);
     startAuthorization.mockResolvedValue({
       transactionId: "b".repeat(64),
       provider: "openai",
@@ -124,6 +139,7 @@ describe("ProviderAccountsSettings", () => {
     cancelAuthorizationCode.mockResolvedValue(undefined);
     accountsResult = [account];
     defaultsResult = [];
+    routingResult = { randomEnabled: false, routing: [] };
     allowedPermissions = null;
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -523,6 +539,7 @@ describe("ProviderAccountsSettings", () => {
     expect(screen.queryByLabelText("Automated authentication")).not.toBeInTheDocument();
     expect(screen.getAllByText("No default account selected")).toHaveLength(3);
     expect(screen.getAllByText("Choose Make default from an account above.")).toHaveLength(3);
+    expect(screen.queryByLabelText("New session assignment")).not.toBeInTheDocument();
     expect(screen.getAllByTitle("OpenAI")).not.toHaveLength(0);
     expect(screen.getAllByTitle("Grok")).not.toHaveLength(0);
     expect(screen.getAllByTitle("Anthropic")).not.toHaveLength(0);
@@ -717,6 +734,85 @@ describe("ProviderAccountsSettings", () => {
       screen.getByText("Repository acme/repo (7): XAI_OAUTH_ACCESS_TOKEN")
     ).toBeInTheDocument();
     expect(screen.getByText("Environment env-1: XAI_OAUTH_REFRESH_TOKEN")).toBeInTheDocument();
+  });
+
+  it("offers a random pool only when the server reports support", async () => {
+    const user = userEvent.setup();
+    const second = { ...account, id: "b".repeat(32), displayName: "Backup ChatGPT" };
+    accountsResult = [account, second];
+    routingResult = {
+      randomEnabled: true,
+      routing: [
+        {
+          provider: "openai",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+        {
+          provider: "xai",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+        {
+          provider: "anthropic",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+      ],
+    };
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getAllByLabelText("New session assignment")).toHaveLength(3);
+    await user.click(screen.getAllByLabelText("New session assignment")[0]);
+    await user.click(await screen.findByRole("option", { name: "Random account from a pool" }));
+
+    await waitFor(() => {
+      expect(setRouting).toHaveBeenCalledWith("openai", {
+        unattendedMode: "provider_account",
+        selection: { mode: "random", accountIds: [account.id, second.id] },
+      });
+    });
+  });
+
+  it("lets an admin clear a stored random pool after random assignment is turned off", async () => {
+    const user = userEvent.setup();
+    accountsResult = [account];
+    routingResult = {
+      randomEnabled: false,
+      routing: [
+        {
+          provider: "openai",
+          unattendedMode: "provider_account",
+          selection: { mode: "random", accountIds: [account.id] },
+        },
+        {
+          provider: "xai",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+        {
+          provider: "anthropic",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+      ],
+    };
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getAllByLabelText("New session assignment")).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: "Team ChatGPT" })).toBeDisabled();
+    await user.click(screen.getByLabelText("New session assignment"));
+    expect(
+      await screen.findByRole("option", { name: "Random account from a pool" })
+    ).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("option", { name: "One default account" }));
+
+    await waitFor(() => {
+      expect(setRouting).toHaveBeenCalledWith("openai", {
+        unattendedMode: "provider_account",
+        selection: { mode: "unconfigured" },
+      });
+    });
   });
 
   it("reports when legacy credential inventory cannot be loaded", () => {

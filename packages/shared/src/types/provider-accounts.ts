@@ -161,6 +161,51 @@ export type ModelProviderAccountDefaultsResponse = z.infer<
   typeof modelProviderAccountDefaultsResponseSchema
 >;
 
+/**
+ * Largest random pool a provider may store. Stays under D1's 100-parameter
+ * ceiling when the membership write binds every id twice.
+ */
+export const PROVIDER_ACCOUNT_POOL_MAX_SIZE = 32;
+
+const providerAccountPoolSchema = z
+  .array(modelProviderAccountIdSchema)
+  .min(1)
+  .max(PROVIDER_ACCOUNT_POOL_MAX_SIZE)
+  .refine((ids) => new Set(ids).size === ids.length, "Duplicate provider accounts");
+
+export const providerAccountRoutingSelectionSchema = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("unconfigured") }),
+  z.strictObject({ mode: z.literal("fixed"), accountId: modelProviderAccountIdSchema }),
+  z.strictObject({ mode: z.literal("random"), accountIds: providerAccountPoolSchema }),
+]);
+export type ProviderAccountRoutingSelection = z.infer<typeof providerAccountRoutingSelectionSchema>;
+
+export const providerAccountRoutingSchema = z.strictObject({
+  provider: subscriptionProviderIdSchema,
+  unattendedMode: providerAuthModeSchema,
+  selection: providerAccountRoutingSelectionSchema,
+});
+export type ProviderAccountRouting = z.infer<typeof providerAccountRoutingSchema>;
+
+export const providerAccountRoutingRequestSchema = z.strictObject({
+  unattendedMode: providerAuthModeSchema,
+  selection: providerAccountRoutingSelectionSchema,
+});
+export type ProviderAccountRoutingRequest = z.infer<typeof providerAccountRoutingRequestSchema>;
+
+export const providerAccountRoutingResponseSchema = z.strictObject({
+  routing: providerAccountRoutingSchema,
+});
+export type ProviderAccountRoutingResponse = z.infer<typeof providerAccountRoutingResponseSchema>;
+
+export const providerAccountRoutingListResponseSchema = z.strictObject({
+  randomEnabled: z.boolean(),
+  routing: z.array(providerAccountRoutingSchema).max(SUBSCRIPTION_PROVIDER_IDS.length),
+});
+export type ProviderAccountRoutingListResponse = z.infer<
+  typeof providerAccountRoutingListResponseSchema
+>;
+
 const sessionModelProviderAuthRoutingSchema = {
   selectionSource: z.string().min(1),
 } as const;

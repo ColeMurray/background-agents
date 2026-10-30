@@ -95,6 +95,7 @@ const ENV_CONFIG_KEYS = {
   EXECUTION_TIMEOUT_MS: true,
   SECRETS_CAP_ENFORCEMENT: true,
   TEAMS_ENFORCEMENT: true,
+  PROVIDER_ACCOUNT_RANDOM_ENABLED: true,
   LOG_LEVEL: true,
 } as const satisfies Record<keyof EnvConfig, true>;
 

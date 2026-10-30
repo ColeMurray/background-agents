@@ -104,6 +104,7 @@ module "control_plane_worker" {
       SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_unattended_inactivity_timeout_ms) }
       SANDBOX_BOOT_TIMEOUT_MS                  = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT                        = { value = var.teams_enforcement }
+      PROVIDER_ACCOUNT_RANDOM_ENABLED          = { value = tostring(var.provider_account_random_enabled) }
     },
     var.session_do_location_hint != "" ? {
       SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }

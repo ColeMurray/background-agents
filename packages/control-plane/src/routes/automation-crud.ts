@@ -32,6 +32,7 @@ import {
   resolveHarnessAutomationUpdate,
   validateHarnessAutomationAuth,
 } from "../harness-admission";
+import { providerAccountRandomEnabled } from "../model-provider-accounts/random-allocation";
 import { isValidModel, normalizeModelId } from "@open-inspect/shared/models";
 import {
   AutomationStore,
@@ -335,7 +336,13 @@ async function handleCreateAutomation(
   );
   if (harnessAuthIncompatibility) return error(harnessAuthIncompatibility.message, 400);
   try {
-    await validateHarnessAutomationAuth(ctx.db, harness, model, providerSelections);
+    await validateHarnessAutomationAuth(
+      ctx.db,
+      harness,
+      model,
+      providerSelections,
+      providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED)
+    );
   } catch (cause) {
     if (
       cause instanceof HarnessAdmissionError ||
@@ -617,7 +624,8 @@ async function handleUpdateAutomation(
         ctx.db,
         nextHarness,
         updatedSelection.model,
-        nextProviderSelections ?? {}
+        nextProviderSelections ?? {},
+        providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED)
       );
   } catch (cause) {
     if (

@@ -8,6 +8,7 @@ import {
   connectModelProviderAccountRequestSchema,
   modelProviderAccountDisplayNameSchema,
   modelProviderAccountDefaultRequestSchema,
+  providerAccountRoutingRequestSchema,
   modelProviderAccountStatusSchema,
   reconnectModelProviderAccountRequestSchema,
   startProviderAuthorizationCodeRequestSchema,
@@ -34,6 +35,7 @@ import {
 } from "../db/provider-account-defaults";
 import { SessionIndexStore } from "../db/session-index";
 import { listLegacyProviderCredentials } from "../model-provider-accounts/legacy-provider-credentials";
+import { providerAccountRandomEnabled } from "../model-provider-accounts/random-allocation";
 import {
   ModelProviderAccountService,
   ProviderAccountServiceError,
@@ -509,6 +511,45 @@ modelProviderAccountRoutes.delete(
       await new ProviderDefaultStore(ctx.db).remove(parsedProvider);
       return new Response(null, { status: 204 });
     })
+);
+modelProviderAccountRoutes.get("/model-provider-account-routing", ACCOUNTS_READ, (c) =>
+  dispatch(c, async (_request, env, _params, ctx) =>
+    json({
+      randomEnabled: providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED),
+      routing: await new ProviderDefaultStore(ctx.db).listRouting(),
+    })
+  )
+);
+modelProviderAccountRoutes.put("/model-provider-account-routing/:provider", ACCOUNTS_MANAGE, (c) =>
+  dispatch(c, async (request, env, params, ctx) => {
+    const parsedProvider = provider(params.provider);
+    if (parsedProvider instanceof Response) return parsedProvider;
+    const body = await parseBody(
+      request,
+      providerAccountRoutingRequestSchema,
+      "Invalid provider routing"
+    );
+    if (body instanceof Response) return body;
+    try {
+      const routing = await new ProviderDefaultStore(ctx.db).setRouting(
+        parsedProvider,
+        body,
+        ctx.principal.userId,
+        Date.now(),
+        providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED)
+      );
+      return json({ routing });
+    } catch (cause) {
+      if (cause instanceof ProviderDefaultConstraintError) return error(cause.message, 409);
+      logger.error("provider_account.routing_update_failed", {
+        event: "provider_account.routing_update_failed",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        error: cause instanceof Error ? cause : String(cause),
+      });
+      return error("Provider routing could not be updated", 502);
+    }
+  })
 );
 
 async function handleLegacyProviderAccess(

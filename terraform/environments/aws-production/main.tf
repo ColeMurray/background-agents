@@ -40,11 +40,12 @@ module "control_plane" {
   github_deploy   = var.github_deploy
 
   config = merge({
-    APP_NAME               = "Open-Inspect"
-    LOG_LEVEL              = "info"
-    SANDBOX_PROVIDER       = "modal"
-    UNSAFE_ALLOW_ALL_USERS = "false"
-    TEAMS_ENFORCEMENT      = "shadow"
+    APP_NAME                        = "Open-Inspect"
+    LOG_LEVEL                       = "info"
+    SANDBOX_PROVIDER                = "modal"
+    UNSAFE_ALLOW_ALL_USERS          = "false"
+    TEAMS_ENFORCEMENT               = "shadow"
+    PROVIDER_ACCOUNT_RANDOM_ENABLED = "false"
   }, var.config)
 
   tags = { Environment = local.environment }
