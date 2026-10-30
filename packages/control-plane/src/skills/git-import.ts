@@ -534,15 +534,22 @@ async function mapFetchedSkillImport(
  * Fetch, map, and validate one skill directory at a resolved commit.
  *
  * @param nameOverride - Canonical name to store under, overriding the source.
+ * @param expectedCommitSha - Reviewed commit; a ref that moved fails before the tree is listed.
  * @throws SkillImportError with the status the caller should return.
  */
 export async function fetchSkillImport(
   provider: RepositoryReader,
   source: SkillImportSourceInput,
   nameOverride?: string | null,
-  resolvedRepository?: RepositoryAccessResult
+  resolvedRepository?: RepositoryAccessResult,
+  expectedCommitSha?: string
 ): Promise<SkillImportResult> {
-  const resolved = await resolveImportRepository(provider, source, resolvedRepository);
+  const resolved = await resolveImportRepository(
+    provider,
+    source,
+    resolvedRepository,
+    expectedCommitSha
+  );
   const plan = planSkillImport(resolved, source.subdirectory ?? null);
   const { files } = await readBlobs(resolved, [plan], MAX_SKILL_REVISION_BYTES);
   return mapFetchedSkillImport(resolved, plan, files[0], nameOverride);

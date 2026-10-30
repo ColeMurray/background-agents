@@ -222,11 +222,12 @@ async function fetchAuthorizedSkillImport(
   env: Env,
   ctx: RequestContext,
   source: SkillImportSourceInput,
-  name?: string | null
+  name?: string | null,
+  expectedCommitSha?: string
 ): Promise<SkillImportResult | Response> {
   const access = await authorizedImportRepository(env, ctx, source);
   if (access instanceof Response) return access;
-  return fetchSkillImport(access.provider, source, name, access.resolved);
+  return fetchSkillImport(access.provider, source, name, access.resolved, expectedCommitSha);
 }
 
 async function handlePreviewSkill(
@@ -344,7 +345,14 @@ async function handleImportSkill(
   );
   if (denied) return denied;
   try {
-    const result = await fetchAuthorizedSkillImport(env, ctx, parsed.source, parsed.name);
+    // A moved ref fails before the skill is listed or read, as in the collection confirm.
+    const result = await fetchAuthorizedSkillImport(
+      env,
+      ctx,
+      parsed.source,
+      parsed.name,
+      parsed.expectedCommitSha
+    );
     if (result instanceof Response) return result;
     const stale = confirmedImport(result, parsed);
     if (stale) return stale;
