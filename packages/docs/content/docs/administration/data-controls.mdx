@@ -40,11 +40,10 @@ What archiving does:
 - The session's history, diffs, pull requests, and attribution are kept.
 - Archiving requests a preserve-and-stop shutdown rather than leaving the sandbox running until its inactivity timeout. State capture and provider shutdown may finish after the archive request returns, and either may fail. Queued or running work must finish or be stopped before archiving.
 
-Two situations are refused:
+One situation is refused:
 
 | Situation                              | Result                                                                                     |
 | -------------------------------------- | ------------------------------------------------------------------------------------------ |
-| The session is cancelled               | "Cancelled sessions cannot be archived." Cancelled is already a terminal state.            |
 | The session has queued or running work | "Cannot archive a session with queued work." Wait for the turn to finish or stop it first. |
 
 In the web app a refused archive shows the toast "Failed to archive session".
@@ -53,7 +52,7 @@ Archiving a child session does not affect its parent. A child that is archived m
 
 ## Batch archive
 
-The web app has no multi-select for archiving. The control plane accepts a batch request, `POST /sessions/batch-archive`, for up to 25 sessions at a time, gated by the `sessions.bulk_archive` permission (Owner and Administrator). Each session in the batch is archived independently and reports its own outcome (`archived`, `already_archived`, `skipped_cancelled`, `skipped_queued_work`, `not_found`, or `failed`), so a refused session does not block the others. Sessions that failed can be retried on their own.
+The web app has no multi-select for archiving. The control plane accepts a batch request, `POST /sessions/batch-archive`, for up to 25 sessions at a time, gated by the `sessions.bulk_archive` permission (Owner and Administrator). Each session in the batch is archived independently and reports its own outcome (`archived`, `already_archived`, `skipped_queued_work`, `not_found`, or `failed`), so a refused session does not block the others. Sessions that failed can be retried on their own.
 
 ## Restoring from Settings › Data Controls
 
@@ -75,7 +74,7 @@ Hover the row and click **Unarchive**. The toast "Session unarchived" confirms i
 <Step>
 ### Continue the work
 
-The restored session returns to whatever status its history implies (for example `completed` if its last turn finished) and can be prompted again. It reappears in the inbox and the sessions list.
+The restored session returns to whatever status its history implies (for example `completed` if its last turn finished) and can be prompted again. A session that was cancelled before it was archived returns as `cancelled` and stays unpromptable. It reappears in the inbox and the sessions list.
 
 </Step>
 </Steps>
@@ -96,9 +95,9 @@ For operators and service integrations, the control plane exports paginated sess
 
 <Accordions>
   <Accordion title="Archive failed with a toast">
-    The session is cancelled, or it still has a queued or running prompt. Stop the prompt (see
+    The session still has a queued or running prompt. Stop the prompt (see
     [Follow-ups and stopping](/sessions/follow-ups-and-stopping)), wait for the status to settle,
-    and archive again. Cancelled sessions cannot be archived at all.
+    and archive again.
 
 </Accordion>
   <Accordion title="No Unarchive button on Data Controls">

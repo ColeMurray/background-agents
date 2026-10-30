@@ -150,12 +150,6 @@ export class SessionLifecycleHandler {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    if (session.status === "cancelled") {
-      return archiveResponse("skipped_cancelled", {
-        error: "Cancelled sessions cannot be archived",
-      });
-    }
-
     if (this.messageRepository.getPendingOrProcessingCount() > 0) {
       return archiveResponse("skipped_queued_work", {
         error: "Cannot archive a session with queued work",
@@ -240,6 +234,13 @@ export class SessionLifecycleHandler {
 
     if (session.status !== "archived") {
       return Response.json({ error: "Session is not archived" }, { status: 409 });
+    }
+
+    // A cancelled session's messages read as failed, and a failed child can be
+    // resumed by its parent, so settling from messages would undo the cancel.
+    if (this.sessionCoreRepository.hasBeenCancelled()) {
+      await this.statusService.transition("cancelled");
+      return Response.json({ status: "cancelled" });
     }
 
     // Restoring, not starting: unarchive returns the session to whatever its

@@ -171,7 +171,7 @@ export class SessionStatusService {
 
     const publicSessionId = this.getPublicSessionId(session);
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
+    this.repository.cancelSession(session.id, updatedAt);
     terminalizeUnfinishedMessages();
     await this.projectTransition(
       session,

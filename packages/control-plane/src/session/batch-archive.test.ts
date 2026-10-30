@@ -44,18 +44,15 @@ describe("archiveSessionBatch", () => {
       const outcome =
         id === "queued"
           ? "skipped_queued_work"
-          : id === "cancelled"
-            ? "skipped_cancelled"
-            : id === "already"
-              ? "already_archived"
-              : "archived";
+          : id === "already"
+            ? "already_archived"
+            : "archived";
       return Response.json({ outcome }, { status: outcome.startsWith("skipped") ? 409 : 200 });
     });
     const ids = [
       "broken",
       "missing",
       "queued",
-      "cancelled",
       "already",
       "invalid",
       "inconsistent",
@@ -66,7 +63,6 @@ describe("archiveSessionBatch", () => {
       { sessionId: "broken", outcome: "failed" },
       { sessionId: "missing", outcome: "not_found" },
       { sessionId: "queued", outcome: "skipped_queued_work" },
-      { sessionId: "cancelled", outcome: "skipped_cancelled" },
       { sessionId: "already", outcome: "already_archived" },
       { sessionId: "invalid", outcome: "failed" },
       { sessionId: "inconsistent", outcome: "failed" },

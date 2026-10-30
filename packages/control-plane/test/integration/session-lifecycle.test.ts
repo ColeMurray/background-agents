@@ -142,6 +142,31 @@ describe("POST /internal/unarchive", () => {
     expect((await stateRes.json<{ status: string }>()).status).toBe("completed");
   });
 
+  it("unarchive restores a cancelled session to cancelled", async () => {
+    const { stub } = await initSession({ userId: "user-1" });
+    const cancelRes = await stub.fetch("http://internal/internal/cancel", { method: "POST" });
+    expect(cancelRes.status).toBe(200);
+
+    const archiveRes = await stub.fetch("http://internal/internal/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+    expect(archiveRes.status).toBe(200);
+    expect(await archiveRes.json<{ status: string }>()).toMatchObject({ status: "archived" });
+
+    const res = await stub.fetch("http://internal/internal/unarchive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json<{ status: string }>()).toEqual({ status: "cancelled" });
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    expect((await stateRes.json<{ status: string }>()).status).toBe("cancelled");
+  });
+
   // The handler unit test mocks the settle service, so these are what actually
   // pin each message state to the status it produces.
   // Only terminal message states appear here: a session with a pending or

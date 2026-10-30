@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS session (
   reasoning_effort TEXT,                            -- Session-level reasoning effort default
   status TEXT DEFAULT 'created',                    -- 'created', 'active', 'completed', 'failed', 'archived', 'cancelled'
   status_revision INTEGER NOT NULL DEFAULT 1,
+  cancelled_at INTEGER,                             -- Set on cancel; survives archive so unarchive restores 'cancelled'
   parent_session_id TEXT,                           -- Parent session ID (NULL for top-level)
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
@@ -775,6 +776,16 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 57,
     description: "Record each prompt author's account as it was when the prompt was queued",
     run: "ALTER TABLE messages ADD COLUMN author_canonical_user_id TEXT",
+  },
+  {
+    id: 58,
+    description: "Remember cancellation through archive",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE session ADD COLUMN cancelled_at INTEGER`);
+      sql.exec(
+        `UPDATE session SET cancelled_at = updated_at WHERE status = 'cancelled' AND cancelled_at IS NULL`
+      );
+    },
   },
 ];
 
