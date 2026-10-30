@@ -13,7 +13,7 @@ import { McpServerStore } from "../db/mcp-servers";
 import { McpError, mcpErrorResponse } from "../mcp/errors";
 import { assertMcpUserAccess } from "../mcp/authorization";
 import { MCP_STREAM_TIMEOUT_MS, MCP_UPSTREAM_HEADERS_TIMEOUT_MS } from "../mcp/relay";
-import type { PersonalMcpWithheldCode } from "../mcp/runtime-config";
+import { personalMcpWithheldReason, type PersonalMcpWithheldCode } from "../mcp/runtime-config";
 import {
   HARNESS_IDS,
   getHarnessCapabilities,
@@ -104,7 +104,7 @@ export class SessionMcpContext {
   disableRuntime(): void {
     this.sql.exec("UPDATE sandbox SET mcp_runtime_version = ?", POISONED_RUNTIME_VERSION);
   }
-  recordRuntimeVersion(version: number, bridgeInstanceId?: string): void {
+  recordRuntimeVersion(version: number, bridgeInstanceId?: string, runtimeVersion?: string): void {
     // A transport reconnect keeps the live bridge and its owned cleanup task.
     // A replacement (or legacy unidentified) bridge cannot attest that the
     // previous process disposed its native clients, even after authority closed.
@@ -123,6 +123,33 @@ export class SessionMcpContext {
       POISONED_RUNTIME_VERSION,
       version,
       bridgeInstanceId ?? null
+    );
+    this.withholdForReportedRuntime(runtimeVersion);
+  }
+  /**
+   * A base-image launch assumes the current runtime. A sandbox that reports an
+   * older one at readiness (an operator-pinned base snapshot, say) still holds its
+   * personal servers, but they are no longer prepared or proxied, and each prompt
+   * says why.
+   */
+  private withholdForReportedRuntime(runtimeVersion: string | undefined): void {
+    if (!runtimeVersion) return;
+    const reason = personalMcpWithheldReason(
+      getValidHarnessOrDefault(this.sessions.getSession()?.harness),
+      runtimeVersion
+    );
+    const launch = this.launch();
+    if (!reason || !launch.some((entry) => entry.authMode === "user_oauth" && !entry.withheld))
+      return;
+    this.sql.exec(
+      "UPDATE sandbox SET mcp_servers = ?",
+      JSON.stringify(
+        launch.map((entry) =>
+          entry.authMode === "user_oauth" && !entry.withheld
+            ? { ...entry, withheld: reason }
+            : entry
+        )
+      )
     );
   }
   private launch(): LaunchBinding[] {
@@ -232,24 +259,35 @@ export class SessionMcpContext {
     return result;
   }
   /**
-   * One warning per personal server this allocation withheld at launch. The
-   * sandbox never received those servers, so only the control plane can say why.
+   * The warning for personal servers this allocation withheld, or null. The sandbox
+   * never ran them, so only the control plane can say why. One warning names them
+   * all, so a prompt never carries several warnings with the same timestamp.
    */
-  withheldWarnings(): { serverId: string; message: string }[] {
-    if (this.env.MCP_USER_DELEGATION_ENABLED !== "true") return [];
-    const withheld = this.launch().filter((entry) => entry.withheld);
-    if (!withheld.length) return [];
-    const harness = getHarnessLabel(getValidHarnessOrDefault(this.sessions.getSession()?.harness));
-    const supported = HARNESS_IDS.filter((id) => getHarnessCapabilities(id).personalMcp)
-      .map(getHarnessLabel)
-      .join(" and ");
-    return withheld.map((entry) => ({
-      serverId: entry.id,
-      message:
-        entry.withheld === "mcp_harness_unsupported"
-          ? `Personal MCP ${entry.name} works only in ${supported} sessions, so this ${harness} session can't use it. Other tools remain available.`
-          : `Personal MCP ${entry.name} needs a newer sandbox image than this session runs. Start a new session to use it. Other tools remain available.`,
-    }));
+  withheldWarning(): string | null {
+    const byReason = new Map<PersonalMcpWithheldCode, string[]>();
+    for (const entry of this.launch())
+      if (entry.withheld)
+        byReason.set(entry.withheld, [...(byReason.get(entry.withheld) ?? []), entry.name]);
+    if (!byReason.size) return null;
+    const list = (names: string[]) =>
+      new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(names);
+    const sentences = [...byReason].map(([reason, names]) => {
+      const one = names.length === 1;
+      const subject = one ? `Personal MCP ${names[0]}` : `Personal MCP servers ${list(names)}`;
+      const object = one ? "it" : "them";
+      if (reason === "mcp_harness_unsupported") {
+        const harness = getHarnessLabel(
+          getValidHarnessOrDefault(this.sessions.getSession()?.harness)
+        );
+        const supported = list(
+          HARNESS_IDS.filter((id) => getHarnessCapabilities(id).personalMcp).map(getHarnessLabel)
+        );
+        return `${subject} ${one ? "works" : "work"} only in ${supported} sessions, so this ${harness} session can't use ${object}.`;
+      }
+      // An outdated prebuilt image can serve new sessions until it is rebuilt.
+      return `${subject} ${one ? "needs" : "need"} a newer sandbox image than this session runs. Sessions that start after the image is rebuilt can use ${object}.`;
+    });
+    return [...sentences, "Other tools remain available."].join(" ");
   }
   private async authenticate(request: Request) {
     const before = this.sandboxes.getSandbox();

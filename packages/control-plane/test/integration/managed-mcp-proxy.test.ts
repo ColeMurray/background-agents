@@ -251,12 +251,11 @@ describe("managed MCP actual sandbox route + session authority", () => {
       },
     };
     await runInSessionDO(f.stub, async (instance, state) => {
-      const appEnv = (instance as unknown as SessionDOInternals).appEnv;
-      const context = (delegation = appEnv.MCP_USER_DELEGATION_ENABLED) =>
+      const context = () =>
         new SessionMcpContext(
           state.storage.sql,
           env.DB,
-          { ...appEnv, MCP_USER_DELEGATION_ENABLED: delegation },
+          (instance as unknown as SessionDOInternals).appEnv,
           new SessionCoreRepository(state.storage.sql, (run) => state.storage.transactionSync(run)),
           componentsOf(instance).sandboxRepository
         );
@@ -267,26 +266,23 @@ describe("managed MCP actual sandbox route + session authority", () => {
         servers: [],
         unavailable: [],
       });
-      expect(context().withheldWarnings()).toEqual([
-        {
-          serverId: f.server.id,
-          message:
-            "Personal MCP example needs a newer sandbox image than this session runs. Start a new session to use it. Other tools remain available.",
-        },
-      ]);
-      state.storage.sql.exec("UPDATE session SET harness = 'codex'");
-      context().recordLaunch([routed], "mcp_harness_unsupported");
-      expect(context().withheldWarnings()[0].message).toBe(
-        "Personal MCP example works only in OpenCode and Claude Agent sessions, so this Codex session can't use it. Other tools remain available."
+      expect(context().withheldWarning()).toBe(
+        "Personal MCP example needs a newer sandbox image than this session runs. Sessions that start after the image is rebuilt can use it. Other tools remain available."
       );
-      // With delegation off, no harness could use the server, so the harness is not the reason.
-      expect(context("false").withheldWarnings()).toEqual([]);
+      state.storage.sql.exec("UPDATE session SET harness = 'codex'");
+      context().recordLaunch(
+        [routed, { ...routed, id: "second-server", name: "wiki" }],
+        "mcp_harness_unsupported"
+      );
+      expect(context().withheldWarning()).toBe(
+        "Personal MCP servers example and wiki work only in OpenCode and Claude Agent sessions, so this Codex session can't use them. Other tools remain available."
+      );
     });
     const denied = await f.context({});
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({ code: "mcp_denied" });
   });
-  it("files the withheld-server warning under the prompt the sandbox received", async () => {
+  it("files one withheld-server warning under the prompt the sandbox received", async () => {
     const sessionName = `mcp-withheld-${crypto.randomUUID()}`;
     const { stub } = await initNamedSession(sessionName);
     await seedSandboxAuth(stub, { authToken: token, sandboxId: "allocation-1" });
@@ -297,6 +293,13 @@ describe("managed MCP actual sandbox route + session authority", () => {
         {
           id: "server-1",
           name: "tracker",
+          authMode: "user_oauth",
+          authRevision: 1,
+          withheld: "mcp_runtime_outdated",
+        },
+        {
+          id: "server-2",
+          name: "wiki",
           authMode: "user_oauth",
           authRevision: 1,
           withheld: "mcp_runtime_outdated",
@@ -325,22 +328,70 @@ describe("managed MCP actual sandbox route + session authority", () => {
         stub,
         "SELECT id, data, message_id FROM events WHERE type = 'warning'"
       );
+      // Two servers share one event: same-millisecond warnings would share a timeline key.
       expect(warnings).toEqual([
-        {
-          id: `mcp-withheld:${messageId}:server-1`,
-          message_id: messageId,
-          data: expect.any(String),
-        },
+        { id: `mcp-withheld:${messageId}`, message_id: messageId, data: expect.any(String) },
       ]);
       expect(JSON.parse(warnings[0].data)).toMatchObject({
         type: "warning",
         scope: "mcp",
         messageId,
-        message: expect.stringContaining("Personal MCP tracker needs a newer sandbox image"),
+        message: expect.stringContaining(
+          "Personal MCP servers tracker and wiki need a newer sandbox image"
+        ),
       });
     } finally {
       await closeWebSocket(ws!, { bestEffort: true });
     }
+  });
+  it("withholds personal servers once the sandbox reports a runtime older than its launch assumed", async () => {
+    const f = await fixture();
+    const launch = async () =>
+      JSON.parse(
+        (await queryDO<{ mcp_servers: string }>(f.stub, "SELECT mcp_servers FROM sandbox"))[0]
+          .mcp_servers
+      ) as { withheld?: string }[];
+    const { ws, response } = await openSandboxWs(f.sessionName, {
+      authToken: token,
+      sandboxId: "allocation-1",
+    });
+    expect(response.status).toBe(101);
+    ws!.accept();
+    try {
+      // A base snapshot pinned to an older runtime reports it at readiness.
+      ws!.send(
+        JSON.stringify({
+          type: "ready",
+          sandboxId: "allocation-1",
+          timestamp: Date.now(),
+          runtimeVersion: "v79-earlier",
+        })
+      );
+      await expect.poll(async () => (await launch())[0].withheld).toBe("mcp_runtime_outdated");
+    } finally {
+      await closeWebSocket(ws!, { bestEffort: true });
+    }
+    const denied = await f.context({});
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "mcp_denied" });
+  });
+  it("keeps personal servers for a sandbox that reports a current or no runtime version", async () => {
+    const f = await fixture();
+    await runInSessionDO(f.stub, async (instance, state) => {
+      const context = new SessionMcpContext(
+        state.storage.sql,
+        env.DB,
+        (instance as unknown as SessionDOInternals).appEnv,
+        new SessionCoreRepository(state.storage.sql, (run) => state.storage.transactionSync(run)),
+        componentsOf(instance).sandboxRepository
+      );
+      // No prepared turn, so an unidentified bridge's readiness does not trip the cleanup fence.
+      state.storage.sql.exec("UPDATE messages SET mcp_context = NULL");
+      context.recordRuntimeVersion(1, undefined, "v80-managed-mcp");
+      context.recordRuntimeVersion(1);
+      expect(context.withheldWarning()).toBeNull();
+      expect((await context.prepare("alice-message")).servers).toEqual(["example"]);
+    });
   });
   it("preserves a healthy bridge across transport reconnect and turn cleanup", async () => {
     const f = await fixture();

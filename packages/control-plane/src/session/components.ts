@@ -572,15 +572,12 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
     (messageId) => mcpContext.prepare(messageId),
     (messageId) => {
-      for (const { serverId, message } of mcpContext.withheldWarnings()) {
-        recordSessionWarning(
-          eventRepository,
-          messenger,
-          message,
-          `mcp-withheld:${messageId}:${serverId}`,
-          { scope: "mcp", messageId }
-        );
-      }
+      const warning = mcpContext.withheldWarning();
+      if (warning)
+        recordSessionWarning(eventRepository, messenger, warning, `mcp-withheld:${messageId}`, {
+          scope: "mcp",
+          messageId,
+        });
     }
   );
 
@@ -671,7 +668,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     messageQueue,
     log,
     lifecycleManager,
-    (version, bridgeInstanceId) => mcpContext.recordRuntimeVersion(version, bridgeInstanceId)
+    (version, bridgeInstanceId, runtimeVersion) =>
+      mcpContext.recordRuntimeVersion(version, bridgeInstanceId, runtimeVersion)
   );
   const pushService = new SandboxPushService(log, wsManager, () =>
     lifecycleManager.pushAdmissionDecision()
