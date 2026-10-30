@@ -3,10 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 from .constants import OPENCODE_PORT
 from .process_output import iter_process_lines
+
+# The domain owner forwards SIGTERM to the bridge (4s) and then reaps
+# descendants (3s). This wait covers both before a SIGKILL, which would
+# not itself prove containment.
+BRIDGE_DOMAIN_STOP_TIMEOUT_SECONDS = 8.0
 
 if TYPE_CHECKING:
     from .runtime_config import BridgeProcessConfig
@@ -42,8 +48,14 @@ class AgentBridgeProcess:
             self.log.info("bridge.skip", reason="no_session_id")
             return
 
+        # The domain owner is the process we signal and wait on. It reaps the
+        # bridge's vendor descendants after the bridge exits, including tools
+        # that called setsid(), and only then returns the bridge's status.
         self._process = await asyncio.create_subprocess_exec(
-            "python",
+            sys.executable,
+            "-m",
+            "sandbox_runtime.bridge_domain",
+            sys.executable,
             "-m",
             "sandbox_runtime.bridge",
             "--sandbox-id",
@@ -93,12 +105,16 @@ class AgentBridgeProcess:
             with contextlib.suppress(ProcessLookupError):
                 self._process.terminate()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                await asyncio.wait_for(
+                    self._process.wait(), timeout=BRIDGE_DOMAIN_STOP_TIMEOUT_SECONDS
+                )
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     self._process.kill()
                 try:
-                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                    await asyncio.wait_for(
+                        self._process.wait(), timeout=BRIDGE_DOMAIN_STOP_TIMEOUT_SECONDS
+                    )
                 except TimeoutError:
                     self.log.warn("bridge.stop_timeout")
 

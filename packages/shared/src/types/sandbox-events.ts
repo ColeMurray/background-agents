@@ -107,6 +107,13 @@ const nonArtifactSandboxEventSchemas = [
     opencodeSessionId: z.string().nullable().optional(),
     /** Which harness the runtime booted; the session DO warns when it differs from the session's. */
     harness: harnessIdSchema.optional(),
+    /**
+     * The prompt a harness that contained its predecessor still owes a result
+     * for, or null when it owes none. Absent when the runtime cannot make
+     * that claim; the control plane then keeps a processing prompt as it
+     * always has.
+     */
+    activeMessageId: z.string().min(1).nullable().optional(),
     // SANDBOX_VERSION of the image this sandbox booted from. Stamped onto any
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),

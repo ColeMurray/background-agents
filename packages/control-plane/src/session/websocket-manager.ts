@@ -176,14 +176,17 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   acceptAndSetSandboxSocket(ws: SessionWebSocket, sandboxId?: string): { replaced: boolean } {
-    const socketId = `sbws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const now = Date.now();
+    const socketId = `sbws-${now}-${Math.random().toString(36).slice(2, 10)}`;
     const tags = ["sandbox", ...(sandboxId ? [`sid:${sandboxId}`] : []), `socket:${socketId}`];
     this.host.adopt(ws, tags);
     // Advance the persisted identity before anything else observes the new
     // socket: from here on every earlier bridge socket is refused at dispatch
     // whether or not its close below completes, and recovery after a restart
-    // re-selects this socket by its tag.
-    this.sandboxRepository.setActiveSocketId(socketId);
+    // re-selects this socket by its tag. The attach time was read before the
+    // identity advanced, so a dispatch that targets this socket, which reads
+    // the clock afterwards, never carries an earlier mark.
+    this.sandboxRepository.setActiveSocketId(socketId, now);
 
     let replaced = false;
     // Close every other live sandbox socket, not only the cached one: after

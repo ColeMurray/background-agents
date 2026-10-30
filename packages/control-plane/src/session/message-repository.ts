@@ -27,6 +27,7 @@ const messageStopConfirmationRowSchema = messageRowSchema
   .pick({ id: true, stop_confirmation_deadline: true })
   .extend({ stop_confirmation_deadline: z.number() });
 const messageCreatedAtRowSchema = messageRowSchema.pick({ id: true, created_at: true });
+const messageStartedAtRowSchema = messageRowSchema.pick({ id: true, started_at: true });
 const messageReportedCostRowSchema = messageRowSchema.pick({ reported_cost_usd: true });
 const messageCallbackContextRowSchema = messageRowSchema.pick({
   callback_context: true,
@@ -213,11 +214,11 @@ export class MessageRepository {
     return rows[0] ?? null;
   }
 
-  getProcessingMessageWithStartedAt(): { id: string; started_at: number } | null {
+  getProcessingMessageWithStartedAt(): { id: string; started_at: number | null } | null {
     const result = this.sql.exec(
       `SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`
     );
-    const rows = result.toArray() as Array<{ id: string; started_at: number }>;
+    const rows = parseStorageRows(result.toArray(), messageStartedAtRowSchema);
     return rows[0] ?? null;
   }
 

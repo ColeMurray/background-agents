@@ -10,7 +10,13 @@ import {
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
-import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
+import type {
+  MessageRow,
+  ParticipantRow,
+  SandboxRow,
+  SessionRow,
+  SessionAttachmentRow,
+} from "./types";
 import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
@@ -178,6 +184,9 @@ function buildQueue(
     getProcessingMessageWithCreatedAt: vi.fn(
       () => null as { id: string; created_at: number } | null
     ),
+    getProcessingMessageWithStartedAt: vi.fn(
+      () => null as { id: string; started_at: number | null } | null
+    ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
     getMessageById: vi.fn(() => null as MessageRow | null),
     startMessageProcessing: vi.fn<MessageRepository["startMessageProcessing"]>(() => true),
@@ -202,6 +211,10 @@ function buildQueue(
 
   const attachmentRepository = {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
+  };
+
+  const sandboxState = {
+    getSandbox: vi.fn(() => null as SandboxRow | null),
   };
 
   const wsManager = {
@@ -309,7 +322,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    sandboxState
   );
 
   return {
@@ -317,6 +331,7 @@ function buildQueue(
     executionStop,
     repository,
     attachmentRepository,
+    sandboxState,
     wsManager,
     participantService,
     broadcast,
@@ -2841,6 +2856,106 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({ ...staleRetry, clientRequestId: undefined });
 
       expect(writesInTransaction).toEqual({ canonical: true, scm: true, message: true });
+    });
+  });
+
+  describe("reconcileProcessingMessage", () => {
+    const restarted = "The sandbox runtime restarted while this prompt was running.";
+
+    it("fails a prompt dispatched before the current socket that the bridge does not hold", async () => {
+      const h = buildQueue();
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-old",
+        started_at: 1_000,
+      });
+      h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+        id: "msg-old",
+        created_at: 900,
+      });
+      h.sandboxState.getSandbox.mockReturnValue({
+        active_socket_attached_at: 2_000,
+      } as SandboxRow);
+
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(true);
+
+      expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "msg-old", error: restarted }),
+        expect.any(Number),
+        "processing"
+      );
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "prompt.orphaned",
+        expect.objectContaining({
+          event: "prompt.orphaned",
+          message_id: "msg-old",
+          reason: "runtime_restarted",
+          runtime_active_message_id: null,
+        })
+      );
+    });
+
+    it("keeps the prompt the restarted bridge still owes", async () => {
+      const h = buildQueue();
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-held",
+        started_at: 1_000,
+      });
+      h.sandboxState.getSandbox.mockReturnValue({
+        active_socket_attached_at: 2_000,
+      } as SandboxRow);
+
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: "msg-held" })).resolves.toBe(
+        false
+      );
+
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("keeps a prompt dispatched on the current socket", async () => {
+      const h = buildQueue();
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-current",
+        started_at: 2_000,
+      });
+      h.sandboxState.getSandbox.mockReturnValue({
+        active_socket_attached_at: 2_000,
+      } as SandboxRow);
+
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(
+        false
+      );
+
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("keeps the prompt when the bridge sends no report", async () => {
+      const h = buildQueue();
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-old",
+        started_at: 1_000,
+      });
+      h.sandboxState.getSandbox.mockReturnValue({
+        active_socket_attached_at: 2_000,
+      } as SandboxRow);
+
+      await expect(h.queue.reconcileProcessingMessage()).resolves.toBe(false);
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    });
+
+    it("keeps a prompt with no recorded dispatch time", async () => {
+      const h = buildQueue();
+      h.repository.getProcessingMessageWithStartedAt.mockReturnValue({
+        id: "msg-undated",
+        started_at: null,
+      });
+      h.sandboxState.getSandbox.mockReturnValue({
+        active_socket_attached_at: 2_000,
+      } as SandboxRow);
+
+      await expect(h.queue.reconcileProcessingMessage({ owedMessageId: null })).resolves.toBe(
+        false
+      );
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     });
   });
 });

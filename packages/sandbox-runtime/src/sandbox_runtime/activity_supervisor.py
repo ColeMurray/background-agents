@@ -54,10 +54,21 @@ class ActivitySupervisor:
         self._push_lock = asyncio.Lock()
         self._pushes: dict[asyncio.Task[Event], _PushActivity] = {}
         self._deliveries: set[asyncio.Task[None]] = set()
+        # Terminals selected but not yet accepted by the event forwarder, oldest
+        # first. ``ready`` still owes these until ``send_event`` returns.
+        self._undelivered_terminals: list[str] = []
 
     @property
     def current_prompt_task(self) -> asyncio.Task[Event] | None:
         return self._current_prompt.task if self._current_prompt is not None else None
+
+    @property
+    def current_prompt_message_id(self) -> str | None:
+        return self._current_prompt.message_id if self._current_prompt is not None else None
+
+    def undelivered_terminal_message_ids(self) -> list[str]:
+        """Prompt ids whose terminal is selected but not yet handed to the forwarder."""
+        return list(self._undelivered_terminals)
 
     @property
     def push_tasks(self) -> tuple[asyncio.Task[Event], ...]:
@@ -199,9 +210,17 @@ class ActivitySupervisor:
         self._schedule_delivery(event)
 
     def _schedule_delivery(self, event: Event, *, refresh_message_id: str | None = None) -> None:
+        if refresh_message_id is not None:
+            self._undelivered_terminals.append(refresh_message_id)
+
         async def deliver() -> None:
             await self._send_event(event)
             if refresh_message_id is not None:
+                self._undelivered_terminals = [
+                    message_id
+                    for message_id in self._undelivered_terminals
+                    if message_id != refresh_message_id
+                ]
                 self._refresh_diff(refresh_message_id)
 
         task = asyncio.create_task(deliver())

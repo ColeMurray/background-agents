@@ -39,7 +39,10 @@ export class SandboxRuntimeEventHandler {
     private readonly refreshSlackActivity: (messageId: string, timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly backgroundTasks: BackgroundTasks,
-    private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
+    private readonly messageQueue: Pick<
+      SessionMessageQueue,
+      "processMessageQueue" | "reconcileProcessingMessage"
+    >,
     private readonly log: Logger,
     private readonly lifecycle: SandboxReadiness
   ) {}
@@ -85,15 +88,38 @@ export class SandboxRuntimeEventHandler {
     this.messenger.broadcast({ type: "sandbox_event", event });
 
     // No await between the authorized event and the lifecycle-owned commit.
-    // Repeated, fenced or retired readiness must not wake the prompt queue.
-    if (
-      !this.lifecycle.onRuntimeReady(context.now, event.harness, event.preservationProtocolVersion)
-    ) {
-      return;
-    }
-    this.backgroundTasks.submit(() => this.messageQueue.processMessageQueue(), {
-      name: "message_queue.process",
-    });
+    // Repeated, fenced or retired readiness must not wake the prompt queue,
+    // unless the bridge's report shows the processing prompt was lost.
+    const becameReady = this.lifecycle.onRuntimeReady(
+      context.now,
+      event.harness,
+      event.preservationProtocolVersion
+    );
+    const report =
+      event.activeMessageId === undefined ? undefined : { owedMessageId: event.activeMessageId };
+    // Off the readiness publication below: the report fails a processing prompt
+    // no restarted bridge will finish. It is applied outside the queue pump,
+    // whose dispatch gates would otherwise drop it. Only a readiness that took
+    // effect wakes the queue, unless the report freed an orphaned prompt.
+    this.backgroundTasks.submit(
+      async () => {
+        let orphanFailed = false;
+        try {
+          orphanFailed = await this.messageQueue.reconcileProcessingMessage(report);
+        } catch (error) {
+          // The bridge does not resend ready unless it reconnects. A failed
+          // settlement must not also skip the pump a readiness that took
+          // effect always ran.
+          this.log.error("sandbox.ready_reconcile_failed", {
+            event: "sandbox.ready_reconcile_failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (becameReady || orphanFailed) await this.messageQueue.processMessageQueue();
+      },
+      { name: "message_queue.process" }
+    );
+    if (!becameReady) return;
     // Armed last: the bridge does not resend `ready` unless it reconnects, so
     // the readiness commit and its publication must not sit behind a fallible
     // step. The arm itself is best-effort — an alarm is always pending while

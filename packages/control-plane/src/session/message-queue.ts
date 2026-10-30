@@ -47,7 +47,10 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import type { AlarmScheduler, BackgroundTasks, SessionWebSocket } from "../platform-ports";
 import type { ExecutionStopCoordinator } from "./execution-stop-coordinator";
+import { interruptionMessage } from "./interruption-messages";
 import type { MessageFailureService } from "./message-failure-service";
+import { orphanedPromptReason, type RuntimeReport } from "./orphaned-prompt";
+import type { SandboxStateReader } from "./sandbox-ports";
 import { sandboxBootPhaseLogFields } from "../sandbox/boot-phase";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
@@ -177,7 +180,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly sandboxState: SandboxStateReader
   ) {}
 
   async enqueueAutofix(
@@ -435,7 +439,6 @@ export class SessionMessageQueue {
     if (!message) {
       return;
     }
-    const now = Date.now();
     const session = this.repository.getSession();
     const harness = getValidHarnessOrDefault(session?.harness);
     const resolvedModel = resolveHarnessModel(harness, message.model || session?.model);
@@ -453,6 +456,10 @@ export class SessionMessageQueue {
     );
     const authenticationError =
       harnessIncompatibility?.message ?? (await this.getProviderAuthenticationError(resolvedModel));
+    // Read after the lookup: `started_at` orders this dispatch against the
+    // socket it targets, so it must not predate an accept that happened
+    // during the await.
+    const now = Date.now();
     if (!this.mayDispatch()) return;
     if (this.repository.getSession()?.budget_exhausted === 1) return;
     if (authenticationError) {
@@ -681,6 +688,30 @@ export class SessionMessageQueue {
     if (!this.failMessage(message, error, Date.now(), "pending")) return;
     this.broadcastPromptQueue();
     await this.sessionStatus.reconcileAfterExecution(false);
+  }
+
+  /**
+   * Fail a processing prompt that a restarted bridge will not finish, and
+   * report whether one was failed. `report` is the bridge's `ready` report;
+   * without one the prompt stays until the execution timeout or a Stop.
+   */
+  async reconcileProcessingMessage(report?: RuntimeReport): Promise<boolean> {
+    if (!report) return false;
+    const processing = this.messageRepository.getProcessingMessageWithStartedAt();
+    if (!processing) return false;
+    const socketAttachedAt = this.sandboxState.getSandbox()?.active_socket_attached_at ?? null;
+    const reason = orphanedPromptReason(processing, socketAttachedAt, report);
+    if (!reason) return false;
+    this.log.warn("prompt.orphaned", {
+      event: "prompt.orphaned",
+      message_id: processing.id,
+      reason,
+      started_at_ms: processing.started_at,
+      socket_attached_at_ms: socketAttachedAt,
+      runtime_active_message_id: report.owedMessageId,
+    });
+    await this.failStuckProcessingMessage(interruptionMessage(reason));
+    return true;
   }
 
   /**

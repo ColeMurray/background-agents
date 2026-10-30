@@ -328,10 +328,12 @@ export class SandboxRepository {
    * spawn reservation above), and NULL only on rows that predate persisted
    * identities.
    */
-  setActiveSocketId(socketId: string): void {
+  setActiveSocketId(socketId: string, attachedAt: number): void {
     this.sql.exec(
-      `UPDATE sandbox SET active_socket_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-      socketId
+      `UPDATE sandbox SET active_socket_id = ?, active_socket_attached_at = ?
+       WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      socketId,
+      attachedAt
     );
   }
 

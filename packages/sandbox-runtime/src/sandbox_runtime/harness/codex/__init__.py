@@ -77,6 +77,9 @@ class CodexHarnessConfig:
 
 class CodexHarness:
     id = HarnessId.CODEX
+    # The supervisor reaps this process's vendor descendants before a replacement
+    # bridge starts. See ``AgentHarness.contains_inherited_execution``.
+    contains_inherited_execution = True
 
     def __init__(
         self,

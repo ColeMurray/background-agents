@@ -802,5 +802,19 @@ class TestOversizedEvents:
         assert forwarder.acknowledge(sent["ackId"]) is True
 
 
+@pytest.mark.asyncio
+async def test_unacknowledged_execution_is_listed_until_it_is_acked():
+    forwarder = make_forwarder()
+    await forwarder.send({"type": "execution_complete", "messageId": "msg-owed", "success": True})
+
+    assert forwarder.unacknowledged_message_ids("execution_complete") == ["msg-owed"]
+
+    ws = open_ws()
+    await forwarder.bind(ws)
+    assert forwarder.unacknowledged_message_ids("execution_complete") == ["msg-owed"]
+    assert forwarder.acknowledge("execution_complete:msg-owed") is True
+    assert forwarder.unacknowledged_message_ids("execution_complete") == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

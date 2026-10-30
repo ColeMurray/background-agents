@@ -110,9 +110,12 @@ function createMockRepository() {
 
   const repo = {
     getSandbox,
-    setActiveSocketId: (socketId: string) => {
+    setActiveSocketId: (socketId: string, attachedAt: number) => {
       // Like the UPDATE it stands in for: nothing to write without a row.
-      if (sandboxRow) sandboxRow.active_socket_id = socketId;
+      if (sandboxRow) {
+        sandboxRow.active_socket_id = socketId;
+        sandboxRow.active_socket_attached_at = attachedAt;
+      }
     },
     revokeActiveSocketId: () => {
       if (sandboxRow) sandboxRow.active_socket_id = "";
@@ -205,6 +208,7 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    active_socket_attached_at: null,
     boot_phase: null,
     boot_seq: null,
     fenced: 0,
@@ -446,6 +450,8 @@ describe("SessionWebSocketManagerImpl", () => {
       manager.acceptAndSetSandboxSocket(ws, "sb-stale");
 
       expect(row.active_socket_id).toMatch(/^sbws-/);
+      expect(row.active_socket_attached_at).toEqual(expect.any(Number));
+      expect(row.active_socket_attached_at).toBeLessThanOrEqual(Date.now());
       expect(manager.isActiveSandboxSocket(ws)).toBe(false);
       expect(manager.getSandboxSocket()).toBeNull();
       expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox identity changed");

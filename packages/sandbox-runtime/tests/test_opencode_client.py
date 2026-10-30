@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from sandbox_runtime.harness import HarnessStartError
 from sandbox_runtime.harness.opencode_client import (
     OpenCodeClient,
     SSEConnectionError,
@@ -185,6 +186,34 @@ class TestWaitUntilIdle:
         stopped = await make_client(http_client).wait_until_idle(timeout_seconds=0.01)
 
         assert stopped is False
+
+
+class TestSessionExists:
+    async def test_ok_means_the_session_is_still_there(self):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(200, {"id": SESSION_ID})
+
+        assert await make_client(http_client).session_exists(SESSION_ID) is True
+
+    async def test_only_a_404_means_the_session_is_gone(self):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(404)
+
+        assert await make_client(http_client).session_exists(SESSION_ID) is False
+
+    async def test_any_other_status_refuses_the_lookup(self):
+        http_client = AsyncMock()
+        http_client.get.return_value = MockResponse(503)
+
+        with pytest.raises(HarnessStartError, match="503"):
+            await make_client(http_client).session_exists(SESSION_ID)
+
+    async def test_a_probe_exception_refuses_the_lookup(self):
+        http_client = AsyncMock()
+        http_client.get.side_effect = httpx.ConnectError("server unreachable")
+
+        with pytest.raises(HarnessStartError, match="unreachable"):
+            await make_client(http_client).session_exists(SESSION_ID)
 
 
 class TestPoolOwnership:
