@@ -2701,5 +2701,104 @@ describe("SessionMessageQueue", () => {
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
     });
+
+    const staleRetry = {
+      content: "Fix bug",
+      authorId: "github:1001",
+      source: "github" as const,
+      clientRequestId: "webhook:abc",
+      canonicalUserId: "old-user",
+      scmEnrichment: { userId: "1001", login: "old-login", name: "Old Name", email: null },
+    };
+
+    it.each(["opencode", "codex"] as const)(
+      "does not store the identity of a duplicate or conflicting retry on %s",
+      async (harness) => {
+        const h = buildQueue();
+        h.repository.getSession.mockReturnValue(
+          createSession({ harness, model: "openai/gpt-6.1-sol" })
+        );
+        h.repository.getMessageByClientRequestId.mockReturnValue(
+          createMessage({
+            id: "msg-existing",
+            client_request_id: staleRetry.clientRequestId,
+            request_fingerprint: await fingerprintWebPrompt("part-1", staleRetry),
+          })
+        );
+
+        await expect(h.queue.enqueuePromptFromApi(staleRetry)).resolves.toMatchObject({
+          messageId: "msg-existing",
+          deduplicated: true,
+        });
+        await expect(
+          h.queue.enqueuePromptFromApi({ ...staleRetry, content: "Fix a different bug" })
+        ).rejects.toMatchObject({ name: "PromptRequestConflictError" });
+
+        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+        expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+        expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      }
+    );
+
+    it("does not store the identity of a request deduplicated during the strict-auth await", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(
+        createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
+      );
+      const fingerprint = await fingerprintWebPrompt("part-1", staleRetry);
+      h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+        // An identical request is admitted while this one awaits the auth check.
+        h.repository.getMessageByClientRequestId.mockReturnValue(
+          createMessage({
+            id: "msg-concurrent",
+            client_request_id: staleRetry.clientRequestId,
+            request_fingerprint: fingerprint,
+          })
+        );
+        return null;
+      });
+
+      await expect(h.queue.enqueuePromptFromApi(staleRetry)).resolves.toMatchObject({
+        messageId: "msg-concurrent",
+        deduplicated: true,
+      });
+
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
+    it("keeps an account linked while an admitted request awaited the strict-auth check", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(
+        createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
+      );
+      h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+        // A concurrent request links the participant to an account during this await.
+        h.repository.getParticipantById.mockReturnValue(
+          createParticipant({ canonical_user_id: "current-user" })
+        );
+        return null;
+      });
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github",
+        scmEnrichment: { userId: "1001", login: "octocat", name: "Octo Cat", email: null },
+      });
+
+      expect(h.repository.updateParticipantIdentity).toHaveBeenCalledExactlyOnceWith("part-1", {
+        canonicalUserId: "current-user",
+        scmName: "Octo Cat",
+        scmEmail: null,
+        scmLogin: "octocat",
+        scmUserId: "1001",
+      });
+      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+        expect.objectContaining({ authorCanonicalUserId: "current-user" }),
+        []
+      );
+    });
   });
 });

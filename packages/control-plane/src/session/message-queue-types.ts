@@ -1,6 +1,7 @@
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { MessageSource } from "@open-inspect/shared/types/sessions";
 import type { ParticipantRow } from "./types";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 
 export interface PromptMessageData {
   clientRequestId?: string;
@@ -22,6 +23,9 @@ export interface EnqueuePromptCoreData {
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
   clientRequestId?: string;
+  /** Stored on the participant only when the prompt is admitted, not for a retry. */
+  canonicalUserId?: EnqueuePromptRequest["canonicalUserId"];
+  scmEnrichment?: EnqueuePromptRequest["scmEnrichment"];
 }
 
 export interface EnqueuedPrompt {

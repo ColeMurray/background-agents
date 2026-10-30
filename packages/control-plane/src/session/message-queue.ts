@@ -769,28 +769,6 @@ export class SessionMessageQueue {
         : this.participantService.create(data.authorId, name);
     }
 
-    if (data.canonicalUserId) {
-      this.participantRepository.updateParticipantCoalesce(participant.id, {
-        canonicalUserId: data.canonicalUserId,
-      });
-      participant = this.participantRepository.getParticipantById(participant.id) ?? {
-        ...participant,
-        canonical_user_id: data.canonicalUserId,
-      };
-    }
-
-    if (data.scmEnrichment !== undefined) {
-      const enrichment = data.scmEnrichment;
-      this.participantRepository.updateParticipantIdentity(participant.id, {
-        canonicalUserId: data.canonicalUserId ?? participant.canonical_user_id ?? null,
-        scmName: enrichment.name,
-        scmEmail: enrichment.email,
-        scmLogin: enrichment.login,
-        scmUserId: enrichment.userId,
-      });
-      participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
-    }
-
     const enqueued = await this.enqueuePromptCore({
       participant,
       promptAccountUserId: data.promptAccountUserId,
@@ -802,6 +780,8 @@ export class SessionMessageQueue {
       attachments: data.attachments,
       callbackContext: data.callbackContext,
       clientRequestId: data.clientRequestId,
+      canonicalUserId: data.canonicalUserId,
+      scmEnrichment: data.scmEnrichment,
     });
 
     // An already-active session keeps its index timestamp through the status sync, so
@@ -921,15 +901,16 @@ export class SessionMessageQueue {
       this.log,
       getValidHarnessOrDefault(this.repository.getSession()?.harness)
     );
+    const participant = this.storeAdmittedIdentity(data);
     try {
       this.messageRepository.createMessageWithAttachments(
         {
           id: messageId,
-          authorId: data.participant.id,
+          authorId: participant.id,
           authorCanonicalUserId:
             data.promptAccountUserId !== undefined
               ? data.promptAccountUserId
-              : (data.participant.canonical_user_id ?? null),
+              : (participant.canonical_user_id ?? null),
           content: data.content,
           source: data.source,
           model: messageModel,
@@ -975,6 +956,33 @@ export class SessionMessageQueue {
     });
 
     return { messageId, position, deduplicated: false };
+  }
+
+  /**
+   * Store an admitted prompt's identity snapshot on its author and return the stored row.
+   * Called synchronously with the insert, after the request's last await: a deduplicated
+   * or conflicting retry may carry an older snapshot than a later request already stored.
+   */
+  private storeAdmittedIdentity(data: EnqueuePromptCoreData): ParticipantRow {
+    const { participant, canonicalUserId, scmEnrichment } = data;
+    if (!canonicalUserId && scmEnrichment === undefined) return participant;
+
+    if (canonicalUserId) {
+      this.participantRepository.updateParticipantCoalesce(participant.id, { canonicalUserId });
+    }
+    if (scmEnrichment !== undefined) {
+      // Read the linked account now, not from the caller's row: that predates this
+      // request's awaits, and a concurrent request may have linked one since.
+      const stored = this.participantRepository.getParticipantById(participant.id);
+      this.participantRepository.updateParticipantIdentity(participant.id, {
+        canonicalUserId: canonicalUserId ?? stored?.canonical_user_id ?? null,
+        scmName: scmEnrichment.name,
+        scmEmail: scmEnrichment.email,
+        scmLogin: scmEnrichment.login,
+        scmUserId: scmEnrichment.userId,
+      });
+    }
+    return this.participantRepository.getParticipantById(participant.id) ?? participant;
   }
 
   /** Refresh the session index's activity timestamp in the background. */
