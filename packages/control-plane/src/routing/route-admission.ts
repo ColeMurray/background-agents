@@ -6,7 +6,7 @@ import {
   type ActorProfileClaims,
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import { SERVICE_PROFILES, type Principal } from "../auth/principal";
 import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
 import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
 import { AdmissionPolicyStore } from "../db/admission-policy-store";
@@ -31,6 +31,7 @@ import { createLogger } from "../logger";
 import type {
   ActorlessServiceGrant,
   RouteAdmissionPolicy,
+  RouteAuthorization,
   RouteAuthentication,
   RouteAuthorizationRequirement,
   RouteParams,
@@ -571,6 +572,14 @@ function actorlessGrantMatches(
   );
 }
 
+function routeOptsIn(authorization: RouteAuthorization, service: string): boolean {
+  return (
+    (authorization.kind === "active-user" || authorization.kind === "active-global") &&
+    authorization.service.kind === "actor" &&
+    (authorization.service.optInServices?.some((optIn) => optIn === service) ?? false)
+  );
+}
+
 function enforceServiceRouteAuthorization(
   policy: RouteAdmissionPolicy,
   params: RouteParams,
@@ -597,10 +606,12 @@ function enforceServiceRouteAuthorization(
       "Forbidden"
     );
 
+  // Opt-in services reach only routes that name them. This runs before every
+  // other branch, so a service-only route cannot admit one either.
   if (
     principal?.kind === "service" &&
-    principal.service === "export" &&
-    !policy.allowExportService
+    SERVICE_PROFILES[principal.service].routeAccess === "opt-in" &&
+    !routeOptsIn(authorization, principal.service)
   ) {
     return serviceCapabilityRequired();
   }

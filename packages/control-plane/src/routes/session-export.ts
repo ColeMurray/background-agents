@@ -373,8 +373,7 @@ async function handleSingleExport(
 
 const EXPORT_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  authorization: requirePermission("sessions.export"),
-  allowExportService: true,
+  authorization: requirePermission("sessions.export", { optInServices: ["export"] }),
   cacheControl: "private, no-store",
 });
 
@@ -385,8 +384,10 @@ sessionExportRoutes.get(
   "/sessions/:id/export",
   admit({
     ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-    authorization: requireAll(sessionRequirement("read"), permissionRequirement("sessions.export")),
-    allowExportService: true,
+    authorization: {
+      ...requireAll(sessionRequirement("read"), permissionRequirement("sessions.export")),
+      service: { kind: "actor", optInServices: ["export"] },
+    },
     cacheControl: "private, no-store",
   }),
   (c) => dispatchSession(c, handleSingleExport)

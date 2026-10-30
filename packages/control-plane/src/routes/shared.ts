@@ -2,13 +2,12 @@
  * Shared route primitives used by all route modules.
  */
 
-import type { Principal } from "../auth/principal";
+import type { BotServiceName, OptInServiceName, Principal } from "../auth/principal";
 import type { RequestContext } from "../http/request-context";
 import { HttpError } from "../http/responses";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { PermissionId } from "@open-inspect/shared/rbac";
-import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { TeamAdmissionNeed, TeamAdmissionRequirement } from "../routing/team-admission";
 import type { SessionAction } from "@open-inspect/shared";
 import type { ActorProfileClaims } from "@open-inspect/shared/types/actors";
@@ -44,7 +43,6 @@ export type RouteAuthorizationRequirement =
   | { kind: "environment"; idParam: string; need: "read" | "manage" | "use" }
   | { kind: "session"; sessionIdParam: string; action: SessionAction; enforceAlways?: boolean };
 
-type BotServiceName = Exclude<ServiceName, "web">;
 const DEFAULT_AUDIT_ALLOWED = false;
 
 /** Narrow route grant for a trusted service without an acting user. */
@@ -58,6 +56,8 @@ type ServiceAuthorization =
   | {
       kind: "actor";
       actorlessGrants?: readonly ActorlessServiceGrant[];
+      /** Opt-in services (see `SERVICE_PROFILES`) this route admits; every other route refuses them. */
+      optInServices?: readonly OptInServiceName[];
     };
 
 /** Declarative authorization policy enforced by the router. */
@@ -160,7 +160,11 @@ export function permissionRequirement(permission: PermissionId): RouteAuthorizat
 /** Require an active user with a global permission, optionally allowing service actors. */
 export function requirePermission(
   permission: PermissionId,
-  options?: { service?: "actor" | "deny"; actorlessGrants?: readonly ActorlessServiceGrant[] }
+  options?: {
+    service?: "actor" | "deny";
+    actorlessGrants?: readonly ActorlessServiceGrant[];
+    optInServices?: readonly OptInServiceName[];
+  }
 ): RouteAuthorization {
   return {
     kind: "active-user",
@@ -169,7 +173,11 @@ export function requirePermission(
     service:
       options?.service === "deny"
         ? { kind: "deny" }
-        : { kind: "actor", actorlessGrants: options?.actorlessGrants },
+        : {
+            kind: "actor",
+            actorlessGrants: options?.actorlessGrants,
+            optInServices: options?.optInServices,
+          },
   };
 }
 
@@ -347,12 +355,6 @@ export interface RouteAdmissionPolicy extends RoutePolicy {
    * nothing is written.
    */
   serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
-  /**
-   * The export service may call only routes that opt in here (the session
-   * export routes). Its permission ceiling alone would also admit routes that
-   * need a signed-in user but no permission.
-   */
-  allowExportService?: boolean;
 }
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {

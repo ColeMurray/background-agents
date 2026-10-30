@@ -13,7 +13,7 @@ import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "../logger";
 import { CALLBACK_DESTINATIONS } from "../auth/service/callback-signing";
-import type { Principal, ResolvedIdentity } from "../auth/principal";
+import { SERVICE_PROFILES, type Principal, type ResolvedIdentity } from "../auth/principal";
 import { error } from "../http/responses";
 import type { RequestContext } from "../http/request-context";
 
@@ -118,8 +118,7 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         participantUserId: principal.actor?.participantUserId ?? null,
         canonicalUserId: principal.actor?.canonicalUserId ?? null,
         actor: principal.actor,
-        // The export service reads sessions; it never creates them.
-        spawnSource: principal.service === "export" ? null : principal.service,
+        spawnSource: SERVICE_PROFILES[principal.service].spawnSource,
       };
     case "sandbox":
       return null;
