@@ -90,6 +90,15 @@ describe("PersonalAccessTokensSettings", () => {
     expect(grant.getByText("Read automations")).toBeInTheDocument();
   });
 
+  it.each([
+    [Date.now() - 10_000, "Last used just now"],
+    [Date.now() - 3 * 60 * 60 * 1000, "Last used 3h ago"],
+  ])("describes a last use at %s as %s", (lastUsedAt, label) => {
+    hooks.tokens = [{ ...TOKEN, lastUsedAt }];
+    render(<PersonalAccessTokensSettings />);
+    expect(screen.getByText(new RegExp(label))).toBeInTheDocument();
+  });
+
   it("marks an expired token", () => {
     hooks.tokens = [{ ...TOKEN, expiresAt: Date.now() - DAY_MS }];
     render(<PersonalAccessTokensSettings />);

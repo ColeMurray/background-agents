@@ -55,6 +55,12 @@ const EMPTY_DRAFT: Draft = {
   permissions: new Set(),
 };
 
+function formatLastUsed(lastUsedAt: number | null): string {
+  if (lastUsedAt === null) return "Never used";
+  const elapsed = formatRelativeTime(lastUsedAt);
+  return elapsed === "now" ? "Last used just now" : `Last used ${elapsed} ago`;
+}
+
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(undefined, {
     year: "numeric",
@@ -344,11 +350,7 @@ function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: (
             {expired && <Badge className="bg-destructive-muted text-destructive">Expired</Badge>}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Created {formatDate(token.createdAt)} ·{" "}
-            {token.lastUsedAt === null
-              ? "Never used"
-              : `Last used ${formatRelativeTime(token.lastUsedAt)} ago`}{" "}
-            ·{" "}
+            Created {formatDate(token.createdAt)} · {formatLastUsed(token.lastUsedAt)} ·{" "}
             {expired
               ? `Expired ${formatDate(token.expiresAt)}`
               : `Expires ${formatFutureRelativeTime(token.expiresAt)}`}
