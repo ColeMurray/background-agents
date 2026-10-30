@@ -103,10 +103,12 @@ app.post("/webhooks/github", async (c) => {
     botUsername: c.env.GITHUB_BOT_USERNAME,
     receivedAt: new Date(),
   });
+  let autofixEnqueueFailed = false;
   if (autofixEnvelope) {
     try {
       await c.env.AUTOFIX_QUEUE.send(autofixEnvelope);
     } catch (err) {
+      autofixEnqueueFailed = true;
       log.error("webhook.autofix_queue_failed", {
         trace_id: traceId,
         delivery_id: deliveryId,
@@ -115,10 +117,26 @@ app.post("/webhooks/github", async (c) => {
     }
   }
 
+  const clearDedupeMarker = async () => {
+    if (!dedupeKey) return;
+    try {
+      await cacheStore.delete(dedupeKey);
+    } catch (err) {
+      log.warn("webhook.dedupe_clear_failed", {
+        trace_id: traceId,
+        delivery_id: deliveryId,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  };
+
   c.executionCtx.waitUntil(
     handleWebhook(c.env, log, event, payload, traceId, deliveryId)
       .then(async () => {
         if (!dedupeKey) return;
+        // Keep the in-flight lease until dispatch settles, then leave the delivery
+        // redeliverable; its dispatch checkpoint prevents a second session.
+        if (autofixEnqueueFailed) return clearDedupeMarker();
 
         try {
           await cacheStore.put(dedupeKey, DELIVERY_STATUS_PROCESSED, {
@@ -133,17 +151,7 @@ app.post("/webhooks/github", async (c) => {
         }
       })
       .catch(async (err) => {
-        if (dedupeKey) {
-          try {
-            await cacheStore.delete(dedupeKey);
-          } catch (deleteErr) {
-            log.warn("webhook.dedupe_clear_failed", {
-              trace_id: traceId,
-              delivery_id: deliveryId,
-              error: deleteErr instanceof Error ? deleteErr : new Error(String(deleteErr)),
-            });
-          }
-        }
+        await clearDedupeMarker();
 
         log.error("webhook.processing_error", {
           trace_id: traceId,
@@ -153,6 +161,8 @@ app.post("/webhooks/github", async (c) => {
       })
   );
 
+  // GitHub does not retry failed deliveries; a 5xx marks this one for manual redelivery.
+  if (autofixEnqueueFailed) return c.json({ error: "Autofix enqueue failed" }, 503);
   return c.json({ ok: true });
 });
 

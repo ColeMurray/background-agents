@@ -19,6 +19,10 @@ CLI.
 Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`, so GitHub retries
 and manual redeliveries do not create duplicate sessions.
 
+If the Autofix queue handoff fails, the bot still runs the rest of the delivery, responds `503`, and
+clears the delivery marker once that work settles, so the delivery can be redelivered from GitHub.
+The per-delivery dispatch checkpoint keeps the redelivery from starting a second session.
+
 Because Cloudflare KV is eventually consistent, this is a best-effort dedupe guard rather than a
 strict cross-region lock.
 
