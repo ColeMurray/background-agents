@@ -180,7 +180,9 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>
+    private readonly prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>,
+    /** Records warnings the sandbox cannot give itself, once the prompt is running. */
+    private readonly reportManagedMcpWarnings?: (messageId: string) => void
   ) {}
 
   async enqueueAutofix(
@@ -638,6 +640,16 @@ export class SessionMessageQueue {
     } else {
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+      try {
+        this.reportManagedMcpWarnings?.(message.id);
+      } catch (error) {
+        // Like the breaker reset below, a lost warning must not skip the deadline.
+        this.log.warn("prompt.mcp_warning_failed", {
+          event: "prompt.mcp_warning_failed",
+          message_id: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       this.broadcastPromptQueue();
       this.sandboxLifecycle.updateLastActivity(now);
       try {

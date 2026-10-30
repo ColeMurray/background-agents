@@ -98,10 +98,11 @@ applies to the hostname as written: DNS results and connection addresses are not
 administrator-registered hostname that resolves to a private address is still reached. Disabling a
 definition blocks pending callbacks before token exchange as well as new consent.
 
-Personal delegation is supported by the OpenCode and Claude harnesses. Codex reports no personal MCP
-capability and omits managed personal connectors from native configuration; public and service
-connectors remain available. Healthy bridge-process reconnects preserve personal delegation, but
-process replacement during a prepared turn remains fenced until a new sandbox allocation.
+Personal delegation is supported by the OpenCode and Claude harnesses on sandbox runtime generation
+80 and later. A launch on Codex, or on an older image or snapshot, keeps personal servers out of the
+sandbox; each prompt then gets an `mcp` warning that names the server and the reason. Public and
+service connectors remain available. Healthy bridge-process reconnects preserve personal delegation,
+but process replacement during a prepared turn remains fenced until a new sandbox allocation.
 
 In a session where several people prompt, each turn delegates as its own author. The proxy
 authenticates the shared sandbox, not the process inside it, so a process left running from an

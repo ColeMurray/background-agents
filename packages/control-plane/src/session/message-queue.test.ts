@@ -148,7 +148,8 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 function buildQueue(
   mayDispatch: () => boolean = () => true,
   getSandboxPromptBlockReason: () => string | null = () => null,
-  prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>
+  prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>,
+  reportManagedMcpWarnings?: (messageId: string) => void
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -319,7 +320,8 @@ function buildQueue(
     () => executionTimeoutMs,
     mayDispatch,
     getSandboxPromptBlockReason,
-    prepareManagedMcp
+    prepareManagedMcp,
+    reportManagedMcpWarnings
   );
 
   return {
@@ -1848,6 +1850,40 @@ describe("SessionMessageQueue", () => {
         message_id: "msg-1",
         error: "Circuit-breaker storage unavailable",
       });
+    });
+
+    it("reports MCP warnings once the prompt runs, and a failed report keeps the deadline", async () => {
+      const report = vi.fn((_messageId: string) => {
+        throw new Error("Event storage unavailable");
+      });
+      const h = buildQueue(undefined, undefined, undefined, report);
+
+      await dispatchPrompt(h);
+
+      expect(report).toHaveBeenCalledExactlyOnceWith("msg-1");
+      expect(report.mock.invocationCallOrder[0]).toBeGreaterThan(
+        h.wsManager.send.mock.invocationCallOrder[0]
+      );
+      const startedAt = h.repository.startMessageProcessing.mock.calls[0][1];
+      expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(startedAt + EXECUTION_TIMEOUT_MS);
+      expect(h.log.warn).toHaveBeenCalledWith("prompt.mcp_warning_failed", {
+        event: "prompt.mcp_warning_failed",
+        message_id: "msg-1",
+        error: "Event storage unavailable",
+      });
+    });
+
+    it("reports no MCP warnings for a prompt the sandbox never received", async () => {
+      const report = vi.fn();
+      const h = buildQueue(undefined, undefined, undefined, report);
+      h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.wsManager.send.mockReturnValue(false);
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(report).not.toHaveBeenCalled();
     });
 
     it("schedules the execution deadline when no alarm is set", async () => {

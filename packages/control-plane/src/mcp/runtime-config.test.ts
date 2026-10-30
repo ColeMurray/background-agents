@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveRuntimeMcpServers } from "./runtime-config";
+import { personalMcpWithheldReason, resolveRuntimeMcpServers } from "./runtime-config";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 const launch = {
@@ -67,5 +67,14 @@ describe("managed launch contract", () => {
     expect(
       resolveRuntimeMcpServers([{ ...legacy, authMode: "user_oauth" }], launch)[0]
     ).toHaveProperty("managed_proxy.auth_mode", "user_oauth");
+  });
+});
+describe("personal servers at launch", () => {
+  it("withholds them from harnesses and runtimes that cannot tear them down per turn", () => {
+    expect(personalMcpWithheldReason("codex", "v80-managed-mcp")).toBe("mcp_harness_unsupported");
+    expect(personalMcpWithheldReason("claude", "v79-earlier")).toBe("mcp_runtime_outdated");
+    expect(personalMcpWithheldReason("opencode", "unversioned")).toBe("mcp_runtime_outdated");
+    expect(personalMcpWithheldReason("opencode", "v80-managed-mcp")).toBeNull();
+    expect(personalMcpWithheldReason("claude", "v81-later")).toBeNull();
   });
 });

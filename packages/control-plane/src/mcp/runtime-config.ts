@@ -1,3 +1,4 @@
+import { getHarnessCapabilities, type HarnessId } from "@open-inspect/shared/harnesses";
 import {
   DEFAULT_MCP_AUTH_MODE,
   MANAGED_MCP_VERSION,
@@ -5,6 +6,29 @@ import {
   type RuntimeMcpServerConfig,
 } from "@open-inspect/shared/types/integrations";
 import { McpError } from "./errors";
+
+/** The sandbox runtime generation that added per-turn personal connectors. */
+const PERSONAL_MCP_RUNTIME_GENERATION = 80;
+
+/** Why a launch keeps personal servers out of its sandbox. */
+export type PersonalMcpWithheldCode = "mcp_harness_unsupported" | "mcp_runtime_outdated";
+
+/**
+ * Personal servers reach only a sandbox that can tear them down after each turn.
+ * Any other sandbox would show the agent a server that every call refuses.
+ */
+export function personalMcpWithheldReason(
+  harness: HarnessId,
+  runtimeVersion: string
+): PersonalMcpWithheldCode | null {
+  if (!getHarnessCapabilities(harness).personalMcp) return "mcp_harness_unsupported";
+  const generation = Number(/^v(\d+)/.exec(runtimeVersion)?.[1]);
+  return generation >= PERSONAL_MCP_RUNTIME_GENERATION ? null : "mcp_runtime_outdated";
+}
+
+export function isPersonalMcpServer(server: RuntimeMcpServerConfig): boolean {
+  return "managed_proxy" in server && server.managed_proxy.auth_mode === "user_oauth";
+}
 
 /** One provider-neutral launch/restore transformation. Registry input is never mutated. */
 export function resolveRuntimeMcpServers(

@@ -4,6 +4,12 @@ import type { SessionMessenger } from "./messenger";
 
 export type SessionWarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
+/** A warning about one prompt carries its message id, so its completion can show it. */
+export interface SessionWarningTarget {
+  scope: SessionWarningEvent["scope"];
+  messageId?: string;
+}
+
 /**
  * Persist a warning in the existing timeline format, so disconnected clients
  * see it too. Synchronous, so it can commit with the state it reports.
@@ -13,11 +19,13 @@ export function persistSessionWarning(
   events: Pick<EventRepository, "createEventIfAbsent">,
   message: string,
   eventId: string,
-  now: number
+  now: number,
+  { scope, messageId }: SessionWarningTarget = { scope: "provider" }
 ): SessionWarningEvent | null {
   const event: SessionWarningEvent = {
     type: "warning",
-    scope: "provider",
+    scope,
+    ...(messageId ? { messageId } : {}),
     message,
     timestamp: now / 1000,
   };
@@ -25,7 +33,7 @@ export function persistSessionWarning(
     id: eventId,
     type: "warning",
     data: JSON.stringify(event),
-    messageId: null,
+    messageId: messageId ?? null,
     createdAt: now,
   });
   return created ? event : null;
@@ -36,8 +44,9 @@ export function recordSessionWarning(
   events: EventRepository,
   messenger: Pick<SessionMessenger, "broadcast">,
   message: string,
-  eventId: string
+  eventId: string,
+  target?: SessionWarningTarget
 ): void {
-  const event = persistSessionWarning(events, message, eventId, Date.now());
+  const event = persistSessionWarning(events, message, eventId, Date.now(), target);
   if (event) messenger.broadcast({ type: "sandbox_event", event });
 }

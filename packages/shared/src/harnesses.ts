@@ -42,6 +42,8 @@ export interface HarnessCapabilities {
   readonly providerAuth: Readonly<Partial<Record<string, readonly ProviderAuthMode[]>>>;
   /** How a sandbox restore resumes the conversation. */
   readonly resume: "session_id";
+  /** Connects and disconnects personal (user OAuth) MCP servers every turn. */
+  readonly personalMcp: boolean;
 }
 
 export const HARNESS_CATALOG = {
@@ -55,6 +57,7 @@ export const HARNESS_CATALOG = {
       xai: ["api_key", "provider_account"],
     },
     resume: "session_id",
+    personalMcp: true,
   },
   claude: {
     label: "Claude Agent",
@@ -64,6 +67,7 @@ export const HARNESS_CATALOG = {
       anthropic: ["api_key", "provider_account"],
     },
     resume: "session_id",
+    personalMcp: true,
   },
   codex: {
     label: "Codex",
@@ -71,6 +75,8 @@ export const HARNESS_CATALOG = {
     modelFamilies: ["openai"],
     providerAuth: { openai: ["api_key", "provider_account"] },
     resume: "session_id",
+    // MCP servers bind once per thread, so a personal grant could outlive its turn.
+    personalMcp: false,
   },
 } as const satisfies Record<HarnessId, HarnessCapabilities>;
 

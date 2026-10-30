@@ -3,7 +3,15 @@ import { SessionCoreRepository } from "../../src/session/session-core-repository
 import { runInSessionDO, componentsOf, type SessionDOInternals } from "./session-do-access";
 import { beforeEach, describe, expect, it } from "vitest";
 import { env, SELF } from "cloudflare:test";
-import { serviceFetch, initNamedSession, seedSandboxAuth, queryDO, openSandboxWs } from "./helpers";
+import {
+  serviceFetch,
+  initNamedSession,
+  seedSandboxAuth,
+  queryDO,
+  openSandboxWs,
+  collectMessages,
+  closeWebSocket,
+} from "./helpers";
 import { cleanD1Tables } from "./cleanup";
 import { McpServerStore } from "../../src/db/mcp-servers";
 import { McpConnectionStore, connectionBinding } from "../../src/db/mcp-connections";
@@ -226,6 +234,113 @@ describe("managed MCP actual sandbox route + session authority", () => {
       expect(automation.servers).toEqual([]);
       expect(automation.unavailable).toEqual([{ name: "example", code: "mcp_execution_inactive" }]);
     });
+  });
+  it("withholds personal servers a launch cannot run and explains them per prompt", async () => {
+    const f = await fixture();
+    const routed = {
+      id: f.server.id,
+      name: f.server.name,
+      type: "remote" as const,
+      url: `https://test.local/sessions/${f.sessionName}/mcp/${f.server.id}`,
+      enabled: true,
+      headers: { Authorization: `Bearer ${token}` },
+      managed_proxy: {
+        version: 1 as const,
+        auth_mode: "user_oauth" as const,
+        auth_revision: f.server.authRevision,
+      },
+    };
+    await runInSessionDO(f.stub, async (instance, state) => {
+      const appEnv = (instance as unknown as SessionDOInternals).appEnv;
+      const context = (delegation = appEnv.MCP_USER_DELEGATION_ENABLED) =>
+        new SessionMcpContext(
+          state.storage.sql,
+          env.DB,
+          { ...appEnv, MCP_USER_DELEGATION_ENABLED: delegation },
+          new SessionCoreRepository(state.storage.sql, (run) => state.storage.transactionSync(run)),
+          componentsOf(instance).sandboxRepository
+        );
+      context().recordLaunch([routed], "mcp_runtime_outdated");
+      // Even a runtime that reports support never prepares a withheld server.
+      context().recordRuntimeVersion(1);
+      expect(await context().prepare("alice-message")).toMatchObject({
+        servers: [],
+        unavailable: [],
+      });
+      expect(context().withheldWarnings()).toEqual([
+        {
+          serverId: f.server.id,
+          message:
+            "Personal MCP example needs a newer sandbox image than this session runs. Start a new session to use it. Other tools remain available.",
+        },
+      ]);
+      state.storage.sql.exec("UPDATE session SET harness = 'codex'");
+      context().recordLaunch([routed], "mcp_harness_unsupported");
+      expect(context().withheldWarnings()[0].message).toBe(
+        "Personal MCP example works only in OpenCode and Claude Agent sessions, so this Codex session can't use it. Other tools remain available."
+      );
+      // With delegation off, no harness could use the server, so the harness is not the reason.
+      expect(context("false").withheldWarnings()).toEqual([]);
+    });
+    const denied = await f.context({});
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "mcp_denied" });
+  });
+  it("files the withheld-server warning under the prompt the sandbox received", async () => {
+    const sessionName = `mcp-withheld-${crypto.randomUUID()}`;
+    const { stub } = await initNamedSession(sessionName);
+    await seedSandboxAuth(stub, { authToken: token, sandboxId: "allocation-1" });
+    await queryDO(
+      stub,
+      "UPDATE sandbox SET mcp_servers = ?",
+      JSON.stringify([
+        {
+          id: "server-1",
+          name: "tracker",
+          authMode: "user_oauth",
+          authRevision: 1,
+          withheld: "mcp_runtime_outdated",
+        },
+      ])
+    );
+    const { ws } = await openSandboxWs(sessionName, {
+      authToken: token,
+      sandboxId: "allocation-1",
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    try {
+      const prompt = collectMessages(ws!, { until: (message) => message.type === "prompt" });
+      const response = await stub.fetch("http://internal/internal/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "Read the tracker", authorId: "user-1", source: "web" }),
+      });
+      const { messageId } = await response.json<{ messageId: string }>();
+      const sent = (await prompt).find((message) => message.type === "prompt");
+      expect(sent).toMatchObject({ messageId });
+      expect(sent).not.toHaveProperty("managedMcp");
+
+      const warnings = await queryDO<{ id: string; data: string; message_id: string }>(
+        stub,
+        "SELECT id, data, message_id FROM events WHERE type = 'warning'"
+      );
+      expect(warnings).toEqual([
+        {
+          id: `mcp-withheld:${messageId}:server-1`,
+          message_id: messageId,
+          data: expect.any(String),
+        },
+      ]);
+      expect(JSON.parse(warnings[0].data)).toMatchObject({
+        type: "warning",
+        scope: "mcp",
+        messageId,
+        message: expect.stringContaining("Personal MCP tracker needs a newer sandbox image"),
+      });
+    } finally {
+      await closeWebSocket(ws!, { bestEffort: true });
+    }
   });
   it("preserves a healthy bridge across transport reconnect and turn cleanup", async () => {
     const f = await fixture();
