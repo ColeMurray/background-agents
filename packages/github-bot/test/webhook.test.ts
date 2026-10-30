@@ -329,6 +329,12 @@ describe("POST /webhooks/github", () => {
     const env = makeEnv();
     const ctx = makeCtx();
     vi.mocked(env.AUTOFIX_QUEUE.send).mockRejectedValueOnce(new Error("queue unavailable"));
+    let finishForwarding!: (res: Response) => void;
+    vi.mocked(env.CONTROL_PLANE.fetch).mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        finishForwarding = resolve;
+      })
+    );
     const request = () =>
       new Request("http://localhost/webhooks/github", {
         method: "POST",
@@ -348,8 +354,15 @@ describe("POST /webhooks/github", () => {
 
     expect(failedRes.status).toBe(503);
     expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(forwardedEvents()).toHaveLength(1));
+
+    const inFlightRes = await app.fetch(request(), env, ctx);
+
+    expect(inFlightRes.status).toBe(503);
+    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledOnce();
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    finishForwarding(new Response(null, { status: 204 }));
     await flushWaitUntil(ctx, 0);
-    expect(forwardedEvents()).toHaveLength(1);
     expect(await env.GITHUB_KV.get("delivery:delivery-comment-1236")).toBeNull();
 
     const redeliveredRes = await app.fetch(request(), env, ctx);

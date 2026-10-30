@@ -69,6 +69,10 @@ app.post("/webhooks/github", async (c) => {
         event_type: event,
         dedupe_status: existing,
       });
+      // The first attempt may still clear its marker, so don't acknowledge this one yet.
+      if (existing === DELIVERY_STATUS_PROCESSING) {
+        return c.json({ error: "Delivery still processing" }, 503);
+      }
       return c.json({ ok: true, duplicate: true });
     }
 

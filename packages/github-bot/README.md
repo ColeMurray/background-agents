@@ -20,8 +20,9 @@ Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`
 and manual redeliveries do not create duplicate sessions.
 
 If the Autofix queue handoff fails, the bot still runs the rest of the delivery, responds `503`, and
-clears the delivery marker once that work settles, so the delivery can be redelivered from GitHub.
-The per-delivery dispatch checkpoint keeps the redelivery from starting a second session.
+clears the delivery marker once that work settles, so the delivery can be redelivered from GitHub. A
+redelivery that arrives while the same delivery is still processing also gets `503`. The
+per-delivery dispatch checkpoint keeps the redelivery from starting a second session.
 
 Because Cloudflare KV is eventually consistent, this is a best-effort dedupe guard rather than a
 strict cross-region lock.
@@ -126,8 +127,10 @@ access model and can authenticate auxiliary private repos on the configured SCM 
 | `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
 | `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
 
-All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
-200 immediately after signature verification and delivery dedupe.
+All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint
+responds after signature verification, delivery dedupe, and the Autofix queue handoff for eligible
+feedback: `200` on success, or `503` when that handoff fails or the same delivery is still
+processing.
 
 ### Handler Flows
 
