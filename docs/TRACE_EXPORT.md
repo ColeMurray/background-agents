@@ -49,35 +49,131 @@ a CLI.
 ## Unattended export
 
 The `export` service lets a job (for example a weekly report) export without a browser. It is off
-until an operator enables it: set `export_service_actor = "github:<numeric GitHub user id>"` in
-Terraform (or `SERVICE_AUTH_SECRET_EXPORT` and `SERVICE_AUTH_EXPORT_ACTOR` on a self-hosted control
-plane), then read the secret from the sensitive `export_service_secret` output into the job's secret
-store.
+until an operator enables it.
 
-- It calls the control plane directly, signing each request as the `export` service with the same
-  `sig1` scheme the other services use (`buildServiceAuthHeaders` in
-  `packages/shared/src/service-auth.ts`).
-- It acts only as the configured actor, which must be an existing user. Every request names that
-  actor; a request that names any other actor, or none, is refused with 401. The export sees the
-  sessions that user can see, and the user needs `sessions.export`.
+### Enable it
+
+1. Pick the user the job acts as. Prefer a dedicated user with a custom role that grants only
+   `sessions.read` and `sessions.export`. The job sees everything that user can see: pinning an
+   Owner gives an off-platform secret the Owner's visibility, including audited break-glass reads of
+   private sessions through single-session export.
+2. Find that user's id. It is the `user_id` of their GitHub identity in D1:
+
+   ```sh
+   wrangler d1 execute <database> --remote \
+     --command "SELECT user_id FROM user_identities WHERE provider = 'github' AND provider_user_id = '<github user id>'"
+   ```
+
+3. Set both Terraform variables, `export_service_actor = "github:<github user id>"` and
+   `export_service_user_id = "<user_id>"`, then apply. On a self-hosted control plane, set
+   `SERVICE_AUTH_SECRET_EXPORT`, `SERVICE_AUTH_EXPORT_ACTOR` and `SERVICE_AUTH_EXPORT_USER_ID`. The
+   service stays off unless all three are set.
+4. Read the secret from the sensitive `export_service_secret` output into the job's secret store.
+
+### What it may do
+
+- It acts only as the pinned actor, which must already exist and still belong to the pinned user. A
+  request that names any other actor, or none, gets 401. When the service is off, requests get 401
+  too.
+- The user's own access applies: the user must be active and hold `sessions.export`, and the export
+  covers only the sessions that user can see.
 - The service can only use `sessions.read` and `sessions.export`, and only on the two export routes
   above. Every other route refuses it with `service_capability_required`.
-- Treat the secret like that user's credential: whoever holds it can export everything the user can.
 - Actors are GitHub identities for now, like the GitHub bot's.
 
-```ts
-import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+### Rotation and revocation
+
+- **Rotate:** `terraform apply -replace='random_password.service_auth_secret_export[0]'`, then
+  update the job's secret store. There is one key and no overlap window, so the job fails until it
+  has the new secret.
+- **Re-pin:** changing either variable replaces the secret, so the old secret cannot act as the new
+  user. Update the job's secret store after the apply.
+- **Revoke:** set both variables to `""` and apply. This removes the secret and its bindings.
+  Suspending the pinned user also stops exports (403) without a deploy.
+- **User merge:** if the pinned user is merged into another account, their GitHub identity moves to
+  the surviving user and export returns 401. Re-pin to the surviving user if that is intended.
+
+### Signing requests
+
+Treat the secret like a password: whoever holds it can export everything the pinned user can. Each
+request carries three headers:
+
+| Header                            | Value                                 |
+| --------------------------------- | ------------------------------------- |
+| `X-OpenInspect-Service`           | `export`                              |
+| `X-OpenInspect-Service-Signature` | `sig1.<timestampMs>.<nonce>.<hmac>`   |
+| `X-OpenInspect-Actor`             | The pinned actor, e.g. `github:12345` |
+
+`<nonce>` is 1–64 lowercase hex characters. `<hmac>` is the lowercase hex HMAC-SHA256, keyed with
+the secret's UTF-8 bytes, of these nine fields joined with `\n` (no trailing newline):
+
+```text
+sig1
+export
+<timestampMs>
+<nonce>
+<METHOD, upper case>
+<URL pathname, as sent>
+<canonical query>
+<lowercase hex SHA-256 of the body bytes; of the empty string for GET>
+<actor>
+```
+
+The canonical query decodes every `key=value` pair, sorts the pairs bytewise by the UTF-8 bytes of
+`key + "\0" + value`, re-encodes each key and value with `encodeURIComponent`, and joins them with
+`&`. A URL without a query uses the empty string. This self-contained Node.js signer has no
+dependencies:
+
+```js
+import { createHash, createHmac, randomBytes } from "node:crypto";
+
+function canonicalQuery(search) {
+  const pairs = [...new URLSearchParams(search)];
+  const sortKey = ([key, value]) => Buffer.from(`${key}\0${value}`, "utf8");
+  pairs.sort((a, b) => Buffer.compare(sortKey(a), sortKey(b)));
+  return pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+}
+
+function exportHeaders({ url, secret, actor, method = "GET", body = "" }) {
+  const { pathname, search } = new URL(url);
+  const timestampMs = Date.now();
+  const nonce = randomBytes(8).toString("hex");
+  const bodySha256 = createHash("sha256").update(body).digest("hex");
+  const canonical = [
+    "sig1",
+    "export",
+    timestampMs,
+    nonce,
+    method.toUpperCase(),
+    pathname,
+    canonicalQuery(search),
+    bodySha256,
+    actor,
+  ].join("\n");
+  const hmac = createHmac("sha256", secret).update(canonical).digest("hex");
+  return {
+    "X-OpenInspect-Service": "export",
+    "X-OpenInspect-Service-Signature": `sig1.${timestampMs}.${nonce}.${hmac}`,
+    "X-OpenInspect-Actor": actor,
+  };
+}
 
 const url = `${CONTROL_PLANE_URL}/sessions/export?scope=runs&include=messages,events,usage&limit=5`;
-const headers = await buildServiceAuthHeaders({
-  service: "export",
-  secret: process.env.EXPORT_SERVICE_SECRET!,
-  method: "GET",
+const headers = exportHeaders({
   url,
+  secret: process.env.EXPORT_SERVICE_SECRET,
   actor: "github:12345",
 });
 const ndjson = await (await fetch(url, { headers })).text();
 ```
+
+Inside this repository, `buildServiceAuthHeaders` in `packages/shared/src/service-auth.ts` produces
+the same headers.
+
+A signature is accepted for 5 minutes either side of the control plane's clock and covers the
+method, path, query, body and actor. The control plane only logs a reused nonce, per isolate, so a
+captured request can be replayed within that window. Call the control plane over HTTPS only and keep
+request logs private.
 
 The response has `Content-Type: application/x-ndjson` and `Cache-Control: private, no-store`. Lines
 are `schemaVersion: 2` and one of:
