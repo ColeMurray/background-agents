@@ -104,8 +104,10 @@ connectors remain available. Healthy bridge-process reconnects preserve personal
 process replacement during a prepared turn remains fenced until a new sandbox allocation.
 
 In a session where several people prompt, each turn delegates as its own author. The proxy
-authenticates the shared sandbox, not the process inside it, so a process left running from one
-author's turn can make personal MCP calls during another author's turn. This is a known limitation.
+authenticates the shared sandbox, not the process inside it, so a process left running from an
+earlier turn can make personal MCP calls during the active author's turn. That covers another
+person's turn and automated ones (Autofix and other GitHub turns, Linear, automations), which can
+carry text from outside the team. This is a known limitation.
 
 ### Actors
 
