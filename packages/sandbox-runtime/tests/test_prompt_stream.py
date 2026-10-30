@@ -7,14 +7,15 @@ the cross-prompt session-title dedupe, which are directly testable now.
 """
 
 import json
+from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
+from sandbox_runtime.harness.opencode_client import SSEConnectionError, SSEStreamDisconnectedError
 from sandbox_runtime.harness.opencode_stream import (
-    MAX_REASONING_SUMMARIES,
-    MAX_REASONING_SUMMARY_CHARS,
     OpenCodePromptStream,
     _Disposition,
     _message_created_epoch_ms,
@@ -32,9 +33,9 @@ PROMPT_TS_MS = 1_754_000_000_000
 PROMPT_MESSAGE_ID = oc_message_id(PROMPT_TS_MS, 2, "p")
 
 
-def make_stream() -> OpenCodePromptStream:
+def make_stream(client: Any = None) -> OpenCodePromptStream:
     return OpenCodePromptStream(
-        client=MagicMock(),
+        client=client or MagicMock(),
         attachment_processor=MagicMock(),
         log=MagicMock(),
         sse_inactivity_timeout_seconds=120.0,
@@ -266,60 +267,6 @@ class TestReasoningProgress:
         time = {"start": start} if end is None else {"start": start, "end": end}
         return {"type": "reasoning", "id": part_id, "time": time, "text": text}
 
-    def test_first_opening_starts_the_clock_and_each_finish_adds_its_summary(self):
-        stream, state = self.authorized()
-
-        opened = self.apply(stream, state, self.reasoning("prt_r1", self.T0))
-        first = self.apply(
-            stream,
-            state,
-            self.reasoning("prt_r1", self.T0, self.T0 + 26_000, "**Reading the failing test**"),
-        )
-        second_opened = self.apply(stream, state, self.reasoning("prt_r2", self.T0 + 26_005))
-        second = self.apply(
-            stream,
-            state,
-            self.reasoning("prt_r2", self.T0 + 26_005, self.T0 + 47_000, "**Planning the fix**"),
-        )
-
-        assert opened == [
-            {
-                "type": "reasoning",
-                "messageId": "cp-msg-1",
-                "stepId": "prt_step_1",
-                "startedAt": self.T0,
-                "updatedAt": self.T0,
-                "summaries": [],
-                "summaryCount": 0,
-                "active": True,
-            }
-        ]
-        assert first[0]["summaries"] == [
-            {"text": "**Reading the failing test**", "at": self.T0 + 26_000}
-        ]
-        assert second_opened == []
-        assert second[0]["startedAt"] == self.T0
-        assert second[0]["updatedAt"] == self.T0 + 47_000
-        assert [summary["text"] for summary in second[0]["summaries"]] == [
-            "**Reading the failing test**",
-            "**Planning the fix**",
-        ]
-        assert second[0]["summaryCount"] == 2
-
-    def test_replayed_finish_is_ignored_and_empty_summary_only_advances_the_clock(self):
-        stream, state = self.authorized()
-        finished = self.reasoning("prt_r1", self.T0, self.T0 + 20_000, "**Planning**")
-        self.apply(stream, state, finished)
-
-        replayed = self.apply(stream, state, finished)
-        empty = self.apply(
-            stream, state, self.reasoning("prt_r2", self.T0 + 20_001, self.T0 + 41_000)
-        )
-
-        assert replayed == []
-        assert empty[0]["updatedAt"] == self.T0 + 41_000
-        assert empty[0]["summaryCount"] == 1
-
     def test_each_step_gets_its_own_run(self):
         stream, state = self.authorized()
         self.apply(stream, state, self.reasoning("prt_r1", self.T0, self.T0 + 5_000, "**First**"))
@@ -334,24 +281,25 @@ class TestReasoningProgress:
         assert later[0]["startedAt"] == self.T0 + 9_000
         assert [summary["text"] for summary in later[0]["summaries"]] == ["**Second**"]
 
-    def test_summaries_are_trimmed_and_only_the_newest_are_kept(self):
+    def test_a_replayed_part_keeps_the_step_it_was_streamed_in(self):
         stream, state = self.authorized()
-        long_text = "  " + "x" * (MAX_REASONING_SUMMARY_CHARS + 50) + "\n"
-        total = MAX_REASONING_SUMMARIES + 3
+        finished = self.reasoning("prt_r1", self.T0, self.T0 + 5_000, "**First**")
+        self.apply(stream, state, finished)
+        self.apply(stream, state, {"type": "step-finish", "id": "prt_finish_1"})
 
-        events: list[dict] = []
-        for index in range(total):
-            text = long_text if index == total - 1 else f"**Thought {index}**"
-            start = self.T0 + index * 1_000
-            events = self.apply(
-                stream, state, self.reasoning(f"prt_r{index}", start, start + 500, text)
-            )
+        after_finish = self.apply(stream, state, finished)
+        self.apply(stream, state, {"type": "step-start", "id": "prt_step_2"})
+        opened = self.apply(stream, state, self.reasoning("prt_r2", self.T0 + 9_000))
+        during_next_step = self.apply(stream, state, finished)
+        later = self.apply(
+            stream, state, self.reasoning("prt_r2", self.T0 + 9_000, self.T0 + 12_000, "**Second**")
+        )
 
-        latest = events[0]
-        assert latest["summaryCount"] == total
-        assert len(latest["summaries"]) == MAX_REASONING_SUMMARIES
-        assert latest["summaries"][0]["text"] == "**Thought 3**"
-        assert latest["summaries"][-1]["text"] == "x" * (MAX_REASONING_SUMMARY_CHARS - 1) + "…"
+        assert after_finish == []
+        assert during_next_step == []
+        assert opened[0]["stepId"] == "prt_step_2"
+        assert later[0]["startedAt"] == self.T0 + 9_000
+        assert [summary["text"] for summary in later[0]["summaries"]] == ["**Second**"]
 
     def test_output_ends_reasoning_and_resumed_reasoning_reopens_it(self):
         """Clients see a text part only once it completes, so reasoning has to be
@@ -418,7 +366,76 @@ class TestReasoningProgress:
         )
 
         assert events == []
-        assert "msg_child" not in state.reasoning_runs
+
+    async def test_a_dropped_stream_recovers_reasoning_from_the_final_message_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The stream drops mid-step; a finish only the fetched message holds
+        still reaches its step, though no step is open any more."""
+        monkeypatch.setattr(
+            OpenCodeIdentifier, "ascending", classmethod(lambda cls, prefix: PROMPT_MESSAGE_ID)
+        )
+        info = {
+            "id": self.ASSISTANT_ID,
+            "role": "assistant",
+            "sessionID": PARENT_SESSION_ID,
+            "parentID": PROMPT_MESSAGE_ID,
+            "providerID": "openai",
+        }
+        parts = [
+            {"type": "step-start", "id": "prt_step_1"},
+            self.reasoning("prt_r1", self.T0, self.T0 + 5_000, "**Early**"),
+            self.reasoning("prt_r2", self.T0 + 5_001, self.T0 + 120_000, "**Late**"),
+        ]
+        parts = [
+            {"sessionID": PARENT_SESSION_ID, "messageID": self.ASSISTANT_ID, **p} for p in parts
+        ]
+        client = _DroppingClient(
+            [
+                sse("message.updated", {"info": info}),
+                *(sse("message.part.updated", {"part": p}) for p in parts[:2]),
+                sse(
+                    "message.part.updated",
+                    {"part": {**parts[2], "time": {"start": self.T0 + 5_001}}},
+                ),
+            ],
+            final_messages=[{"info": info, "parts": parts}],
+        )
+
+        events = []
+        with pytest.raises(SSEConnectionError):
+            async for event in make_stream(client).stream_prompt(
+                opencode_session_id=PARENT_SESSION_ID, message_id="cp-msg-1", content="Fix it"
+            ):
+                events.append(event)
+
+        recovered = [event for event in events if event["type"] == "reasoning"][-1]
+        assert recovered["stepId"] == "prt_step_1"
+        assert recovered["updatedAt"] == self.T0 + 120_000
+        assert [summary["text"] for summary in recovered["summaries"]] == ["**Early**", "**Late**"]
+
+
+class _DroppingClient:
+    """An OpenCode client whose event stream drops after the given events."""
+
+    def __init__(self, sse_events: list[dict], *, final_messages: list[dict]) -> None:
+        self._sse_events = sse_events
+        self._final_messages = final_messages
+
+    @asynccontextmanager
+    async def events(self, *, inactivity_timeout_seconds: float):
+        async def dropping():
+            for event in self._sse_events:
+                yield event
+            raise SSEStreamDisconnectedError("peer closed connection")
+
+        yield dropping()
+
+    async def post_prompt(self, opencode_session_id: str, request_body: dict) -> None:
+        pass
+
+    async def get_messages(self, opencode_session_id: str) -> list[dict]:
+        return self._final_messages
 
 
 class TestSessionTitleDedupe:

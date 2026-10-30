@@ -10,6 +10,10 @@ class StepIdTracker:
     finished: dict[str, str] = field(default_factory=dict)
     completed: set[str] = field(default_factory=set)
 
+    def current(self, message_id: str) -> str | None:
+        """The step a message is in now: started and not yet finished."""
+        return self.active.get(message_id)
+
     def start(self, message_id: str, part_id: str | None) -> str:
         step_id = part_id or str(uuid.uuid4())
         if step_id not in self.completed:
