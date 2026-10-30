@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { isWorkspaceAdmin } from "@open-inspect/shared/rbac";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,7 @@ import {
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
 import { useWorkspaceAdministration } from "@/hooks/use-workspace-administration";
 import { MergeMembersDialog } from "./merge-members-dialog";
+import { SignInAllowlistSection } from "./sign-in-allowlist-section";
 
 /**
  * Shows workspace members and roles, exposing member controls only when the user may manage them.
@@ -22,6 +24,8 @@ export function WorkspaceSettings() {
   const canReadMembers = hasPermission("workspace.members.read");
   const canReadRoles = hasPermission("workspace.roles.read");
   const canManage = hasPermission("workspace.members.manage");
+  const canManageAdmission =
+    canManage && authorization?.suspendedAt === null && isWorkspaceAdmin(authorization.role.key);
   const canAssignRoles = canManage && canReadRoles;
   const canTransfer = hasPermission("workspace.transfer_ownership");
   const canMerge = canReadMembers && hasPermission("workspace.members.merge");
@@ -36,9 +40,6 @@ export function WorkspaceSettings() {
   const unsuspendedOwnerCount = members.filter(
     (member) => member.role.key === "owner" && member.suspendedAt === null
   ).length;
-
-  if (loading) return <p className="text-sm text-muted-foreground">Loading workspace access...</p>;
-  if (error) return <ErrorBanner>Failed to load workspace access.</ErrorBanner>;
 
   async function mutate(memberId: string, action: () => Promise<void>) {
     setMutationError(null);
@@ -60,9 +61,7 @@ export function WorkspaceSettings() {
     <div className="space-y-10">
       <div>
         <h2 className="text-xl font-semibold text-foreground">Workspace access</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Assign one role to each canonical user. Backend authorization remains authoritative.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Manage members and access.</p>
       </div>
 
       {mutationError && <ErrorBanner>{mutationError}</ErrorBanner>}
@@ -72,8 +71,13 @@ export function WorkspaceSettings() {
         </ErrorBanner>
       )}
 
-      {canReadMembers && (
-        <section className="space-y-3">
+      {canManageAdmission && <SignInAllowlistSection key={authorization.userId} />}
+
+      {loading && <p className="text-sm text-muted-foreground">Loading workspace access...</p>}
+      {error && <ErrorBanner>Failed to load workspace access.</ErrorBanner>}
+
+      {canReadMembers && !loading && !error && (
+        <section id="workspace-members" className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Members
@@ -166,7 +170,7 @@ export function WorkspaceSettings() {
         </section>
       )}
 
-      {canReadRoles && (
+      {canReadRoles && !loading && !error && (
         <section className="space-y-3">
           <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Roles

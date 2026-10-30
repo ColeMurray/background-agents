@@ -31,6 +31,7 @@ import { WebSocketServer } from "ws";
 import { SessionIndexStore } from "../db/session-index";
 import { SqlCacheStore } from "../db/sql-cache-store";
 import type { SqlDatabase } from "../db/sql-database";
+import type { ObjectStorage } from "../storage/object-storage";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 import { createLogger, parseLogLevel, type Logger } from "../logger";
 import { catalog } from "../routes/catalog";
@@ -55,7 +56,6 @@ import { NodeJobs } from "./job-queue";
 import { openJobStore } from "./job-store";
 import { ensurePrivateDirectory } from "./private-paths";
 import { createNodeSessionRuntimeDispatch } from "./runtime-client";
-import { createS3ObjectStorage, type S3ObjectStorageConfig } from "./s3-object-storage";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { createFileSessionStoreProvider } from "./session-store";
 import { openNodeSqlDatabase } from "./sqlite-database";
@@ -67,7 +67,7 @@ export const GLOBAL_STORE_FILE = "global.db";
 export interface NodeHostOptions {
   config: EnvConfig;
   settings: NodeHostSettings;
-  objectStorage: S3ObjectStorageConfig;
+  objectStorage: ObjectStorage;
   /** The route modules to serve: the production catalog unless a test supplies its own. */
   routes?: readonly RouteModule[];
 }
@@ -191,7 +191,7 @@ async function boot(
     DB: db,
     SESSION: createNodeSessionRuntimeDispatch(registry),
     REPOS_CACHE: new SqlCacheStore(cacheDb),
-    MEDIA_BUCKET: createS3ObjectStorage(options.objectStorage),
+    MEDIA_BUCKET: options.objectStorage,
     JOBS: jobs,
   };
   const env: Env = { ...config, ...platform };

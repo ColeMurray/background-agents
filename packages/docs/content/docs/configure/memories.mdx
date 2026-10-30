@@ -4,7 +4,7 @@ description: Keep facts and standing instructions between sessions, review what 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-28"
 relatedCode:
   - docs/MEMORY.md
   - packages/shared/src/types/memories.ts
@@ -15,6 +15,8 @@ relatedCode:
   - packages/control-plane/src/authorization/memory-access.ts
   - packages/control-plane/src/memory/render.ts
   - packages/control-plane/src/memory/lifecycle.ts
+  - packages/control-plane/src/memory/session-rules.ts
+  - packages/control-plane/src/routes/session-create.ts
   - packages/web/src/components/settings/memories-settings/index.tsx
   - packages/web/src/components/settings/memories-settings/memory-collection.tsx
   - packages/web/src/components/settings/memories-settings/memory-card.tsx
@@ -31,8 +33,8 @@ Agents can propose memories as they work. Apart from one narrow case for persona
 
 <Callout type="warn" title="Memories are context, not secrets">
   Memory content is given to the agent as text and can appear in its responses. Never store
-  credentials in a memory. Personal memories included in a shared session may be visible to its
-  collaborators.
+  credentials in a memory. Anything the agent writes from your personal memories appears in the
+  session, where anyone who can see the session can read it.
 </Callout>
 
 ## Facts and directives
@@ -48,11 +50,11 @@ Use facts for knowledge that matters only sometimes; use directives sparingly, f
 
 ## Scopes and who can manage them
 
-| Scope       | Loaded into                                | Who can see it                                                                     | Who can create, edit, approve, and archive                                                                                                                                           |
-| ----------- | ------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Personal    | Your new sessions, when you include them   | Only you. Administrators and Owners cannot see another person's personal memories. | You, with `memories.manage_own` (Members, Administrators, and Owners).                                                                                                               |
-| Repository  | New sessions that include the repository   | Anyone who can read the repository, including Viewers                              | Owners and Administrators (`repositories.settings.manage`). Another role with that permission must also lead an active team that holds a grant for the repository, if any team does. |
-| Environment | New sessions launched from the environment | Anyone who can read the environment                                                | People with management access to the environment and `environments.settings.manage`.                                                                                                 |
+| Scope       | Loaded into                                                                          | Who can see it                                                                                                              | Who can create, edit, approve, and archive                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Personal    | Your web and Slack DM sessions, [read on your prompts](#including-personal-memories) | You, in Settings; Administrators and Owners cannot open another person's. What a session loads can reach its other readers. | You, with `memories.manage_own` (Members, Administrators, and Owners).                                                                                                               |
+| Repository  | New sessions that include the repository                                             | Anyone who can read the repository, including Viewers                                                                       | Owners and Administrators (`repositories.settings.manage`). Another role with that permission must also lead an active team that holds a grant for the repository, if any team does. |
+| Environment | New sessions launched from the environment                                           | Anyone who can read the environment                                                                                         | People with management access to the environment and `environments.settings.manage`.                                                                                                 |
 
 Settings › Memories appears for anyone who can create sessions or manage personal memories. Settings › Shared memories appears for anyone who can read repositories or environments; people without management access see shared memories read-only. See [Workspace access](/administration/workspace-access) for roles and team grants.
 
@@ -64,31 +66,41 @@ When a session is created, OpenInspect selects the active memories that apply to
 - The agent has three memory tools: `memory_search` finds active facts by keyword, including facts that did not fit in the catalog; `memory_read` reads a fact's current content; and `memory_write` saves or proposes a new memory.
 - Agents are told that most sessions should save nothing. They save a memory when you ask them to remember something, correct them, state a standing preference, or confirm a non-obvious approach, or when they verify a hard-won fact that the repository doesn't record and that would change what the next session does first. They skip work summaries, status, fixes already in the code, anything the repository already says, sandbox quirks, and guesses, and they check for an existing memory to update before writing. They write a directive only when you ask them to remember a preference.
 - Editing or archiving a memory does not change text already given to a running session. Start a new session to pick up changes.
-- Child sessions inherit their parent's exact selection.
+- Child sessions inherit their parent's selection. A child started on someone else's prompt leaves out the parent owner's personal memories.
 
 If a session holds more than fits, whole records are left out: at most 100 directives (6,000 characters per scope, 12,000 in total) and 200 catalog facts (24,000 characters of titles and descriptions). Environment memories come first, then each repository in session order, then personal memories. A top-level session can still find and read an active fact that was left out by searching for it.
 
 ### See what a session loaded
 
-Expand Memories in the session's right sidebar. It groups the pinned memories by repository, environment, or Personal scope. Hover over or focus a row for its revision, how it was included, and an estimated token count. A row marked "revised" or "archived" changed after the session started. The footer shows the total estimate, whether personal memories were included, and how many records were omitted for budget. Each row links to the memory in Settings.
+Expand Memories in the session's right sidebar. It groups the pinned memories by repository, environment, or Personal scope. Hover over or focus a row for its revision, how it was included, and an estimated token count. A row marked "revised" or "archived" changed after the session started. The footer shows the total estimate, whether personal memories were included, and how many records were omitted for budget. Each row links to the memory in Settings. Personal memories are listed only for the session owner; everyone else sees how many there are.
 
 ## Including personal memories
 
-Settings › Memories has an **Include my personal memories in new sessions** switch. It is on by default and applies to your new web, integration-created, and scheduled sessions. Existing sessions keep their original selection.
+Your personal memories work for you, not for whoever is using a session. Settings › Memories has a **Use my personal memories in my sessions** switch, on by default.
 
-Turning it off also stops agents in those sessions from reading, searching, or writing your personal memories. Turning it on means personal content may appear in agent responses in sessions you share, though collaborators still cannot open your personal memories in Settings.
+- **Which sessions include them.** New sessions you start on the web or in a Slack direct message. Automation runs, including ones you trigger yourself, never include them, and neither do sessions started from a Slack channel, from Linear, or from GitHub.
+- **Only your own prompts use them.** While the agent works on your prompt, it can search, read, and save your personal memories. While it works on someone else's prompt, or an automatic one such as Autofix, it cannot. The personal directives and catalog loaded when the session started stay in the agent's context for every prompt.
+- **Someone else's prompt ends searching.** A prompt can leave a program running in the sandbox, so once someone else has prompted the session, or a session that started it, the agent stops searching and reading your personal memories there for good. Your later prompts can still save new ones for you to review.
+- **Turning the switch off** reaches existing sessions too: their agents stop searching, reading, and saving your personal memories at once. What a session loaded when it started stays in its context.
+- **Sessions prompted before these rules** keep the personal memories they loaded, automation runs and Slack channel, Linear, or GitHub sessions included. Their earlier prompts count as someone else's, so their agents no longer search or read your personal memories, and what they save waits for your review.
+
+Session visibility changes none of this: a team- or workspace-visible session you prompt yourself uses your personal memories exactly as a private one does.
+
+What this does not stop: anything the agent writes from your personal memories appears in the session, where everyone who can see it can read it. The directives and catalog loaded at the start shape every prompt, and they sit in the sandbox's files, where anyone who opens its terminal can read them. Anyone who can open a session's terminal, editor, or desktop can do what its agent can, so while your prompts run they can also search and read the rest of your personal memories and save new facts, just as they can use the session's other credentials.
+
+Sessions use your personal memories only while you have `memories.manage_own`, so agents never save memories you cannot review. If your role loses it, new sessions don't include your personal memories, and agents can no longer search, read, or save them. Unlike turning the switch off, it also leaves the personal directives and catalog out of an existing session's context the next time its sandbox starts; the session keeps running without them.
 
 ## How agent proposals are approved
 
 Memories you create in Settings are active immediately. What an agent writes depends on the type and scope.
 
-| Agent writes                     | Result                                                                                                                       |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Personal fact                    | Active immediately only in a top-level session that has stayed private and owner-only. Otherwise proposed for you to review. |
-| Personal directive               | Proposed for you to review.                                                                                                  |
-| Repository or environment memory | Proposed for someone who can manage that scope.                                                                              |
+| Agent writes                     | Result                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Personal fact                    | Active immediately on your own prompt in a top-level session, until someone else prompts it. Otherwise proposed for you to review. |
+| Personal directive               | Proposed for you to review.                                                                                                        |
+| Repository or environment memory | Proposed for someone who can manage that scope.                                                                                    |
 
-Once a session is shared or gains a collaborator, its personal facts are always proposed, even if it is made private again. Child sessions never save personal facts directly. An agent's personal fact that replaces a directive is always proposed, so a directive cannot be replaced without your approval. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
+Once someone else prompts a session, the personal facts it saves are always proposed. Sharing the session or adding a collaborator does not change this by itself. Child sessions never save personal facts directly. An agent's personal fact that replaces a directive is always proposed, so a directive cannot be replaced without your approval. When an agent proposes a memory, it is instructed to tell you that it awaits review in Settings › Memories (personal) or Settings › Shared memories.
 
 Each session can make at most 20 memory writes, with at most 5 proposals pending at a time.
 
@@ -96,7 +108,7 @@ Each session can make at most 20 memory writes, with at most 5 proposals pending
 flowchart TB
     accTitle: Memory lifecycle from proposal to archive
     Agent([Agent writes]) -->|needs approval| Proposed
-    Agent -->|private owner-only personal fact| Active
+    Agent -->|your personal fact, nobody else involved| Active
     You([You create]) --> Active
     Proposed -->|Approve| Active
     Proposed -->|Reject| Rejected[Archived: Rejected]
@@ -210,9 +222,17 @@ The server accepts up to 8 memories per request. The page sends larger selection
 </Accordion>
   <Accordion title="A memory is not loaded in a new session">
     Check that it is Active, not Proposed or Archived; that the session includes its repository
-    or environment; and, for personal memories, that **Include my personal memories in new
-    sessions** is on. If the sidebar shows records "omitted for budget", the session held more
-    memories than fit; shorten or archive directives, or tighten fact descriptions.
+    or environment; and, for personal memories, that **Use my personal memories in my sessions**
+    is on and that you started the session on the web or in a Slack direct message. If the
+    sidebar shows records "omitted for budget", the session held more memories than fit; shorten
+    or archive directives, or tighten fact descriptions.
+
+</Accordion>
+  <Accordion title="The agent says personal memory is unavailable">
+    Cause: the agent is working on someone else's prompt; someone else has prompted the session,
+    or one that started it; the session was started by an automation or an integration other than
+    a Slack direct message; or your personal memory switch is off. Fix: turn the switch on if it's
+    off, then start a new session and prompt it yourself.
 
 </Accordion>
 </Accordions>

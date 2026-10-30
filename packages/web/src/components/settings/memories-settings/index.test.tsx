@@ -386,10 +386,11 @@ describe("memory management", () => {
     }
   });
 
-  it("saves the default opt-out and explains the shared-session audience", async () => {
+  it("saves the opt-out and explains who personal memories reach", async () => {
     render(<MemoriesSettings />);
-    expect(screen.getByText(/may appear in agent responses/)).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Include my personal memories in new sessions"));
+    expect(screen.getByText(/Only your own prompts can search, read or save/)).toBeTruthy();
+    expect(screen.getByText(/stops your existing sessions/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Use my personal memories in my sessions"));
     await waitFor(() =>
       expect(mocks.setMemoryPreferences).toHaveBeenCalledWith({ includePersonalMemories: false })
     );
@@ -400,7 +401,7 @@ describe("memory management", () => {
     mocks.canManageOwn = false;
     render(<MemoriesSettings />);
     expect(mocks.collection).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("Include my personal memories in new sessions"));
+    fireEvent.click(screen.getByLabelText("Use my personal memories in my sessions"));
     await waitFor(() =>
       expect(mocks.setMemoryPreferences).toHaveBeenCalledWith({ includePersonalMemories: false })
     );

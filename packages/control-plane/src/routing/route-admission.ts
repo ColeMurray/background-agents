@@ -3,14 +3,13 @@
 import {
   ACTOR_ADMISSION_DENIED_CODE,
   ACTOR_EMAIL_REQUIRED_CODE,
+  type ActorProfileClaims,
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import type { Principal } from "../auth/principal";
-import {
-  AdmissionDeniedError,
-  AdmissionPolicy,
-  admissionPolicyConfigFromEnv,
-} from "../auth/user/admission-policy";
+import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
+import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
+import { AdmissionPolicyStore } from "../db/admission-policy-store";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
@@ -35,6 +34,7 @@ import type {
   RouteAuthentication,
   RouteAuthorizationRequirement,
   RouteParams,
+  ServiceActorClaimsResult,
 } from "../routes/shared";
 import { SessionInternalPaths } from "../session/contracts";
 import { createSessionRuntimeClient } from "../session/runtime-client";
@@ -445,7 +445,6 @@ async function finalizeServiceActor(
         ),
       };
     }
-    const admissionPolicy = new AdmissionPolicy(admissionPolicyConfigFromEnv(env));
     // Resolve existing accounts first so linking preserves role and suspension;
     // the store checks admission immediately before creating a new user.
     const user = await new UserStore(ctx.db).resolveOrCreateUser(
@@ -456,21 +455,31 @@ async function finalizeServiceActor(
         providerEmail: email ?? undefined,
         avatarUrl: claims?.avatarUrl,
       },
-      (identity) => {
+      async (identity) => {
+        const admissionPolicy = await resolveEffectiveAdmissionPolicy(
+          admissionPolicyConfigFromEnv(env),
+          new AdmissionPolicyStore(ctx.db)
+        );
         const attestedEmail = isEmailAttestingProvider(identity.provider)
           ? normalizeEmail(identity.providerEmail)
           : null;
         admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
       }
     );
+    const knownActor: KnownActor = { ...actor, canonicalUserId: user.id };
+    // Enrolled by a concurrent request after this one authenticated (#2470):
+    // apply claims exactly as for an actor known at authentication.
+    if (user.outcome === "existing" && claims) {
+      await claimKnownActorProfile(ctx, knownActor, claims);
+    }
     ctx.principal = {
       ...principal,
-      actor: { ...actor, canonicalUserId: user.id },
+      actor: knownActor,
     };
     return null;
   } catch (cause) {
     if (cause instanceof AdmissionDeniedError) {
-      logger.warn("Refused to enroll a service actor outside deployment admission", {
+      logger.warn("Refused to enroll a service actor outside workspace admission", {
         event: "auth.service_actor_admission_denied",
         provider: principal.actor.provider,
         request_id: ctx.request_id,
@@ -509,22 +518,38 @@ async function completeKnownActorProfile(
   actor: KnownActor
 ): Promise<void> {
   if (!policy.serviceActorClaims) return;
+  let prepared: ServiceActorClaimsResult;
   try {
-    const prepared = await policy.serviceActorClaims(request.clone(), ctx);
-    if (prepared.kind === "rejected") return;
+    prepared = await policy.serviceActorClaims(request.clone(), ctx);
+  } catch (cause) {
+    return warnProfileClaimFailed(ctx, cause);
+  }
+  if (prepared.kind === "claims") await claimKnownActorProfile(ctx, actor, prepared.claims);
+}
+
+async function claimKnownActorProfile(
+  ctx: RequestContext,
+  actor: KnownActor,
+  claims: ActorProfileClaims
+): Promise<void> {
+  try {
     const profileClaim = new KnownActorProfileClaim(
       new UserStore(ctx.db),
       new IdentityClaimStore(ctx.db)
     );
-    await profileClaim.claim(actor, prepared.claims);
+    await profileClaim.claim(actor, claims);
   } catch (cause) {
-    logger.warn("Failed to complete known service actor profile", {
-      event: "auth.service_actor_profile_failed",
-      error: cause instanceof Error ? cause : String(cause),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
+    warnProfileClaimFailed(ctx, cause);
   }
+}
+
+function warnProfileClaimFailed(ctx: RequestContext, cause: unknown): void {
+  logger.warn("Failed to complete known service actor profile", {
+    event: "auth.service_actor_profile_failed",
+    error: cause instanceof Error ? cause : String(cause),
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {

@@ -5,8 +5,10 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import {
   McpServerConflictError,
+  McpServerCredentialsUnreadableError,
   McpServerStore,
   McpServerValidationError,
+  type McpServerMetadataOptions,
 } from "../db/mcp-servers";
 import { Hono } from "hono";
 import type { Env } from "../types";
@@ -24,6 +26,17 @@ import {
 
 const logger = createLogger("router:mcp-servers");
 
+/**
+ * Stored credentials are write-only. Their names go only to callers who can
+ * manage MCP servers, as repository and global secret names need
+ * `*.secrets.manage`; readers get metadata without them.
+ */
+function metadataOptions(ctx: RequestContext): McpServerMetadataOptions {
+  return {
+    includeCredentialKeys: ctx.authorization?.permissions.includes("mcp_servers.manage") ?? false,
+  };
+}
+
 async function handleListMcpServers(
   request: Request,
   env: Env,
@@ -36,7 +49,7 @@ async function handleListMcpServers(
   const repo = url.searchParams.get("repo") ?? undefined;
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
-  const servers = await store.list(repo);
+  const servers = await store.list(repo, metadataOptions(ctx));
   logger.info("MCP servers listed", {
     event: "mcp_server.list",
     request_id: ctx.request_id,
@@ -56,7 +69,7 @@ async function handleGetMcpServer(
   if (!ctx.db) return error("Database not configured", 503);
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
-  const server = await store.get(id);
+  const server = await store.get(id, metadataOptions(ctx));
   if (!server) return error("MCP server not found", 404);
   logger.info("MCP server retrieved", {
     event: "mcp_server.get",
@@ -85,7 +98,7 @@ async function handleCreateMcpServer(
   const encryptionKey = requireRepoSecretsEncryptionKey(env);
   try {
     const store = new McpServerStore(ctx.db, encryptionKey);
-    const server = await store.create(parsed);
+    const server = await store.create(parsed, metadataOptions(ctx));
     logger.info("MCP server created", {
       event: "mcp_server.created",
       request_id: ctx.request_id,
@@ -122,7 +135,7 @@ async function handleUpdateMcpServer(
   try {
     const store = new McpServerStore(ctx.db, encryptionKey);
     const { revision, ...patch } = parsed;
-    const updated = await store.update(id, patch, revision);
+    const updated = await store.update(id, patch, revision, metadataOptions(ctx));
     if (!updated) return error("MCP server not found", 404);
 
     logger.info("MCP server updated", {
@@ -134,6 +147,15 @@ async function handleUpdateMcpServer(
     return json(updated);
   } catch (err) {
     if (err instanceof McpServerConflictError) {
+      return error(err.message, 409);
+    }
+    if (err instanceof McpServerCredentialsUnreadableError) {
+      logger.warn("MCP server update refused: kept credentials are unreadable", {
+        event: "mcp_server.update_credentials_unreadable",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+        id,
+      });
       return error(err.message, 409);
     }
     if (err instanceof McpServerValidationError) {

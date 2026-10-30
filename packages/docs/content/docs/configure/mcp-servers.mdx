@@ -4,7 +4,7 @@ description: Give agents extra tools by registering local or remote MCP servers,
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-29"
 relatedCode:
   - packages/shared/src/types/integrations.ts
   - packages/web/src/components/settings/mcp-servers-settings.tsx
@@ -20,7 +20,7 @@ MCP servers add tools to the agent (a browser, a documentation index, an interna
 
 ## Prerequisites
 
-- The `mcp_servers.manage` permission to add, edit, enable, disable, or delete servers. Users with only `mcp_servers.read` can view the list.
+- The `mcp_servers.manage` permission to add, edit, enable, disable, or delete servers and to see the names of saved credentials. Users with only `mcp_servers.read` can view the list, but not credential names.
 - For repository-scoped servers, at least one connected repository. The form shows "No repositories available. Connect a GitHub integration first." otherwise; see [GitHub](/integrations/github).
 
 ## Adding a server
@@ -61,7 +61,23 @@ Choose "All repositories" (available in every agent session) or "Selected reposi
 | Local  | A command as an argument list, plus optional environment variables | Prepares the package (for `npx` commands) and starts the process inside the sandbox |
 | Remote | A URL, plus optional headers                                       | Connects the agent to the URL from inside the sandbox                               |
 
-Credentials you enter as environment variables or headers are stored encrypted on the server side. The settings page only reports whether a server has them; it never shows the values again. They are injected into the session when the server is prepared.
+## Saved credentials
+
+Environment variables and headers are credentials: they are stored encrypted on the server side and injected into the session when the server is prepared. They are write-only. After you save a value, neither the settings page nor the API returns it to anyone.
+
+When someone with `mcp_servers.manage` edits a server, the form lists each saved environment variable or header by name, with its value hidden. Names are locked. Users with only `mcp_servers.read` see neither names nor values.
+
+| To                  | Do this in the edit form                                                |
+| ------------------- | ----------------------------------------------------------------------- |
+| Keep a saved value  | Leave its row blank.                                                    |
+| Replace a value     | Enter a new value in its row.                                           |
+| Remove a credential | Remove its row.                                                         |
+| Rename a credential | Remove its row, then click + Add and enter the new name with its value. |
+| Add a credential    | Click + Add and enter a name and value.                                 |
+
+Nothing changes until you click Save Changes. Header names match without regard to case, so a new `authorization` row replaces a saved `Authorization` header. Environment variable names are case-sensitive. Switching between Local and Remote hides the saved rows, because headers and environment variables are not interchangeable. Switching back before saving restores them, but saving under the other type deletes the saved credentials.
+
+API clients make the same per-name edits by sending `keepCredentialKeys` with `PUT /mcp-servers/:id`. Listed names keep their saved values, names sent in `env` or `headers` take the new values, and saved names that are neither kept nor sent are deleted. Without `keepCredentialKeys`, the credentials sent replace the whole saved set. If the saved credentials cannot be decrypted, for example after the encryption key changed, a request with `keepCredentialKeys` is refused with `409` and nothing changes; send the full set without it to replace them.
 
 ## Scope and enablement
 
@@ -71,7 +87,7 @@ Credentials you enter as environment variables or headers are stored encrypted o
 | Selected repositories only | The server is available only in sessions for the chosen repositories. At least one must be selected.                   |
 | Enabled switch             | A disabled server stays configured but is not passed to any session. Toggle it from the list without opening the form. |
 
-Edit a server from the list to change any field and click Save Changes. Deleting a server cannot be undone.
+Edit a server from the list to change any field and click Save Changes; see [Saved credentials](#saved-credentials) for environment variables and headers. Deleting a server cannot be undone.
 
 ## How servers reach the agent
 
@@ -123,6 +139,14 @@ See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/con
     Cause: the version in the command does not match the version installed by `setup.sh`, or the
     image has not been rebuilt since the change. Fix: use the exact same `package@version` in both
     places and rebuild the prebuilt image.
+
+</Accordion>
+  <Accordion title="The form shows a generic credentials note instead of names">
+    The note reads "Credentials are configured. Enter new values to replace them, or leave empty to
+    keep existing." Cause: the control plane is older than the web app and does not return
+    credential names. Fix: leave the rows empty to keep the saved credentials, or enter every
+    credential the server needs, because any value you enter replaces the whole saved set. Upgrade
+    the control plane to edit credentials by name.
 
 </Accordion>
   <Accordion title="Save fails with a validation error">

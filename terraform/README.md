@@ -197,7 +197,8 @@ variable-only.
 See [the CI/CD setup guide](../docs/GETTING_STARTED.md#set-up-cicd-optional) for the complete
 variable list and bulk upload examples using `gh variable set` and `gh secret set`.
 
-Add these secrets to your repository settings:
+Add these settings to your repository, using **Variables** for non-secret configuration (including
+`R2_MEDIA_BUCKET_NAME`) and **Secrets** for credentials:
 
 ```
 # Deployment
@@ -210,7 +211,7 @@ CLOUDFLARE_WORKER_SUBDOMAIN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 R2_MEDIA_LOCATION # Optional; defaults to ENAM
-R2_MEDIA_BUCKET_NAME # Optional; set when the media bucket is pre-created out-of-band
+R2_MEDIA_BUCKET_NAME # Optional; name of the Terraform-created media bucket (import an existing one first)
 WEB_PLATFORM # Optional; defaults to vercel
 
 # Vercel web app (only if WEB_PLATFORM=vercel)

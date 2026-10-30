@@ -35,6 +35,8 @@
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "rbac:bootstrap-owner": "node scripts/bootstrap-workspace-owner.ts",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky",
+    "preview": "npm run build -w @open-inspect/shared && npm start -w @open-inspect/preview --",
+    "test:preview": "npm run build -w @open-inspect/shared && npm test -w @open-inspect/preview && npm run test:e2e -w @open-inspect/preview",
     "build:base-snapshot-cleanup": "npm run --silent build -w @open-inspect/shared && tsc --noEmit -p scripts/tsconfig.base-snapshot-cleanup.json && esbuild scripts/cleanup-base-snapshots.mjs --bundle --platform=node --format=esm --packages=external --outfile=dist/cleanup-base-snapshots.mjs"
   },
   "devDependencies": {
@@ -52,7 +54,7 @@
     "prettier": "^3.9.10",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.71.2",
-    "wrangler": "^4.149.0"
+    "wrangler": "^4.151.3"
   },
   "engines": {
     "node": ">=24.0.0"

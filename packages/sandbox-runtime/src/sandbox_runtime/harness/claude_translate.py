@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import astuple, dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from claude_agent_sdk import (
@@ -78,11 +78,51 @@ class _MessageText:
     text: str = ""
 
 
+@dataclass(frozen=True)
+class ClaudeUsage:
+    """Token counts a Claude result reported; None where it reported none."""
+
+    input: int | None = None
+    output: int | None = None
+    cache_read: int | None = None
+    cache_write: int | None = None
+
+    @classmethod
+    def from_sdk(cls, usage: Mapping[str, Any] | None) -> ClaudeUsage:
+        def count(key: str) -> int | None:
+            value = (usage or {}).get(key)
+            return value if type(value) is int and value >= 0 else None
+
+        return cls(
+            input=count("input_tokens"),
+            output=count("output_tokens"),
+            cache_read=count("cache_read_input_tokens"),
+            cache_write=count("cache_creation_input_tokens"),
+        )
+
+    def __add__(self, other: ClaudeUsage) -> ClaudeUsage:
+        def add(a: int | None, b: int | None) -> int | None:
+            return b if a is None else a if b is None else a + b
+
+        return ClaudeUsage(*map(add, astuple(self), astuple(other)))
+
+    def tokens(self) -> dict[str, Any] | None:
+        """The bridge ``tokens`` shape, or None when no count is known."""
+        cache = {"read": self.cache_read, "write": self.cache_write}
+        tokens: dict[str, Any] = {
+            "input": self.input,
+            "output": self.output,
+            "cache": {k: v for k, v in cache.items() if v is not None},
+        }
+        tokens = {k: v for k, v in tokens.items() if v not in (None, {})}
+        return tokens or None
+
+
 @dataclass
 class ClaudeTurnState:
     message_id: str
-    # None: the previous turn reported no running total, so the next total
-    # cannot be split between the two turns.
+    # None: no known running total to split the next result's cost from
+    # earlier turns. Injected results advance it.
     cost_baseline: float | None
     texts: list[_MessageText] = field(default_factory=list)
     last_token_content: str = ""
@@ -93,6 +133,10 @@ class ClaudeTurnState:
     step_id: str | None = None
     # Skip a session-injected turn until its result, not the prompt's result.
     injected: bool = False
+    # Injected turns' spend and usage, charged to the prompt's result. The
+    # cost survives conversation resets, which zero the running total.
+    injected_cost: float = 0.0
+    injected_usage: ClaudeUsage = ClaudeUsage()
 
     def turn_text(self) -> str:
         return "\n\n".join(entry.text for entry in self.texts if entry.text)
@@ -123,22 +167,6 @@ def _canonical_tool_name(name: str) -> str:
     if name.startswith(OI_TOOL_PREFIX):
         return name[len(OI_TOOL_PREFIX) :]
     return name
-
-
-def _usage_tokens(usage: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    if not usage:
-        return None
-    cache = {
-        "read": usage.get("cache_read_input_tokens"),
-        "write": usage.get("cache_creation_input_tokens"),
-    }
-    tokens: dict[str, Any] = {
-        "input": usage.get("input_tokens"),
-        "output": usage.get("output_tokens"),
-        "cache": {k: v for k, v in cache.items() if isinstance(v, int)},
-    }
-    tokens = {k: v for k, v in tokens.items() if v not in (None, {})}
-    return tokens or None
 
 
 class ClaudeTranslator:
@@ -176,7 +204,7 @@ class ClaudeTranslator:
 
         if isinstance(message, ConversationResetMessage):
             # Resets affect the conversation even inside a filtered injected turn.
-            # The next human result supplies the new resumable session id.
+            # The next result, injected or not, supplies the new resumable session id.
             self.cost_baseline = 0.0
             state.cost_baseline = 0.0
             self._session_rotated = True
@@ -184,8 +212,35 @@ class ClaudeTranslator:
             self._observed_native_id = message.session_id
             return translation
 
+        if (
+            isinstance(message, ResultMessage)
+            and self._session_rotated
+            and message.session_id
+            and message.session_id != self.session_id
+        ):
+            translation.records.append(
+                TrajectoryRecord(
+                    "claude.session.rotated",
+                    {
+                        "agent_session_id": message.session_id,
+                        "previous_session_id": self.session_id,
+                    },
+                )
+            )
+            self.session_id = message.session_id
+            self._session_rotated = False
+
         if self._belongs_to_injected_turn(state, message, translation.records):
-            if isinstance(message, (TaskNotificationMessage, TaskUpdatedMessage)):
+            if isinstance(message, ResultMessage):
+                # Account before suppressing, so the prompt in flight is charged.
+                state.injected_usage += ClaudeUsage.from_sdk(message.usage)
+                if message.total_cost_usd is not None:
+                    if state.cost_baseline is not None:
+                        state.injected_cost += max(
+                            message.total_cost_usd - state.cost_baseline, 0.0
+                        )
+                    state.cost_baseline = message.total_cost_usd
+            elif isinstance(message, (TaskNotificationMessage, TaskUpdatedMessage)):
                 if message.status in TERMINAL_TASK_STATUSES:
                     self._task_parents.pop(message.task_id, None)
             return translation
@@ -384,26 +439,10 @@ class ClaudeTranslator:
             return translation
 
         if isinstance(message, ResultMessage):
-            if (
-                self._session_rotated
-                and message.session_id
-                and message.session_id != self.session_id
-            ):
-                records.append(
-                    TrajectoryRecord(
-                        "claude.session.rotated",
-                        {
-                            "agent_session_id": message.session_id,
-                            "previous_session_id": self.session_id,
-                        },
-                    )
-                )
-                self.session_id = message.session_id
-                self._session_rotated = False
             total = message.total_cost_usd
+            message_cost = state.injected_cost
             if total is None:
                 # No total means no baseline for the next turn either.
-                message_cost = 0.0
                 self.cost_baseline = None
                 events.append(
                     self._provider_event(
@@ -417,7 +456,6 @@ class ClaudeTranslator:
                 )
             elif state.cost_baseline is None:
                 # Neither turn can be charged when the previous share is unknowable.
-                message_cost = 0.0
                 self.cost_baseline = total
                 events.append(
                     self._provider_event(
@@ -433,7 +471,7 @@ class ClaudeTranslator:
                     )
                 )
             else:
-                message_cost = max(total - state.cost_baseline, 0.0)
+                message_cost += max(total - state.cost_baseline, 0.0)
                 self.cost_baseline = total
             finish: BridgeEvent = {
                 "type": "step_finish",
@@ -443,22 +481,10 @@ class ClaudeTranslator:
                 "messageCostUsd": message_cost,
                 "reason": message.subtype,
             }
-            tokens = _usage_tokens(message.usage)
+            tokens = (state.injected_usage + ClaudeUsage.from_sdk(message.usage)).tokens()
             if tokens:
                 finish["tokens"] = tokens
             events.append(finish)
-            log_tokens: dict[str, Any] = {
-                key: value
-                for key, value in (tokens or {}).items()
-                if key in ("input", "output") and type(value) is int
-            }
-            cache = {
-                key: value
-                for key, value in ((tokens or {}).get("cache") or {}).items()
-                if type(value) is int
-            }
-            if cache:
-                log_tokens["cache"] = cache
             translation.result = SdkTurnResult(
                 status=message.subtype,
                 is_error=message.is_error,
@@ -466,7 +492,7 @@ class ClaudeTranslator:
                 duration_api_ms=message.duration_api_ms,
                 num_turns=message.num_turns,
                 total_cost_usd=message.total_cost_usd,
-                tokens=log_tokens or None,
+                tokens=tokens,
             )
             if interrupted:
                 translation.outcome = TurnOutcome(
@@ -494,10 +520,10 @@ class ClaudeTranslator:
     def _belongs_to_injected_turn(
         self, state: ClaudeTurnState, message: Message, records: list[TrajectoryRecord]
     ) -> bool:
-        """Filter CLI-injected turns, whose opening user and closing result have origin.
+        """Filter CLI-injected turns, whose opening user and usually closing result have origin.
 
-        The messages between those boundaries have no origin. Injected spend
-        remains in the running total and lands on the prompt in flight.
+        The messages between those boundaries have no origin, so a result
+        without one inside an injected turn closes that turn, not the prompt.
         """
         if isinstance(message, UserMessage):
             if (origin := _injected_origin(message.origin)) is not None:
@@ -509,16 +535,17 @@ class ClaudeTranslator:
                 )
             return state.injected
         if isinstance(message, ResultMessage):
-            if (origin := _injected_origin(message.origin)) is not None:
-                state.injected = False
+            origin = _injected_origin(message.origin)
+            injected = origin is not None or (state.injected and message.origin is None)
+            state.injected = False
+            if injected:
                 records.append(
                     TrajectoryRecord(
-                        "claude.injected_turn_ignored", {"origin_kind": origin["kind"]}
+                        "claude.injected_turn_ignored",
+                        {"origin_kind": origin["kind"] if origin else None},
                     )
                 )
-                return True
-            state.injected = False
-            return False
+            return injected
         return state.injected
 
     def _token_event(self, state: ClaudeTurnState) -> list[BridgeEvent]:

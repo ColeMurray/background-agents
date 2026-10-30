@@ -22,17 +22,17 @@ export function describeActorAdmissionFailure(code: string): string | null {
   return null;
 }
 
-/** Resolve known actors without a profile lookup; unknown actors must attest their email. */
+/** Resolve known actors without a profile lookup; reuse a caller deadline when supplied. */
 export async function enrollLinearActor(
   env: Env,
   client: LinearApiClient,
   actorUserId: string,
-  traceId: string
+  traceId: string,
+  signal: AbortSignal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS)
 ): Promise<string | null> {
   const context = { trace_id: traceId, actor: `linear:${actorUserId}` };
   let httpStatus: number | undefined;
   try {
-    const signal = AbortSignal.timeout(ACTOR_ENROLLMENT_TIMEOUT_MS);
     let claims: ActorProfileClaims = {};
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await enrollActor(

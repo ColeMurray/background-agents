@@ -289,6 +289,19 @@ describe("browser auth callback", () => {
     const state = providerUrl.searchParams.get("state");
     expect(state).toBeTruthy();
     const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+    const stateHash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`auth-state:${state}`)
+    );
+    const stateIdentifier = btoa(String.fromCharCode(...new Uint8Array(stateHash)))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "");
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM auth_verifications WHERE identifier = ?")
+        .bind(stateIdentifier)
+        .first()
+    ).resolves.toEqual({ count: 1 });
 
     const callbackResponse = await handleRequest(
       await signedWebRequest(
@@ -309,6 +322,25 @@ describe("browser auth callback", () => {
       )
     ).toBe(true);
     const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
+
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM auth_verifications WHERE identifier = ?")
+        .bind(stateIdentifier)
+        .first()
+    ).resolves.toEqual({ count: 0 });
+    const replayResponse = await handleRequest(
+      await signedWebRequest(
+        `/api/auth/callback/github?code=authorization-code&state=${encodeURIComponent(state ?? "")}`,
+        { method: "GET", cookie: stateCookie }
+      ),
+      env
+    );
+    expect(replayResponse.headers.get("Location")).toBe(
+      `${PUBLIC_WEB_ORIGIN}/login?error=state_mismatch`
+    );
+    expect(getSetCookies(replayResponse.headers).join(";")).not.toContain(
+      "__Secure-openinspect.session_token="
+    );
 
     const sessionResponse = await handleRequest(
       await signedWebRequest("/api/auth/get-session", {

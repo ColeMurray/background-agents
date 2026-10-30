@@ -16,6 +16,7 @@ import { GLOBAL_STORE_FILE, startNodeHost, type NodeHost, type NodeHostOptions }
 import { JOB_STORE_FILE } from "./job-store";
 import type { HealthReport } from "./http-server";
 import { openSessionStore } from "./session-store";
+import { createS3ObjectStorage } from "./s3-object-storage";
 
 const KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -28,7 +29,7 @@ const CONFIG = {
   LOG_LEVEL: "error",
 };
 
-const OBJECT_STORAGE = { bucket: "media", region: "us-east-1" };
+const OBJECT_STORAGE = createS3ObjectStorage({ bucket: "media", region: "us-east-1" });
 
 /** A public route that writes to the cache, so the cache file has a WAL to close. */
 function cacheWritingRoute(): Hono<ControlPlaneHonoEnv>[] {

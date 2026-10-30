@@ -226,7 +226,8 @@ export async function emitAgentActivity(
   client: LinearApiClient,
   agentSessionId: string,
   content: Record<string, unknown>,
-  ephemeral?: boolean
+  ephemeral?: boolean,
+  callerSignal?: AbortSignal
 ): Promise<boolean> {
   try {
     await linearGraphQL(
@@ -240,7 +241,8 @@ export async function emitAgentActivity(
     `,
       {
         input: { agentSessionId, content, ephemeral },
-      }
+      },
+      callerSignal
     );
     return true;
   } catch (err) {

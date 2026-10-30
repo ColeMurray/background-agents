@@ -455,6 +455,37 @@ runtime constructs Better Auth and the immutable provider list from the same con
 `GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
 requests so the React `/login` route can render them server-side.
 
+### Better Auth 1.7 Upgrade
+
+The upgrade from 1.6.25 to 1.7.14 follows the upstream
+[1.7 upgrade guide](https://www.better-auth.com/docs/guides/1-7-upgrade-guide) and
+[release changelog](https://github.com/better-auth/better-auth/blob/v1.7.14/packages/better-auth/CHANGELOG.md).
+
+- Provider profile `user` contains only mutable attributes. Our provider-profile plugin keeps the
+  built-in GitHub/Google OAuth transports. Both resolvers return `VerifiedProviderIdentity` as
+  profile data; the SDK account-subject resolver and canonical email claims read the same typed
+  `data.subject`.
+- `getAccessToken`, `refreshToken`, and `accountInfo` select the local `user_identities.id` through
+  `accountId`, plus the canonical `userId` for trusted server calls. They no longer accept
+  `providerId` or a provider subject as the selector. Profile integrity checks read
+  `account.accountId`, not `user.id`.
+- No database migration or issuer backfill is needed for this integration. The account schema is
+  unchanged from 1.6 in 1.7.3 and later; the existing unique `(provider, provider_user_id)` index
+  already prevents ambiguous account keys. Keep our application-owned `provider_issuer` column and
+  indexes. The mandatory issuer schema in 1.7.0 through 1.7.2 was reverted.
+- The custom adapter retains native atomic `consumeOne`. `incrementOne` is optional in 1.7.14;
+  Better Auth supplies guarded conditional-update fallbacks. We use memory rate limiting, not a
+  custom rate-limit or secondary-storage implementation.
+
+**Deployment cutover:** upgrade all control-plane instances sharing verification storage together.
+The [1.7.7 security change](https://github.com/better-auth/better-auth/pull/11494) namespaces
+database-backed OAuth state with `auth-state:` before hashing, so sign-ins started before the
+upgrade must restart. Do not add a legacy-state fallback or run mixed old/new auth nodes against the
+same storage. Existing browser sessions and encrypted OAuth credentials remain usable with the same
+`BROWSER_AUTH_SECRET`; do not rotate it as part of this upgrade. A rollback also requires restarting
+pending sign-ins. The web BFF does not install a Better Auth SDK and needs no matching package
+upgrade.
+
 ## Credential Encryption
 
 Three independent key domains protect stored credentials. Rotation guidance differs — never treat

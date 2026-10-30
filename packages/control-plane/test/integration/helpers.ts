@@ -4,7 +4,8 @@ import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
 import { runInSessionDO } from "./session-do-access";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
-import { BUILT_IN_ROLE_REGISTRY, type BuiltInRoleKey } from "@open-inspect/shared/rbac";
+import type { BuiltInRoleKey } from "@open-inspect/shared/rbac";
+import { seedBrowserSession } from "../support/browser-session";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { hashToken } from "../../src/auth/crypto";
@@ -61,7 +62,6 @@ type InitialUserRole = BuiltInRoleKey;
 const DEFAULT_INITIAL_USER_ROLE = "owner" as const;
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
-const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
 const TEST_NAMED_SESSION_DEFAULTS = {
   repoOwner: "acme",
   repoName: "web-app",
@@ -74,97 +74,33 @@ export const TEST_SESSION_PROVIDER_AUTH: SessionModelProviderAuthInput[] = [
   { provider: "anthropic", authMode: "api_key", selectionSource: "api_key_fallback" },
 ];
 
-async function signCookieValue(value: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))
-  );
-  const signatureBase64 = btoa(String.fromCharCode(...signature));
-  return encodeURIComponent(`${value}.${signatureBase64}`);
-}
-
-/**
- * Seed one real Better Auth user/account/session and return its signed cookie.
- *
- * Integration route tests exercise browser-owned endpoints, so their default
- * web request must carry the same compound credential as production. Direct
- * service-auth tests intentionally build their own bare sig1 requests.
- */
+/** Seed a canonical Better Auth session; `as` signs in a distinct user with its own role. */
 async function testBrowserSessionCookie(
   initialRole: InitialUserRole,
   as?: { userId: string; role: BuiltInRoleKey }
 ): Promise<string> {
   const secret = env.BROWSER_AUTH_SECRET;
   if (!secret) throw new Error("BROWSER_AUTH_SECRET is not configured for integration tests");
-
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const applicationTimestamp = now.getTime();
-  const browserUserId = as?.userId ?? TEST_BROWSER_USER_ID;
-  const sessionId = as ? `test-browser-session-${browserUserId}` : TEST_BROWSER_SESSION_ID;
-  const sessionToken = as ? `test-browser-token-${browserUserId}` : TEST_BROWSER_SESSION_TOKEN;
-  const existingUser = await env.DB.prepare("SELECT 1 FROM users WHERE id = ?")
-    .bind(browserUserId)
-    .first();
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO users
-         (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      browserUserId,
-      "Integration Browser User",
-      as ? `${browserUserId}@test.local` : "browser@test.local",
-      1,
-      as ? `${browserUserId}@test.local` : "browser@test.local",
-      applicationTimestamp,
-      applicationTimestamp
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO user_identities
-         (id, user_id, provider, provider_user_id, provider_login, provider_email,
-          provider_issuer, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      as ? `test-browser-account-${browserUserId}` : TEST_BROWSER_ACCOUNT_ID,
-      browserUserId,
-      "github",
-      as ? browserUserId : TEST_BROWSER_PROVIDER_SUBJECT,
-      null,
-      as ? `${browserUserId}@test.local` : "browser@test.local",
-      "https://github.com",
-      applicationTimestamp,
-      applicationTimestamp
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_sessions
-         (id, expiresAt, token, createdAt, updatedAt, ipAddress, userAgent, userId)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      sessionId,
-      expiresAt.getTime(),
-      sessionToken,
-      applicationTimestamp,
-      applicationTimestamp,
-      "127.0.0.1",
-      "integration-test",
-      browserUserId
-    ),
-  ]);
-  if (!existingUser && (as || initialRole !== "member")) {
-    await env.DB.prepare(`UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?`)
-      .bind(BUILT_IN_ROLE_REGISTRY[as?.role ?? initialRole].id, browserUserId)
-      .run();
-  }
-
-  const signedToken = await signCookieValue(sessionToken, secret);
-  return `${TEST_BROWSER_SESSION_COOKIE}=${signedToken}`;
+  const nowMs = Date.now();
+  const email = as ? `${as.userId}@test.local` : "browser@test.local";
+  const { cookieHeader } = await seedBrowserSession(
+    sqlDatabase(env.DB),
+    { secret, publicWebOrigin: env.WEB_APP_URL! },
+    {
+      userId: as?.userId ?? TEST_BROWSER_USER_ID,
+      identityId: as ? `test-browser-account-${as.userId}` : TEST_BROWSER_ACCOUNT_ID,
+      providerSubject: as?.userId ?? TEST_BROWSER_PROVIDER_SUBJECT,
+      name: "Integration Browser User",
+      email,
+      avatarUrl: email,
+      role: as?.role ?? initialRole,
+      sessionId: as ? `test-browser-session-${as.userId}` : TEST_BROWSER_SESSION_ID,
+      token: as ? `test-browser-token-${as.userId}` : TEST_BROWSER_SESSION_TOKEN,
+      nowMs,
+      expiresAtMs: nowMs + 7 * 24 * 60 * 60 * 1000,
+    }
+  );
+  return cookieHeader;
 }
 
 /**

@@ -47,6 +47,8 @@ interface CreateSessionOptions {
   slackUserId?: string;
   actorDisplayName?: string;
   actorEmail?: string;
+  /** A one-to-one conversation with the actor, the only Slack origin that uses personal memory. */
+  directMessage?: boolean;
 }
 
 export type SendPromptResult =
@@ -149,6 +151,7 @@ export async function createSession(
     slackUserId,
     actorDisplayName,
     actorEmail,
+    directMessage,
   } = options;
   const startTime = Date.now();
   const base = {
@@ -170,6 +173,7 @@ export async function createSession(
       reasoningEffort,
       actorDisplayName,
       actorEmail,
+      ...(directMessage ? { directMessage } : {}),
     });
     const response = await signedControlPlaneFetch(
       env,
