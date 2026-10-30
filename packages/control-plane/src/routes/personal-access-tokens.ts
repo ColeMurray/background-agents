@@ -12,8 +12,12 @@ import {
   isPersonalAccessTokenGrantable,
   PERSONAL_ACCESS_TOKEN_ERROR_CODES,
   PERSONAL_ACCESS_TOKEN_MAX_PER_USER,
+  personalAccessTokenMaxLifetimeDays,
+  personalAccessTokenPolicyAllows,
+  type PersonalAccessTokenPolicy,
   unmetGrantPrerequisite,
 } from "@open-inspect/shared/types/personal-access-tokens";
+import { PersonalAccessTokenPolicyStore } from "../db/personal-access-token-policy";
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
@@ -39,6 +43,20 @@ async function handleListTokens(
   return json({ tokens });
 }
 
+/** The policy's rules, without the revision only administrators edit against. */
+async function handleGetPolicy(
+  _request: Request,
+  _env: Env,
+  _params: object,
+  ctx: UserRouteContext
+): Promise<Response> {
+  const { enabled, maxLifetimeDays, allowedPermissions } = await new PersonalAccessTokenPolicyStore(
+    ctx.db
+  ).get();
+  const policy: PersonalAccessTokenPolicy = { enabled, maxLifetimeDays, allowedPermissions };
+  return json(policy);
+}
+
 async function handleIssueToken(
   request: Request,
   _env: Env,
@@ -47,6 +65,27 @@ async function handleIssueToken(
 ): Promise<Response> {
   const parsed = await parseBody(request, createPersonalAccessTokenRequestSchema);
   if (parsed instanceof Response) return parsed;
+  const policy = await new PersonalAccessTokenPolicyStore(ctx.db).get();
+  if (!policy.enabled) {
+    return json(
+      {
+        error: "Personal access tokens are disabled for this workspace",
+        code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.disabled,
+      },
+      403
+    );
+  }
+  const maxLifetimeDays = personalAccessTokenMaxLifetimeDays(policy);
+  if (parsed.expiresInDays > maxLifetimeDays) {
+    return json(
+      {
+        error: `This workspace allows tokens to live at most ${maxLifetimeDays} days`,
+        code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.lifetimeExceedsPolicy,
+        maxLifetimeDays,
+      },
+      400
+    );
+  }
   // Loaded by ACTIVE_SELF admission; a grant may name only what its issuer holds right now.
   const held = new Set(ctx.authorization?.permissions ?? []);
   for (const permission of parsed.permissions) {
@@ -55,6 +94,16 @@ async function handleIssueToken(
         {
           error: `Personal access tokens cannot be granted ${permission}`,
           code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.permissionNotGrantable,
+          permission,
+        },
+        400
+      );
+    }
+    if (!personalAccessTokenPolicyAllows(policy, permission)) {
+      return json(
+        {
+          error: `This workspace does not allow tokens to be granted ${permission}`,
+          code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.permissionNotAllowed,
           permission,
         },
         400
@@ -137,6 +186,9 @@ const OWN_TOKENS = admit({
 
 personalAccessTokenRoutes.get("/personal-access-tokens", OWN_TOKENS, (c) =>
   dispatch(c, handleListTokens)
+);
+personalAccessTokenRoutes.get("/personal-access-tokens/policy", OWN_TOKENS, (c) =>
+  dispatch(c, handleGetPolicy)
 );
 personalAccessTokenRoutes.post("/personal-access-tokens", OWN_TOKENS, (c) =>
   dispatch(c, handleIssueToken)

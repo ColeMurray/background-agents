@@ -25,6 +25,7 @@ import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
+import { personalAccessTokenAdminRoutes } from "./personal-access-token-admin";
 import { personalAccessTokenRoutes } from "./personal-access-tokens";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
@@ -136,4 +137,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Personal access tokens: human-only issuance, listing, and revocation
   personalAccessTokenRoutes,
+
+  // Workspace governance of personal access tokens: policy, every member's tokens, revocation
+  personalAccessTokenAdminRoutes,
 ];

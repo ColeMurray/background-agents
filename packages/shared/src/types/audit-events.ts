@@ -119,6 +119,7 @@ export const AUDIT_OPERATION_ACTIONS = [
   "automation.executor_changed",
   "personal_access_token.created",
   "personal_access_token.revoked",
+  "workspace.personal_access_token_policy_updated",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

@@ -40,11 +40,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(253);
+    expect(routes).toHaveLength(259);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(193);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(253);
+    expect(new Set(paths).size).toBe(198);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(259);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -930,6 +930,32 @@ describe("personal access token reach", () => {
     ] as const) {
       expect(routeFor(method, path)?.personalAccessTokens, `${method} ${path}`).toBeUndefined();
     }
+  });
+
+  it("gates workspace token governance on its own permission, for humans only", () => {
+    for (const [method, path] of [
+      ["GET", "/settings/personal-access-token-policy"],
+      ["PUT", "/settings/personal-access-token-policy"],
+      ["GET", "/settings/personal-access-tokens"],
+      ["DELETE", "/settings/personal-access-tokens/token-1"],
+      ["DELETE", "/members/user-1/personal-access-tokens"],
+    ] as const) {
+      const route = routeFor(method, path);
+      expect(route, `${method} ${path}`).toMatchObject({
+        authentication: { kind: "user" },
+        authorization: {
+          kind: "active-user",
+          allOf: [{ kind: "permission", permission: "workspace.personal_access_tokens.manage" }],
+          service: { kind: "deny" },
+        },
+        cacheControl: "private, no-store",
+      });
+      expect(route?.personalAccessTokens).toBeUndefined();
+    }
+    expect(routeFor("GET", "/personal-access-tokens/policy")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+    });
   });
 
   it("keeps token management human-only", () => {

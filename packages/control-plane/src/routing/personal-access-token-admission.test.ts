@@ -103,7 +103,16 @@ async function tokenDatabase(fixture: Fixture) {
         first: async <T>() =>
           (sql.includes("FROM users u")
             ? { user_id: "user-1", suspended_at: fixture.suspended ? NOW : null, ...role }
-            : null) as T | null,
+            : sql.includes("FROM workspace_personal_access_token_policy")
+              ? {
+                  enabled: 1,
+                  max_lifetime_days: null,
+                  allowed_permissions_json: null,
+                  revision: 0,
+                  updated_at: null,
+                  updated_by_user_id_snapshot: null,
+                }
+              : null) as T | null,
         all: async <T>() => {
           if (sql.includes("FROM personal_access_tokens token")) {
             if (bound[0] !== tokenHash) return { results: [] as T[], meta: { changes: 0 } };
@@ -111,6 +120,7 @@ async function tokenDatabase(fixture: Fixture) {
               id: "token-1",
               user_id: "user-1",
               display_prefix: TOKEN.slice(0, 13),
+              created_at: NOW - 60_000,
               expires_at: fixture.expiresAt ?? NOW + 60_000,
               permission_id,
             }));

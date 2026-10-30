@@ -6,14 +6,18 @@ import {
   isPersonalAccessTokenGrantable,
   PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES,
   PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH,
+  personalAccessTokenMaxLifetimeDays,
+  personalAccessTokenPolicyAllows,
   withGrantPrerequisitesMet,
   type CreatedPersonalAccessToken,
   type PersonalAccessToken,
   type PersonalAccessTokenGrantablePermission,
+  type PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import {
   issuePersonalAccessToken,
   revokePersonalAccessToken,
+  usePersonalAccessTokenPolicy,
   usePersonalAccessTokens,
 } from "@/hooks/use-personal-access-tokens";
 import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorization";
@@ -46,6 +50,7 @@ import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 const LIFETIME_DAYS = [7, 30, 90, 180, 365] as const;
 const DEFAULT_LIFETIME_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface Draft {
   name: string;
@@ -53,11 +58,25 @@ interface Draft {
   permissions: ReadonlySet<PersonalAccessTokenGrantablePermission>;
 }
 
-const EMPTY_DRAFT: Draft = {
-  name: "",
-  expiresInDays: DEFAULT_LIFETIME_DAYS,
-  permissions: new Set(),
-};
+/** The lifetimes on offer under a cap: the standard choices within it, and the cap itself. */
+function lifetimeChoices(maxLifetimeDays: number): number[] {
+  const within = LIFETIME_DAYS.filter((days) => days <= maxLifetimeDays);
+  return within.includes(maxLifetimeDays as (typeof LIFETIME_DAYS)[number])
+    ? within
+    : [...within, maxLifetimeDays];
+}
+
+function lifetimeLabel(days: number): string {
+  if (days === 365) return "1 year";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+/** When a token stops working: its own expiry, or sooner if the policy caps lifetimes lower. */
+function effectiveExpiry(token: PersonalAccessToken, policy: PersonalAccessTokenPolicy | null) {
+  if (!policy) return token.expiresAt;
+  const capped = token.createdAt + personalAccessTokenMaxLifetimeDays(policy) * MS_PER_DAY;
+  return Math.min(token.expiresAt, capped);
+}
 
 /**
  * Where issuing a token stands. The phases exclude one another: a pending request cannot be
@@ -70,7 +89,8 @@ type Issuance =
   | { phase: "issuing"; draft: Draft }
   | { phase: "issued"; token: CreatedPersonalAccessToken };
 
-function formatLastUsed(lastUsedAt: number | null): string {
+/** How a token list describes a token's last use. */
+export function formatLastUsed(lastUsedAt: number | null): string {
   if (lastUsedAt === null) return "Never used";
   const elapsed = formatRelativeTime(lastUsedAt);
   return elapsed === "now" ? "Last used just now" : `Last used ${elapsed} ago`;
@@ -86,6 +106,7 @@ function formatDate(timestamp: number): string {
 
 export function PersonalAccessTokensSettings() {
   const { tokens, loading, error, mutate } = usePersonalAccessTokens();
+  const { policy } = usePersonalAccessTokenPolicy();
   const { authorization } = useCurrentUserAuthorization();
   const [issuance, setIssuance] = useState<Issuance>({ phase: "idle" });
   const [revokeTarget, setRevokeTarget] = useState<PersonalAccessToken | null>(null);
@@ -94,15 +115,24 @@ export function PersonalAccessTokensSettings() {
   // copy of the secret, so settings navigation, history traversal, and unload all ask first.
   useSettingsUnsavedChanges(issuance.phase === "issuing" || issuance.phase === "issued");
 
-  // Only permissions the user holds now can be granted, so the picker offers no others; nor one
-  // whose prerequisites the user lacks, which a token could never exercise.
+  // Only permissions the user holds now, and the workspace policy allows, can be granted, so the
+  // picker offers no others; nor one whose prerequisites are not on offer, which a token could
+  // never exercise.
   const holdable = useMemo(
     () =>
       withGrantPrerequisitesMet(
-        (authorization?.permissions ?? []).filter(isPersonalAccessTokenGrantable)
+        (authorization?.permissions ?? [])
+          .filter(isPersonalAccessTokenGrantable)
+          .filter((permission) => !policy || personalAccessTokenPolicyAllows(policy, permission))
       ),
-    [authorization]
+    [authorization, policy]
   );
+  const lifetimes = lifetimeChoices(
+    personalAccessTokenMaxLifetimeDays(
+      policy ?? { enabled: true, maxLifetimeDays: null, allowedPermissions: null }
+    )
+  );
+  const disabled = policy?.enabled === false;
 
   async function issue(draft: Draft) {
     const name = draft.name.trim();
@@ -146,9 +176,18 @@ export function PersonalAccessTokensSettings() {
     <div>
       <div className="mb-1 flex items-center justify-between">
         <h2 className="text-xl font-semibold text-foreground">Access tokens</h2>
-        {issuance.phase === "idle" && (
+        {issuance.phase === "idle" && !disabled && (
           <Button
-            onClick={() => setIssuance({ phase: "editing", draft: EMPTY_DRAFT })}
+            onClick={() =>
+              setIssuance({
+                phase: "editing",
+                draft: {
+                  name: "",
+                  expiresInDays: Math.min(DEFAULT_LIFETIME_DAYS, lifetimes[lifetimes.length - 1]),
+                  permissions: new Set(),
+                },
+              })
+            }
             variant="outline"
             size="sm"
           >
@@ -165,10 +204,21 @@ export function PersonalAccessTokensSettings() {
         create or revoke tokens.
       </p>
 
-      {(issuance.phase === "editing" || issuance.phase === "issuing") && (
+      {disabled && (
+        <div
+          role="status"
+          className="mb-6 rounded-md border border-warning/40 bg-warning-muted px-4 py-3 text-sm text-warning"
+        >
+          Your workspace has turned personal access tokens off. Existing tokens do not work, and new
+          ones cannot be created, until an administrator turns them back on.
+        </div>
+      )}
+
+      {(issuance.phase === "editing" || issuance.phase === "issuing") && !disabled && (
         <TokenForm
           draft={issuance.draft}
           holdable={holdable}
+          lifetimes={lifetimes}
           issuing={issuance.phase === "issuing"}
           onChange={(draft) => setIssuance({ phase: "editing", draft })}
           onSubmit={() => void issue(issuance.draft)}
@@ -187,7 +237,12 @@ export function PersonalAccessTokensSettings() {
       ) : (
         <ul className="space-y-2" aria-label="Access tokens">
           {tokens.map((token) => (
-            <TokenRow key={token.id} token={token} onRevoke={() => setRevokeTarget(token)} />
+            <TokenRow
+              key={token.id}
+              token={token}
+              expiresAt={effectiveExpiry(token, policy)}
+              onRevoke={() => setRevokeTarget(token)}
+            />
           ))}
         </ul>
       )}
@@ -224,6 +279,7 @@ export function PersonalAccessTokensSettings() {
 function TokenForm({
   draft,
   holdable,
+  lifetimes,
   issuing,
   onChange,
   onSubmit,
@@ -231,6 +287,7 @@ function TokenForm({
 }: {
   draft: Draft;
   holdable: readonly PersonalAccessTokenGrantablePermission[];
+  lifetimes: readonly number[];
   issuing: boolean;
   onChange: (draft: Draft) => void;
   onSubmit: () => void;
@@ -281,11 +338,11 @@ function TokenForm({
         <fieldset>
           <legend className="text-sm font-medium text-foreground">Expires in</legend>
           <div className="mt-2 flex flex-wrap gap-2">
-            {LIFETIME_DAYS.map((days) => (
+            {lifetimes.map((days) => (
               <RadioCard
                 key={days}
                 name="access-token-lifetime"
-                label={days === 365 ? "1 year" : `${days} days`}
+                label={lifetimeLabel(days)}
                 checked={draft.expiresInDays === days}
                 onChange={() => onChange({ ...draft, expiresInDays: days })}
               />
@@ -377,8 +434,17 @@ function TokenForm({
   );
 }
 
-function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: () => void }) {
-  const expired = token.expiresAt <= Date.now();
+function TokenRow({
+  token,
+  expiresAt,
+  onRevoke,
+}: {
+  token: PersonalAccessToken;
+  /** The token's effective expiry under the workspace policy. */
+  expiresAt: number;
+  onRevoke: () => void;
+}) {
+  const expired = expiresAt <= Date.now();
   return (
     <li className="rounded-md border border-border bg-card px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -391,8 +457,8 @@ function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: (
           <p className="mt-1 text-xs text-muted-foreground">
             Created {formatDate(token.createdAt)} · {formatLastUsed(token.lastUsedAt)} ·{" "}
             {expired
-              ? `Expired ${formatDate(token.expiresAt)}`
-              : `Expires ${formatFutureRelativeTime(token.expiresAt)}`}
+              ? `Expired ${formatDate(expiresAt)}`
+              : `Expires ${formatFutureRelativeTime(expiresAt)}`}
           </p>
           <ul className="mt-2 flex flex-wrap gap-1" aria-label={`${token.name} permissions`}>
             {token.permissions.map((permission) => (

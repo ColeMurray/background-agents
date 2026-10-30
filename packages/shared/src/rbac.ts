@@ -86,6 +86,7 @@ export const PERMISSION_IDS = [
   "workspace.members.manage",
   "workspace.members.merge",
   "workspace.members.read",
+  "workspace.personal_access_tokens.manage",
   "workspace.roles.read",
   "workspace.transfer_ownership",
 ] as const;

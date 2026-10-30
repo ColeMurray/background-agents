@@ -67,6 +67,7 @@ export async function cleanD1Tables(): Promise<void> {
     DELETE FROM user_identities;
     DELETE FROM personal_access_token_permissions;
     DELETE FROM personal_access_tokens;
+    UPDATE workspace_personal_access_token_policy SET enabled = 1, max_lifetime_days = NULL, allowed_permissions_json = NULL, revision = 0, updated_at = NULL, updated_by_user_id_snapshot = NULL;
     DELETE FROM users;
     DELETE FROM image_builds;
     DELETE FROM environment_secrets;

@@ -1,0 +1,40 @@
+---
+title: Govern access tokens
+description: Turn personal access tokens off, cap their lifetime, limit the permissions they may hold, and revoke any member's tokens.
+audience: admin
+owner: security
+status: published
+lastReviewed: "2026-10-30"
+relatedCode:
+  - packages/control-plane/src/routes/personal-access-token-admin.ts
+  - packages/control-plane/src/db/personal-access-token-policy.ts
+  - packages/control-plane/src/auth/personal-access-token.ts
+  - packages/shared/src/types/personal-access-tokens.ts
+  - packages/web/src/components/settings/personal-access-token-admin-settings.tsx
+  - terraform/d1/migrations/0097_personal_access_token_policy.sql
+---
+
+Members issue [personal access tokens](/integrations/personal-access-tokens) to let tools such as the [MCP server](/integrations/mcp-server) call OpenInspect as them. **Settings › Access token policy** lets you set the rules every token follows, and revoke any member's tokens.
+
+You need the **Manage personal access tokens** permission (`workspace.personal_access_tokens.manage`). Owners and Administrators have it; you can add it to a custom role, for example a security reviewer's, without granting member management.
+
+## The policy
+
+The policy applies to existing tokens the moment you save it, not only to new ones:
+
+| Setting                          | Effect                                                                                                                                               |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Allow personal access tokens** | Off refuses every token at once and stops members creating new ones. Tokens are not revoked: turning it back on restores them.                       |
+| **Longest lifetime**             | Tokens older than this stop working, even if they were issued for longer. New tokens cannot be issued for longer.                                    |
+| **Permissions tokens may hold**  | Narrows every token's grant to these permissions, and new tokens cannot be granted others. Workspace administration permissions are never available. |
+
+Turning tokens off is the fastest response to a suspected leak when you do not know which token leaked. Every policy change is recorded in the [audit log](/administration/audit-log) with the settings before and after, and saving refuses to overwrite a change someone else made since you loaded the page.
+
+## Members' tokens
+
+The same page lists every member's tokens, newest first, with each token's owner, permissions, last use, and expiry. It never shows a token's value; OpenInspect stores only a hash.
+
+- **Revoke** stops one token immediately.
+- **Revoke all of a member's tokens** stops every token that member holds, for example when a laptop is lost.
+
+Revocations are recorded in the audit log with you as the actor and the member as the target. A member's tokens are also refused while the member is suspended, and deleted with the member's account.

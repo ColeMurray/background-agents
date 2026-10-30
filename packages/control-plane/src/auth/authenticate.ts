@@ -12,6 +12,7 @@
  */
 
 import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
+import { PersonalAccessTokenPolicyStore } from "../db/personal-access-token-policy";
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import {
   authenticatePersonalAccessToken,
@@ -111,12 +112,26 @@ async function authenticatePersonalAccessTokenRequest(
   token: string
 ): Promise<AuthResult> {
   try {
-    const credential = await authenticatePersonalAccessToken(
+    const result = await authenticatePersonalAccessToken(
       new PersonalAccessTokenStore(ctx.db),
+      new PersonalAccessTokenPolicyStore(ctx.db),
       token,
       Date.now()
     );
-    if (!credential) {
+    if (result.kind === "disabled") {
+      logger.warn("Personal access token refused: tokens are disabled", {
+        event: "auth.personal_access_token.disabled",
+        token_display_prefix: personalAccessTokenDisplayPrefix(token),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return {
+        reason: "Personal access tokens are disabled for this workspace",
+        status: 401,
+        failedScheme: "personal-access-token",
+      };
+    }
+    if (result.kind === "rejected") {
       logger.warn("Personal access token rejected", {
         event: "auth.personal_access_token.rejected",
         // The non-secret display prefix, so a revoked or expired token still in use is findable.
@@ -128,6 +143,7 @@ async function authenticatePersonalAccessTokenRequest(
     }
     // No `authentication`: that field is browser-session provenance, and
     // credential authorities that require it must never see a token as one.
+    const { credential } = result;
     return {
       principal: {
         kind: "personal-access-token",

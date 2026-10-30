@@ -63,7 +63,7 @@ describe("RBAC registry", () => {
   });
 
   it("contains unique, sorted permission identifiers", () => {
-    expect(PERMISSION_IDS).toHaveLength(47);
+    expect(PERMISSION_IDS).toHaveLength(48);
     expect(new Set(PERMISSION_IDS).size).toBe(PERMISSION_IDS.length);
     expect(PERMISSION_IDS).toEqual([...PERMISSION_IDS].sort());
   });
@@ -104,6 +104,15 @@ describe("RBAC registry", () => {
   });
 
   it("grants member merges to Owner, Administrator, and eligible custom roles", () => {
+    for (const role of ["owner", "administrator"] as const) {
+      expect(permissionsForBuiltInRole(role)).toContain("workspace.personal_access_tokens.manage");
+    }
+    for (const role of ["member", "viewer"] as const) {
+      expect(permissionsForBuiltInRole(role)).not.toContain(
+        "workspace.personal_access_tokens.manage"
+      );
+    }
+    expect(isCustomRolePermission("workspace.personal_access_tokens.manage")).toBe(true);
     expect(permissionsForBuiltInRole("owner")).toContain("workspace.members.merge");
     expect(permissionsForBuiltInRole("administrator")).toContain("workspace.members.merge");
     expect(permissionsForBuiltInRole("member")).not.toContain("workspace.members.merge");

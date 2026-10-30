@@ -200,6 +200,19 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "workspace-access-tokens",
+        label: "Access token policy",
+        description: "Govern members' personal access tokens",
+        keywords: "personal access token api mcp pat revoke kill switch lifetime",
+        icon: KeyIcon,
+        visibility: anyOf("workspace.personal_access_tokens.manage"),
+        panel: lazyPanel(() =>
+          import("./personal-access-token-admin-settings").then(
+            ({ PersonalAccessTokenAdminSettings }) => PersonalAccessTokenAdminSettings
+          )
+        ),
+      },
+      {
         id: "audit-log",
         label: "Audit log",
         description: "Review workspace activity and access decisions",

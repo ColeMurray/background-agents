@@ -10,6 +10,9 @@ import {
   isPersonalAccessTokenFormat,
   PERSONAL_ACCESS_TOKEN_DISPLAY_CHARS,
   PERSONAL_ACCESS_TOKEN_PREFIX,
+  personalAccessTokenMaxLifetimeDays,
+  personalAccessTokenPolicyAllows,
+  type PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import type { PersonalAccessTokenCredential } from "../db/personal-access-tokens";
 
@@ -36,17 +39,44 @@ export interface PersonalAccessTokenLookup {
   findByToken(token: string): Promise<PersonalAccessTokenCredential | null>;
 }
 
+/** Reads the workspace's token policy; satisfied by `PersonalAccessTokenPolicyStore`. */
+export interface PersonalAccessTokenPolicySource {
+  get(): Promise<PersonalAccessTokenPolicy>;
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+export type PersonalAccessTokenAuthentication =
+  | { kind: "authenticated"; credential: PersonalAccessTokenCredential }
+  /** Unknown, expired, or past the policy's lifetime cap; reported identically to the caller. */
+  | { kind: "rejected" }
+  /** The workspace policy has turned tokens off; true of every token, so it reveals nothing. */
+  | { kind: "disabled" };
+
 /**
- * Resolves a presented token to its credential, or null when it is unknown or expired. Callers
- * report both failures identically: telling them apart would confirm that a guessed token had
- * once existed.
+ * Resolves a presented token under the workspace policy. The policy applies to existing tokens:
+ * a lifetime cap lower than a token's own expiry ends it early, and a permission ceiling narrows
+ * its grant. Unknown and expired tokens are reported identically: telling them apart would
+ * confirm that a guessed token had once existed.
  */
 export async function authenticatePersonalAccessToken(
   tokens: PersonalAccessTokenLookup,
+  policies: PersonalAccessTokenPolicySource,
   token: string,
   now: number
-): Promise<PersonalAccessTokenCredential | null> {
-  const credential = await tokens.findByToken(token);
-  if (!credential || credential.expiresAt <= now) return null;
-  return credential;
+): Promise<PersonalAccessTokenAuthentication> {
+  const [policy, credential] = await Promise.all([policies.get(), tokens.findByToken(token)]);
+  if (!policy.enabled) return { kind: "disabled" };
+  if (!credential) return { kind: "rejected" };
+  const cappedAt = credential.createdAt + personalAccessTokenMaxLifetimeDays(policy) * MS_PER_DAY;
+  if (Math.min(credential.expiresAt, cappedAt) <= now) return { kind: "rejected" };
+  return {
+    kind: "authenticated",
+    credential: {
+      ...credential,
+      grant: credential.grant.filter((permission) =>
+        personalAccessTokenPolicyAllows(policy, permission)
+      ),
+    },
+  };
 }

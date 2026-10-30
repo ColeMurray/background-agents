@@ -18,6 +18,7 @@ import {
   PERSONAL_ACCESS_TOKEN_RANDOM_BYTES,
   type CreatedPersonalAccessToken,
   type PersonalAccessToken,
+  type WorkspacePersonalAccessToken,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { generateId, hashToken } from "../auth/crypto";
 import { personalAccessTokenDisplayPrefix } from "../auth/personal-access-token";
@@ -34,6 +35,7 @@ export interface PersonalAccessTokenCredential {
   readonly id: string;
   readonly userId: string;
   readonly displayPrefix: string;
+  readonly createdAt: number;
   readonly expiresAt: number;
   /** Registered permissions only; a grant naming a since-removed permission ignores it. */
   readonly grant: readonly PermissionId[];
@@ -68,6 +70,22 @@ interface TokenRow {
   created_at: number;
   last_used_at: number | null;
   expires_at: number;
+}
+
+interface WorkspaceTokenRow extends TokenRow {
+  user_id: string;
+  display_name: string | null;
+  email: string | null;
+}
+
+/** A page position in the workspace listing: the last row's creation time and id. */
+function encodeCursor(row: { created_at: number; id: string }): string {
+  return `${row.created_at}:${row.id}`;
+}
+
+function decodeCursor(cursor: string): { createdAt: number; id: string } | null {
+  const match = /^(\d+):([0-9a-f]+)$/.exec(cursor);
+  return match ? { createdAt: Number(match[1]), id: match[2] } : null;
 }
 
 interface GrantRow {
@@ -202,6 +220,99 @@ export class PersonalAccessTokenStore {
   }
 
   /**
+   * Every token in the workspace with its owner, newest first, for administrators. Pages by
+   * keyset, so a revocation between pages neither repeats nor skips a token.
+   */
+  async listAll(options: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ tokens: WorkspacePersonalAccessToken[]; nextCursor: string | null } | null> {
+    const after = options.cursor === undefined ? undefined : decodeCursor(options.cursor);
+    if (after === null) return null;
+    const { results } = await this.db
+      .prepare(
+        `SELECT token.id, token.user_id, token.name, token.display_prefix, token.created_at,
+                token.last_used_at, token.expires_at, users.display_name, users.email
+           FROM personal_access_tokens token
+           JOIN users ON users.id = token.user_id
+          WHERE ? IS NULL OR token.created_at < ? OR (token.created_at = ? AND token.id > ?)
+          ORDER BY token.created_at DESC, token.id
+          LIMIT ?`
+      )
+      .bind(
+        after?.createdAt ?? null,
+        after?.createdAt ?? null,
+        after?.createdAt ?? null,
+        after?.id ?? null,
+        options.limit + 1
+      )
+      .all<WorkspaceTokenRow>();
+    const page = results.slice(0, options.limit);
+    const grants =
+      page.length === 0
+        ? new Map<string, PermissionId[]>()
+        : grantsByToken(
+            (
+              await this.db
+                .prepare(
+                  `SELECT token_id, permission_id FROM personal_access_token_permissions
+                    WHERE token_id IN (${page.map(() => "?").join(", ")})`
+                )
+                .bind(...page.map((row) => row.id))
+                .all<GrantRow>()
+            ).results
+          );
+    return {
+      tokens: page.map((row) => ({
+        ...toPersonalAccessToken(row, grants.get(row.id) ?? []),
+        owner: { userId: row.user_id, displayName: row.display_name, email: row.email },
+      })),
+      nextCursor: results.length > options.limit ? encodeCursor(page[page.length - 1]) : null,
+    };
+  }
+
+  /** Whose token this is, or null when there is no such token. */
+  async ownerOf(tokenId: string): Promise<string | null> {
+    const row = await this.db
+      .prepare("SELECT user_id FROM personal_access_tokens WHERE id = ?")
+      .bind(tokenId)
+      .first<{ user_id: string }>();
+    return row?.user_id ?? null;
+  }
+
+  /**
+   * Revokes every token `userId` holds, recording each revocation and who made it. Returns how
+   * many were revoked; a token issued after the read is not among them.
+   */
+  async revokeAll(input: Omit<RevokePersonalAccessTokenInput, "tokenId">): Promise<number> {
+    const tokens = await this.list(input.userId);
+    if (tokens.length === 0) return 0;
+    const results = await this.db.batch([
+      ...tokens.map((token) =>
+        this.bindAudit({
+          action: "personal_access_token.revoked",
+          tokenId: token.id,
+          ownerUserId: input.userId,
+          actorUserId: input.actorUserId,
+          requestId: input.requestId,
+          now: input.now,
+          before: auditSnapshot(token),
+          after: {},
+        })
+      ),
+      this.db
+        .prepare(
+          `DELETE FROM personal_access_tokens
+            WHERE user_id = ? AND id IN (${tokens.map(() => "?").join(", ")})
+            RETURNING id`
+        )
+        .bind(input.userId, ...tokens.map((token) => token.id)),
+    ]);
+    // Counted from the returned rows: an engine may include the cascaded grant rows in `changes`.
+    return results[results.length - 1].results.length;
+  }
+
+  /**
    * Revokes one of `userId`'s tokens and records who did it. Returns the revoked token, or null
    * when `userId` holds no token with that id (including one a concurrent request just revoked).
    */
@@ -233,7 +344,7 @@ export class PersonalAccessTokenStore {
   async findByToken(token: string): Promise<PersonalAccessTokenCredential | null> {
     const { results } = await this.db
       .prepare(
-        `SELECT token.id, token.user_id, token.display_prefix, token.expires_at,
+        `SELECT token.id, token.user_id, token.display_prefix, token.created_at, token.expires_at,
                 grant_row.permission_id
            FROM personal_access_tokens token
            LEFT JOIN personal_access_token_permissions grant_row ON grant_row.token_id = token.id
@@ -244,6 +355,7 @@ export class PersonalAccessTokenStore {
         id: string;
         user_id: string;
         display_prefix: string;
+        created_at: number;
         expires_at: number;
         permission_id: string | null;
       }>();
@@ -253,6 +365,7 @@ export class PersonalAccessTokenStore {
       id: row.id,
       userId: row.user_id,
       displayPrefix: row.display_prefix,
+      createdAt: row.created_at,
       expiresAt: row.expires_at,
       grant: canonicalGrant(
         results.flatMap(({ permission_id }) =>

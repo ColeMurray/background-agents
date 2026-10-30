@@ -8,6 +8,9 @@ import {
   createPersonalAccessTokenRequestSchema,
   isPersonalAccessTokenFormat,
   isPersonalAccessTokenGrantable,
+  personalAccessTokenMaxLifetimeDays,
+  personalAccessTokenPolicyAllows,
+  personalAccessTokenPolicySchema,
   unmetGrantPrerequisite,
   withGrantPrerequisitesMet,
 } from "./personal-access-tokens";
@@ -41,6 +44,7 @@ describe("personal access token grantability", () => {
     "provider_accounts.manage",
     "integrations.manage",
     "mcp_servers.manage",
+    "workspace.personal_access_tokens.manage",
   ] as const)("withholds workspace administration: %s", (permission) => {
     expect(isPersonalAccessTokenGrantable(permission)).toBe(false);
     expect(PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS).not.toContain(permission);
@@ -111,5 +115,33 @@ describe("grant prerequisites", () => {
       "skills.read",
       "skills.manage",
     ]);
+  });
+});
+
+describe("personal access token policy", () => {
+  const open = { enabled: true, maxLifetimeDays: null, allowedPermissions: null };
+
+  it("defaults the lifetime cap to the system maximum", () => {
+    expect(personalAccessTokenMaxLifetimeDays(open)).toBe(PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS);
+    expect(personalAccessTokenMaxLifetimeDays({ ...open, maxLifetimeDays: 30 })).toBe(30);
+  });
+
+  it("allows every grantable permission without a ceiling, and never a withheld one", () => {
+    expect(personalAccessTokenPolicyAllows(open, "sessions.read")).toBe(true);
+    expect(personalAccessTokenPolicyAllows(open, "global_secrets.manage")).toBe(false);
+  });
+
+  it("allows only the ceiling's permissions when one is set", () => {
+    const ceiling = { ...open, allowedPermissions: ["sessions.read" as const] };
+    expect(personalAccessTokenPolicyAllows(ceiling, "sessions.read")).toBe(true);
+    expect(personalAccessTokenPolicyAllows(ceiling, "automations.create")).toBe(false);
+  });
+
+  it.each([
+    ["a lifetime over the system maximum", { ...open, maxLifetimeDays: 366 }],
+    ["an unregistered permission", { ...open, allowedPermissions: ["sessions.everything"] }],
+    ["a missing switch", { maxLifetimeDays: null, allowedPermissions: null }],
+  ])("rejects %s", (_label, policy) => {
+    expect(personalAccessTokenPolicySchema.safeParse(policy).success).toBe(false);
   });
 });

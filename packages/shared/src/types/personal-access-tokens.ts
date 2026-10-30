@@ -95,6 +95,7 @@ export const PERSONAL_ACCESS_TOKEN_GRANTABILITY = {
   "workspace.members.manage": "withheld",
   "workspace.members.merge": "withheld",
   "workspace.members.read": "grantable",
+  "workspace.personal_access_tokens.manage": "withheld",
   "workspace.roles.read": "grantable",
   "workspace.transfer_ownership": "withheld",
 } as const satisfies Record<PermissionId, "grantable" | "withheld">;
@@ -215,6 +216,70 @@ export type ListPersonalAccessTokensResponse = z.infer<
   typeof listPersonalAccessTokensResponseSchema
 >;
 
+/**
+ * The workspace's rules for personal access tokens, set by holders of
+ * `workspace.personal_access_tokens.manage`. They apply to existing tokens at once, not only to new
+ * ones: disabling refuses every token, a lower lifetime cap expires older tokens early, and a
+ * narrower permission ceiling narrows every grant.
+ */
+export const personalAccessTokenPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+  /** Days a token may live, counted from issue. Null: PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS. */
+  maxLifetimeDays: z
+    .number()
+    .int()
+    .min(PERSONAL_ACCESS_TOKEN_MIN_LIFETIME_DAYS)
+    .max(PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS)
+    .nullable(),
+  /** Permissions a token may hold at all. Null: every grantable permission. */
+  allowedPermissions: z.array(permissionIdSchema).nullable(),
+});
+export type PersonalAccessTokenPolicy = z.infer<typeof personalAccessTokenPolicySchema>;
+
+/** The policy as administrators edit it: the rules plus the revision an update must name. */
+export const personalAccessTokenPolicySnapshotSchema = personalAccessTokenPolicySchema.extend({
+  revision: z.number().int().nonnegative(),
+  updatedAt: z.number().nullable(),
+  updatedByUserId: z.string().nullable(),
+});
+export type PersonalAccessTokenPolicySnapshot = z.infer<
+  typeof personalAccessTokenPolicySnapshotSchema
+>;
+
+/** The longest lifetime, in days, the policy allows a token. */
+export function personalAccessTokenMaxLifetimeDays(policy: PersonalAccessTokenPolicy): number {
+  return policy.maxLifetimeDays ?? PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS;
+}
+
+/** Whether the policy lets a token hold a permission. Withheld permissions are never allowed. */
+export function personalAccessTokenPolicyAllows(
+  policy: PersonalAccessTokenPolicy,
+  permission: PermissionId
+): boolean {
+  return (
+    isPersonalAccessTokenGrantable(permission) &&
+    (policy.allowedPermissions === null || policy.allowedPermissions.includes(permission))
+  );
+}
+
+/** A token as administrators see it: who owns it, and nothing secret. */
+export const workspacePersonalAccessTokenSchema = personalAccessTokenSchema.extend({
+  owner: z.strictObject({
+    userId: z.string(),
+    displayName: z.string().nullable(),
+    email: z.string().nullable(),
+  }),
+});
+export type WorkspacePersonalAccessToken = z.infer<typeof workspacePersonalAccessTokenSchema>;
+
+export const listWorkspacePersonalAccessTokensResponseSchema = z.strictObject({
+  tokens: z.array(workspacePersonalAccessTokenSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ListWorkspacePersonalAccessTokensResponse = z.infer<
+  typeof listWorkspacePersonalAccessTokensResponseSchema
+>;
+
 /** Stable codes for refusals of a creation request, beyond schema validation. */
 export const PERSONAL_ACCESS_TOKEN_ERROR_CODES = {
   /** A requested permission is withheld from tokens. */
@@ -225,4 +290,10 @@ export const PERSONAL_ACCESS_TOKEN_ERROR_CODES = {
   prerequisiteMissing: "permission_prerequisite_missing",
   /** The user already holds PERSONAL_ACCESS_TOKEN_MAX_PER_USER tokens. */
   limitReached: "personal_access_token_limit_reached",
+  /** The workspace policy has turned personal access tokens off. */
+  disabled: "personal_access_tokens_disabled",
+  /** A requested permission is outside the workspace policy's ceiling. */
+  permissionNotAllowed: "permission_not_allowed_by_policy",
+  /** The requested lifetime exceeds the workspace policy's maximum. */
+  lifetimeExceedsPolicy: "lifetime_exceeds_policy",
 } as const;

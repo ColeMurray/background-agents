@@ -10,6 +10,7 @@ import type { PermissionId } from "@open-inspect/shared/rbac";
 import type {
   CreatedPersonalAccessToken,
   PersonalAccessToken,
+  PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokensSettings } from "./personal-access-tokens-settings";
 import {
@@ -20,6 +21,7 @@ import {
 const hooks = vi.hoisted(() => ({
   tokens: [] as PersonalAccessToken[],
   permissions: [] as PermissionId[],
+  policy: null as PersonalAccessTokenPolicy | null,
   mutate: vi.fn(),
   issue: vi.fn(),
   revoke: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock("@/hooks/use-personal-access-tokens", () => ({
     error: undefined,
     mutate: hooks.mutate,
   }),
+  usePersonalAccessTokenPolicy: () => ({ policy: hooks.policy, loading: false, error: undefined }),
   issuePersonalAccessToken: hooks.issue,
   revokePersonalAccessToken: hooks.revoke,
 }));
@@ -108,6 +111,7 @@ const TOKEN: PersonalAccessToken = {
 describe("PersonalAccessTokensSettings", () => {
   beforeEach(() => {
     hooks.tokens = [];
+    hooks.policy = null;
     hooks.permissions = [
       "sessions.read",
       "sessions.create",
@@ -329,6 +333,33 @@ describe("PersonalAccessTokensSettings", () => {
     await user.click(screen.getByRole("button", { name: "Create token" }));
 
     expect(hooks.issue).not.toHaveBeenCalled();
+  });
+
+  it("hides token creation and explains why while the workspace has tokens turned off", () => {
+    hooks.policy = { enabled: false, maxLifetimeDays: null, allowedPermissions: null };
+    render(<PersonalAccessTokensSettings />);
+    expect(screen.queryByRole("button", { name: /New token/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/turned personal access tokens off/);
+  });
+
+  it("offers only lifetimes and permissions the workspace policy allows", async () => {
+    hooks.policy = { enabled: true, maxLifetimeDays: 45, allowedPermissions: ["sessions.read"] };
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+
+    expect(
+      screen.getAllByRole("radio").map((radio) => radio.closest("label")?.textContent)
+    ).toEqual(["7 days", "30 days", "45 days"]);
+    expect(screen.getByLabelText("Read sessions")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Create automations")).not.toBeInTheDocument();
+  });
+
+  it("shows the expiry the policy's lifetime cap imposes", () => {
+    hooks.tokens = [{ ...TOKEN, createdAt: Date.now() - 40 * DAY_MS }];
+    hooks.policy = { enabled: true, maxLifetimeDays: 30, allowedPermissions: null };
+    render(<PersonalAccessTokensSettings />);
+    expect(screen.getByText("Expired")).toBeInTheDocument();
   });
 
   it("revokes a token after confirmation", async () => {

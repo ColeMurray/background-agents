@@ -94,6 +94,7 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "automation.executor_changed": "Automation executor changed",
   "personal_access_token.created": "Personal access token created",
   "personal_access_token.revoked": "Personal access token revoked",
+  "workspace.personal_access_token_policy_updated": "Access token policy updated",
 };
 
 const OBSERVATION_LABELS: Record<AuditObservationAction, string> = {

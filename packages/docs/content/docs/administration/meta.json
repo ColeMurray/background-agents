@@ -5,6 +5,7 @@
     "workspace-access",
     "teams",
     "audit-log",
+    "personal-access-tokens",
     "analytics",
     "data-controls",
     "security",

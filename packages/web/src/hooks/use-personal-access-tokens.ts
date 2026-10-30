@@ -2,14 +2,17 @@ import useSWR from "swr";
 import {
   createdPersonalAccessTokenSchema,
   listPersonalAccessTokensResponseSchema,
+  personalAccessTokenPolicySchema,
   type CreatePersonalAccessTokenRequest,
   type CreatedPersonalAccessToken,
   type PersonalAccessToken,
+  type PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 const PERSONAL_ACCESS_TOKENS_KEY = "/api/personal-access-tokens";
+const PERSONAL_ACCESS_TOKEN_POLICY_KEY = "/api/personal-access-tokens/policy";
 
 async function errorMessage(response: Response, fallback: string): Promise<string> {
   const body = (await response.json().catch(() => ({}))) as { error?: unknown };
@@ -33,6 +36,25 @@ export function usePersonalAccessTokens() {
     fetchTokens
   );
   return { tokens: data ?? [], error, loading: isLoading, mutate };
+}
+
+async function fetchPolicy(): Promise<PersonalAccessTokenPolicy> {
+  const response = await browserApiFetch(PERSONAL_ACCESS_TOKEN_POLICY_KEY);
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, "Failed to load the access token policy"));
+  }
+  return personalAccessTokenPolicySchema.parse(await response.json());
+}
+
+/** The workspace rules a new token must satisfy and existing tokens are held to. */
+export function usePersonalAccessTokenPolicy() {
+  const { data: session } = useAuthSession();
+  const userId = session?.user?.id;
+  const { data, error, isLoading } = useSWR(
+    userId ? [PERSONAL_ACCESS_TOKEN_POLICY_KEY, userId] : null,
+    fetchPolicy
+  );
+  return { policy: data ?? null, error, loading: isLoading };
 }
 
 /**

@@ -136,6 +136,7 @@ const AUDITED_ALLOWED_PERMISSIONS = new Set<PermissionId>([
   "skills.manage",
   "workspace.members.manage",
   "workspace.members.merge",
+  "workspace.personal_access_tokens.manage",
   "workspace.transfer_ownership",
 ]);
 
