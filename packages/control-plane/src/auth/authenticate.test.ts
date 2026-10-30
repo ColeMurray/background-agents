@@ -18,6 +18,8 @@ const SECRETS = {
   SERVICE_AUTH_SECRET_SLACK_BOT: "slack-secret",
   SERVICE_AUTH_SECRET_GITHUB_BOT: "github-secret",
   SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-secret",
+  SERVICE_AUTH_SECRET_EXPORT: "export-secret",
+  SERVICE_AUTH_EXPORT_ACTOR: "github:42",
 };
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -25,6 +27,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": SECRETS.SERVICE_AUTH_SECRET_SLACK_BOT,
   "github-bot": SECRETS.SERVICE_AUTH_SECRET_GITHUB_BOT,
   "linear-bot": SECRETS.SERVICE_AUTH_SECRET_LINEAR_BOT,
+  export: SECRETS.SERVICE_AUTH_SECRET_EXPORT,
 };
 
 function createCtx(identityRow: Record<string, unknown> | null = null): RequestContext {
@@ -96,7 +99,9 @@ describe("authenticate — service credentials", () => {
 
   it("accepts every registered service with its own secret", async () => {
     for (const service of Object.keys(SERVICE_SECRET) as ServiceName[]) {
-      const request = await signedRequest({ service, body: "{}" });
+      // The export service must always name its pinned actor.
+      const actor = service === "export" ? SECRETS.SERVICE_AUTH_EXPORT_ACTOR : undefined;
+      const request = await signedRequest({ service, body: "{}", actor });
       const result = await authenticate(request, createEnv(), createCtx());
       expect(isAuthError(result), service).toBe(false);
     }
@@ -273,6 +278,28 @@ describe("authenticate — service credentials", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("lets the export service act only as its pinned actor", async () => {
+    const unauthorized = { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+    const pinned = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
+    expect(isAuthError(await authenticate(pinned, createEnv(), createCtx()))).toBe(false);
+
+    for (const actor of ["github:43", undefined]) {
+      const request = await signedRequest({ service: "export", method: "GET", actor });
+      const result = await authenticate(request, createEnv(), createCtx());
+      expect(result, `export asserting ${actor}`).toEqual(unauthorized);
+    }
+  });
+
+  it("refuses the export service when no actor is pinned", async () => {
+    const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
+    const result = await authenticate(
+      request,
+      createEnv({ SERVICE_AUTH_EXPORT_ACTOR: undefined }),
+      createCtx()
+    );
+    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
   });
 
   it("denies actor assertions outside the service's namespace", async () => {

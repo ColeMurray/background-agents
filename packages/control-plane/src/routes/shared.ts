@@ -347,6 +347,12 @@ export interface RouteAdmissionPolicy extends RoutePolicy {
    * nothing is written.
    */
   serviceActorClaims?: (request: Request, ctx: RequestContext) => Promise<ServiceActorClaimsResult>;
+  /**
+   * The export service may call only routes that opt in here (the session
+   * export routes). Its permission ceiling alone would also admit routes that
+   * need a signed-in user but no permission.
+   */
+  allowExportService?: boolean;
 }
 
 const SESSION_ID_BINDING: SandboxSessionBinding = {

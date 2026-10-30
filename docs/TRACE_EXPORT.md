@@ -8,10 +8,11 @@ send exports to a vendor. This release supports manual downloads, not scheduled 
 
 Both routes require an active user with `sessions.export` (Owners and Administrators by default, or
 a custom role granting it). `sessions.read` alone is insufficient; the bot services cannot export.
-Manual bulk downloads use the web app's `/api/sessions/export` proxy with an authenticated browser
-session; the web app holds its service secret and signs the control-plane request server-side. The
-web app also proxies single-session downloads at `/api/sessions/:id/export`. There is no bearer API
-token path for export. Treat downloaded files as sensitive session data.
+For unattended export, see [Unattended export](#unattended-export). Manual bulk downloads use the
+web app's `/api/sessions/export` proxy with an authenticated browser session; the web app holds its
+service secret and signs the control-plane request server-side. The web app also proxies
+single-session downloads at `/api/sessions/:id/export`. Treat downloaded files as sensitive session
+data.
 
 | Route                      | Behavior                                                                                                                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,7 +44,40 @@ Save the NDJSON response locally. If its last line has `type: "cursor"`, append 
 line. Keep the same scope, date window, include and format on each request. Inspect every page for
 `session_error` or `error` lines: these are not successful session exports. Re-export the window if
 the index changes during pagination. No browser cookie or web service secret needs to be copied into
-a CLI. Unattended export requires a separate machine credential, which is not available yet.
+a CLI.
+
+## Unattended export
+
+The `export` service lets a job (for example a weekly report) export without a browser. It is off
+until an operator enables it: set `export_service_actor = "github:<numeric GitHub user id>"` in
+Terraform (or `SERVICE_AUTH_SECRET_EXPORT` and `SERVICE_AUTH_EXPORT_ACTOR` on a self-hosted control
+plane), then read the secret from the sensitive `export_service_secret` output into the job's secret
+store.
+
+- It calls the control plane directly, signing each request as the `export` service with the same
+  `sig1` scheme the other services use (`buildServiceAuthHeaders` in
+  `packages/shared/src/service-auth.ts`).
+- It acts only as the configured actor, which must be an existing user. Every request names that
+  actor; a request that names any other actor, or none, is refused with 401. The export sees the
+  sessions that user can see, and the user needs `sessions.export`.
+- The service can only use `sessions.read` and `sessions.export`, and only on the two export routes
+  above. Every other route refuses it with `service_capability_required`.
+- Treat the secret like that user's credential: whoever holds it can export everything the user can.
+- Actors are GitHub identities for now, like the GitHub bot's.
+
+```ts
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
+
+const url = `${CONTROL_PLANE_URL}/sessions/export?scope=runs&include=messages,events,usage&limit=5`;
+const headers = await buildServiceAuthHeaders({
+  service: "export",
+  secret: process.env.EXPORT_SERVICE_SECRET!,
+  method: "GET",
+  url,
+  actor: "github:12345",
+});
+const ndjson = await (await fetch(url, { headers })).text();
+```
 
 The response has `Content-Type: application/x-ndjson` and `Cache-Control: private, no-store`. Lines
 are `schemaVersion: 2` and one of:

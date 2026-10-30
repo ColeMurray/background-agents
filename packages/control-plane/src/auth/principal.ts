@@ -51,4 +51,6 @@ export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
+  // Unattended trace export acts as an existing GitHub-identified user.
+  export: "github",
 };

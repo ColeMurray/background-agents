@@ -36,6 +36,8 @@ export interface EnvConfig {
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_EXPORT?: string; // unattended trace export (docs/TRACE_EXPORT.md); unset = disabled
+  SERVICE_AUTH_EXPORT_ACTOR?: string; // the only actor the export service may act as, e.g. github:12345
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)

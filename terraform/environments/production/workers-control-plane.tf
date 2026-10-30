@@ -176,6 +176,11 @@ module "control_plane_worker" {
   )
 
   secrets = merge(
+    # Unattended trace export (docs/TRACE_EXPORT.md); off unless an actor is set.
+    var.export_service_actor != "" ? {
+      SERVICE_AUTH_SECRET_EXPORT = { value = random_password.service_auth_secret_export[0].result }
+      SERVICE_AUTH_EXPORT_ACTOR  = { value = var.export_service_actor }
+    } : {},
     {
       # The existing operator-managed auth secret now signs Better Auth state
       # and cookies in the control plane. Keeping the Terraform input stable

@@ -609,6 +609,9 @@ function enforceServiceRouteAuthorization(
     return null;
   }
   if (principal?.kind !== "service") return null;
+  if (principal.service === "export" && !policy.allowExportService) {
+    return serviceCapabilityRequired();
+  }
   if (policy.authentication.kind === "web-service" && principal.service === "web") return null;
   if (
     (authorization.kind !== "active-user" && authorization.kind !== "active-global") ||

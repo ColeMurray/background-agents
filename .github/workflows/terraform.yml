@@ -300,6 +300,7 @@ jobs:
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
           TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
+          TF_VAR_export_service_actor: ${{ vars.EXPORT_SERVICE_ACTOR || secrets.EXPORT_SERVICE_ACTOR }}
 
       - name: Prepare Plan Comment
         id: prepare_comment
@@ -585,6 +586,7 @@ jobs:
           # after provisioning the site destroys its Vercel project on apply.
           TF_VAR_docs_site_enabled: "${{ vars.DOCS_SITE_ENABLED || secrets.DOCS_SITE_ENABLED || 'false' }}"
           TF_VAR_docs_custom_domain: ${{ vars.DOCS_CUSTOM_DOMAIN || secrets.DOCS_CUSTOM_DOMAIN }}
+          TF_VAR_export_service_actor: ${{ vars.EXPORT_SERVICE_ACTOR || secrets.EXPORT_SERVICE_ACTOR }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 

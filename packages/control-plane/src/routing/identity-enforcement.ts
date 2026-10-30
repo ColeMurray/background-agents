@@ -118,7 +118,8 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         participantUserId: principal.actor?.participantUserId ?? null,
         canonicalUserId: principal.actor?.canonicalUserId ?? null,
         actor: principal.actor,
-        spawnSource: principal.service,
+        // The export service reads sessions; it never creates them.
+        spawnSource: principal.service === "export" ? null : principal.service,
       };
     case "sandbox":
       return null;

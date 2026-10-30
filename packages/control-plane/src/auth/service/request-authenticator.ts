@@ -154,6 +154,22 @@ export async function authenticateServiceRequest(
 
   recordNonce(service, verification.nonce, ctx);
 
+  // The export service holds no per-request user credential, so it may act
+  // only as the one actor its operator configured.
+  if (
+    service === "export" &&
+    (!env.SERVICE_AUTH_EXPORT_ACTOR || actor !== env.SERVICE_AUTH_EXPORT_ACTOR)
+  ) {
+    logger.warn("Actor assertion denied: not the pinned export actor", {
+      event: "auth.assertion_denied",
+      service,
+      actor,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+  }
+
   let resolvedActor = null;
   if (actor !== "") {
     const parsed = parseActor(actor);

@@ -26,6 +26,14 @@ resource "random_password" "service_auth_secret_linear_bot" {
   special = false
 }
 
+# Signing secret for unattended trace export (docs/TRACE_EXPORT.md). Only an
+# operator holds it, read from the sensitive `export_service_secret` output.
+resource "random_password" "service_auth_secret_export" {
+  count   = var.export_service_actor != "" ? 1 : 0
+  length  = 64
+  special = false
+}
+
 # Dedicated pepper for image-build callback token hashes.
 resource "random_password" "image_callback_token_pepper" {
   length  = 64
