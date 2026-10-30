@@ -61,6 +61,23 @@
         "reason": "sessions_seed_legacy_provider_auth (already in 0064, re-created with a third row) covers sessions the previous worker inserts between the migration and the new worker deploy, which the new worker rejects as incomplete without an anthropic row."
       }
     },
+    "terraform/d1/migrations/0095_managed_mcp.sql": {
+      "create-trigger": {
+        "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER", "CREATE TRIGGER", "CREATE TRIGGER"],
+        "reason": "Grant ownership and unresolved-exchange retention must fence existing identity relink, multi-statement canonical merge, and cascading definition deletion at the writer commit. A TypeScript precheck races OAuth/refresh publication; a portable replacement requires changing every writer to a shared transactional conditional-guard protocol. Both deployed engines (D1 and Node SQLite) execute these guards in the real-storage conformance suite. A future Postgres migration must supply equivalent transactional guards."
+      },
+      "unixepoch": {
+        "occurrences": [
+          "unixepoch",
+          "unixepoch",
+          "unixepoch",
+          "unixepoch",
+          "unixepoch",
+          "unixepoch"
+        ],
+        "reason": "The ownership guard triggers above expire abandoned OAuth reservations and consent transactions. Triggers cannot bind Date.now(), so they read the clock at the writer commit. A future Postgres migration supplies the equivalent with extract(epoch from now())."
+      }
+    },
     "terraform/d1/migrations/0085_team_default_visibility.sql": {
       "create-trigger": {
         "occurrences": ["CREATE TRIGGER", "CREATE TRIGGER"],

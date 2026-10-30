@@ -47,6 +47,8 @@ export interface SessionInternalRouteHandlers {
   archive: SessionInternalRouteHandler;
   unarchive: SessionInternalRouteHandler;
   expireDraft: SessionInternalRouteHandler;
+  mcpContext: SessionInternalRouteHandler;
+  mcpClose: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
   xaiTokenRefresh: SessionInternalRouteHandler;
@@ -74,6 +76,8 @@ export function createSessionInternalRoutes(
   handlers: SessionInternalRouteHandlers
 ): SessionInternalRoute[] {
   return [
+    { method: "POST", path: SessionInternalPaths.mcpContext, handler: handlers.mcpContext },
+    { method: "POST", path: SessionInternalPaths.mcpClose, handler: handlers.mcpClose },
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
     { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },

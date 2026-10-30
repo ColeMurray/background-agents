@@ -85,9 +85,11 @@ def test_ready_event_reports_fixed_baselines_without_a_capability_gate(tmp_path:
     assert event == {
         "type": "ready",
         "sandboxId": "sandbox-1",
+        "bridgeInstanceId": bridge.bridge_instance_id,
         "opencodeSessionId": None,
         "harness": "opencode",
         "preservationProtocolVersion": 1,
+        "managedMcpVersion": 1,
         "repositories": [
             {
                 "position": 0,
@@ -301,3 +303,10 @@ async def test_timed_out_close_cancels_without_rescheduling_refresh(tmp_path: Pa
     await asyncio.sleep(0)
 
     assert worker._task is None
+
+
+def test_reconnected_ready_does_not_reenable_failed_managed_cleanup(tmp_path):
+    bridge = _bridge()
+    bridge.repo_manifest_path = _manifest(tmp_path)
+    bridge.harness.cleanup_failed = True
+    assert "managedMcpVersion" not in bridge._build_ready_event()

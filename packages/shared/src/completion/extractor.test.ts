@@ -599,6 +599,19 @@ describe("extractAgentResponse", () => {
   });
 });
 
+it("retains bounded deduplicated managed connection recovery separate from model text", () => {
+  const event: EventResponse = {
+    id: "warning",
+    type: "warning",
+    messageId: "m1",
+    createdAt: 1,
+    data: { scope: "mcp", message: "Connect example in Settings" },
+  };
+  const response = buildAgentResponseFromEvents([event, { ...event, id: "duplicate" }]);
+  expect(response.mcpWarnings).toEqual(["Connect example in Settings"]);
+  expect(response.textContent).toBe("");
+});
+
 describe("generated file completion extraction", () => {
   const metadata = {
     objectKey: "sessions/s1/files/f1",
@@ -639,6 +652,13 @@ describe("generated file completion extraction", () => {
       data: { artifactType: "video", artifactId: "video" },
     };
     const response = buildAgentResponseFromEvents([
+      {
+        id: "warning",
+        type: "warning",
+        messageId: "m1",
+        createdAt: 5,
+        data: { scope: "mcp", message: "Reconnect in Settings" },
+      },
       video,
       fileEvent({ id: "duplicate", createdAt: 40 }),
       fileEvent(),
@@ -655,6 +675,7 @@ describe("generated file completion extraction", () => {
     ]);
     expect(getResponseFileArtifacts(response)).toHaveLength(3);
     expect(response.artifacts).toEqual([]);
+    expect(response.mcpWarnings).toEqual(["Reconnect in Settings"]);
   });
 
   it("recovers a later validated file without changing its original chronological position", () => {

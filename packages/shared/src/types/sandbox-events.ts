@@ -111,6 +111,9 @@ const nonArtifactSandboxEventSchemas = [
     // snapshot it produces so a later restore can be gated on it.
     runtimeVersion: z.string().optional(),
     preservationProtocolVersion: z.literal(1).optional(),
+    managedMcpVersion: z.union([z.literal(0), z.literal(1)]).optional(),
+    // Stable across transport reconnects, new for every bridge process.
+    bridgeInstanceId: z.string().uuid().optional(),
     repositories: z.array(sessionDiffBaselineRepositorySchema).optional(),
   }),
   sandboxEventBaseSchema.extend({
@@ -183,6 +186,7 @@ const nonArtifactSandboxEventSchemas = [
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("execution_complete"),
+    managedMcpReady: z.boolean().optional(),
     success: z.boolean(),
     error: z.string().optional(),
     /** Final cumulative reported cost of the turn. */
@@ -220,7 +224,18 @@ const nonArtifactSandboxEventSchemas = [
   // unknown union entries, so this entry must exist before runtimes emit it.
   z.object({
     type: z.literal("warning"),
-    scope: z.enum(["sync", "setup", "start", "assembly", "secrets", "media", "budget", "provider"]),
+    scope: z.enum([
+      "sync",
+      "setup",
+      "start",
+      "assembly",
+      "secrets",
+      "media",
+      "budget",
+      "provider",
+      "mcp",
+    ]),
+    messageId: z.string().optional(),
     message: z.string(),
     repoOwner: z.string().optional(),
     repoName: z.string().optional(),

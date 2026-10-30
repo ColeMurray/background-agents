@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type {
   CreateMcpServerRequest,
   McpServerMetadata,
+  McpAuthMode,
 } from "@open-inspect/shared/types/integrations";
 import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
 import {
@@ -22,6 +23,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,6 +78,10 @@ function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
 
 type FormState = {
   name: string;
+  authMode: McpAuthMode;
+  managedRouting: boolean;
+  issuer: string;
+  resource: string;
   type: "local" | "remote";
   command: string;
   url: string;
@@ -81,6 +93,10 @@ type FormState = {
 
 const emptyForm: FormState = {
   name: "",
+  authMode: "service_credentials",
+  managedRouting: false,
+  issuer: "",
+  resource: "",
   type: "local",
   command: "",
   url: "",
@@ -116,6 +132,10 @@ function savedCredentialsOf(metadata: McpServerMetadata): SavedCredentials {
 function metadataToForm(metadata: McpServerMetadata): FormState {
   return {
     name: metadata.name,
+    authMode: metadata.authMode ?? "service_credentials",
+    managedRouting: metadata.managedRouting ?? false,
+    issuer: metadata.oauth?.issuer ?? "",
+    resource: metadata.oauth?.resource ?? "",
     type: metadata.type,
     command:
       metadata.command
@@ -404,7 +424,72 @@ function McpServerForm({
         </div>
       )}
 
-      <EnvRowsEditor form={form} setForm={setForm} hasUnnamedCredentials={hasUnnamedCredentials} />
+      {form.type === "remote" && (
+        <div className="space-y-3">
+          <Label htmlFor={`${radioPrefix}-auth`}>Authentication</Label>
+          <Select
+            value={form.authMode}
+            onValueChange={(authMode: McpAuthMode) =>
+              setForm({
+                ...form,
+                authMode,
+                managedRouting: authMode === "user_oauth" || form.managedRouting,
+                // Only service credentials send headers; returning to them restores the saved names.
+                envRows:
+                  authMode === "service_credentials"
+                    ? envRowsFor(savedCredentials, "remote")
+                    : [createEnvRow()],
+              })
+            }
+          >
+            <SelectTrigger id={`${radioPrefix}-auth`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No upstream authentication</SelectItem>
+              <SelectItem value="service_credentials">Shared service credentials</SelectItem>
+              <SelectItem value="user_oauth">Each user’s OAuth connection</SelectItem>
+            </SelectContent>
+          </Select>
+          <Label className="flex items-center gap-2">
+            <Checkbox
+              checked={form.managedRouting}
+              disabled={form.authMode === "user_oauth"}
+              onCheckedChange={(checked) => setForm({ ...form, managedRouting: checked === true })}
+            />
+            Route through Open Inspect
+          </Label>
+          {form.authMode === "user_oauth" && (
+            <>
+              <Label>OAuth issuer</Label>
+              <Input
+                type="url"
+                value={form.issuer}
+                onChange={(e) => setForm({ ...form, issuer: e.target.value })}
+                placeholder="https://gateway.example.com/mcp"
+              />
+              <Label>OAuth resource</Label>
+              <Input
+                type="url"
+                value={form.resource}
+                onChange={(e) => setForm({ ...form, resource: e.target.value })}
+                placeholder={form.url || "https://gateway.example.com/mcp"}
+              />
+              <p className="text-xs text-muted-foreground">
+                Users connect their accounts in Personal → Connections. Supported servers use
+                public-client OAuth with PKCE and Streamable HTTP.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {(form.type === "local" || form.authMode === "service_credentials") && (
+        <EnvRowsEditor
+          form={form}
+          setForm={setForm}
+          hasUnnamedCredentials={hasUnnamedCredentials}
+        />
+      )}
 
       <div>
         <Label className="mb-1.5">Availability</Label>
@@ -566,7 +651,20 @@ export function McpServersSettings() {
               ...common,
               type: "remote",
               url: form.url.trim(),
-              ...(includeCredentials ? { headers: envRecord } : {}),
+              authMode: form.authMode,
+              managedRouting: form.managedRouting,
+              oauth:
+                form.authMode === "user_oauth"
+                  ? {
+                      issuer: form.issuer.trim(),
+                      resource: form.resource.trim() || form.url.trim(),
+                    }
+                  : null,
+              ...(form.authMode !== "service_credentials"
+                ? { headers: {} }
+                : includeCredentials
+                  ? { headers: envRecord }
+                  : {}),
             }
           : {
               ...common,

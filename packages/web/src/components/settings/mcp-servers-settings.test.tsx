@@ -184,6 +184,9 @@ describe("McpServersSettings", () => {
         repoScopes: null,
         type: "remote",
         url: "https://c.example.com",
+        authMode: "service_credentials",
+        managedRouting: false,
+        oauth: null,
         headers: {},
         keepCredentialKeys: ["x-api-key", "Accept"],
         revision: 2,
@@ -207,6 +210,32 @@ describe("McpServersSettings", () => {
       expect(mocks.updateMcpServer).toHaveBeenCalledWith(
         "server-c",
         expect.objectContaining({ headers: {}, keepCredentialKeys: ["x-api-key", "Accept"] })
+      )
+    );
+  });
+
+  it("restores the saved headers when the auth mode is switched away and back", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: "No upstream authentication" }));
+    expect(screen.queryByDisplayValue("x-api-key")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: "Shared service credentials" }));
+    expect(screen.getByDisplayValue("x-api-key")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({
+          authMode: "service_credentials",
+          headers: {},
+          keepCredentialKeys: ["x-api-key", "Accept"],
+        })
       )
     );
   });
@@ -286,6 +315,9 @@ describe("McpServersSettings", () => {
         repoScopes: null,
         type: "remote",
         url: "https://a.example.com",
+        authMode: "service_credentials",
+        managedRouting: false,
+        oauth: null,
         revision: 3,
       })
     );
@@ -317,6 +349,9 @@ describe("McpServersSettings", () => {
           repoScopes: null,
           type: "remote",
           url: "https://c.example.com",
+          authMode: "service_credentials",
+          managedRouting: false,
+          oauth: null,
           revision: 2,
         })
       );
@@ -346,5 +381,33 @@ describe("McpServersSettings", () => {
       command: ["npx", "tool"],
       revision: 3,
     });
+  });
+
+  it("selects personal OAuth through the shared control and clears service credentials", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[0], revision: 4 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+    await user.click(screen.getByRole("button", { name: /Server A/ }));
+    await user.type(screen.getByPlaceholderText("Header-Name"), "Authorization");
+    await user.type(screen.getByPlaceholderText("value"), "service-secret");
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: /Each user/ }));
+    expect(screen.queryByPlaceholderText("Header-Name")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Route through Open Inspect" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Route through Open Inspect" })).toBeDisabled();
+    await user.type(
+      screen.getByPlaceholderText("https://gateway.example.com/mcp"),
+      "https://issuer.example.com"
+    );
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+      "server-a",
+      expect.objectContaining({
+        authMode: "user_oauth",
+        managedRouting: true,
+        headers: {},
+        oauth: { issuer: "https://issuer.example.com", resource: "https://a.example.com" },
+      })
+    );
   });
 });

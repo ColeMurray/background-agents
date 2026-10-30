@@ -346,6 +346,15 @@ describe("McpServerStore", () => {
       expect(err.message).toMatch(/require a command/i);
     });
 
+    it.each(["", "null"])(
+      "treats legacy credential-free env %j as no headers when changing auth mode",
+      async (env) => {
+        const { db } = createFakeD1({ firstResult: { ...remoteRow, env } });
+        const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
+        await expect(store.update("def456", { authMode: "none" })).resolves.not.toBeNull();
+      }
+    );
+
     async function storedCredentialsAfterUpdate(
       patch: Parameters<McpServerStore["update"]>[1],
       server: typeof sampleRow | typeof remoteRow = remoteRow
@@ -456,7 +465,7 @@ describe("McpServerStore", () => {
       ).toEqual({});
     });
 
-    it("pins a keep update to the revision it read", async () => {
+    it("pins every update to the revision it read", async () => {
       const { db, statements } = createFakeD1({ firstResult: remoteRow });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
 
@@ -466,7 +475,7 @@ describe("McpServerStore", () => {
       const revisionGuards = statements
         .filter((s) => s.sql.includes("UPDATE"))
         .map((s) => s.params.at(-1));
-      expect(revisionGuards).toEqual([remoteRow.revision, null]);
+      expect(revisionGuards).toEqual([remoteRow.revision, remoteRow.revision]);
     });
 
     describe("with credentials it cannot decrypt", () => {

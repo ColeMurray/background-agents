@@ -107,7 +107,12 @@ export async function processSlackCompletion(
     shouldClearReaction = true;
     agentResponse.error = agentResponse.error || job.error;
 
-    if (!agentResponse.textContent && agentResponse.toolCalls.length === 0 && !job.success) {
+    if (
+      !agentResponse.textContent &&
+      agentResponse.toolCalls.length === 0 &&
+      !job.success &&
+      !agentResponse.mcpWarnings?.length
+    ) {
       const displayError = truncateError(agentResponse.error || "Unknown error", 2000);
       log.error("callback.complete", {
         ...base,
@@ -141,7 +146,8 @@ export async function processSlackCompletion(
       return { kind: "ack" };
     }
 
-    if (shouldDeclineReply(job, agentResponse)) {
+    const declined = shouldDeclineReply(job, agentResponse);
+    if (!agentResponse.mcpWarnings?.length && declined) {
       log.info("callback.complete", {
         ...base,
         outcome: "success",
@@ -155,7 +161,7 @@ export async function processSlackCompletion(
 
     const blocks = buildCompletionBlocks(
       job.sessionId,
-      agentResponse,
+      declined ? { ...agentResponse, textContent: "" } : agentResponse,
       {
         source: "slack",
         channel: job.channel,

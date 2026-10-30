@@ -14,6 +14,7 @@ import httpx
 
 from .constants import OPENCODE_PORT
 from .git_excludes import install_runtime_git_excludes
+from .managed_mcp import managed_marker
 from .mcp_packages import McpPackageInstaller
 from .memories import memory_path
 from .process_output import iter_process_lines
@@ -373,7 +374,16 @@ class OpenCodeServer:
                 continue
             if server.get("type") == "remote":
                 entry: dict[str, Any] = {"type": "remote", "url": server.get("url", "")}
-                auth_headers = server.get("headers") or server.get("env") or {}
+                marker = managed_marker(server)
+                auth_headers = (
+                    (server.get("headers") or {})
+                    if marker
+                    else (server.get("headers") or server.get("env") or {})
+                )
+                if marker:
+                    entry["oauth"] = False
+                    if marker["auth_mode"] == "user_oauth":
+                        entry["enabled"] = False
                 if auth_headers:
                     entry["headers"] = dict(auth_headers)
                 config[name] = entry

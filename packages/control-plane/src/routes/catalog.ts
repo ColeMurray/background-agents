@@ -1,3 +1,5 @@
+import { mcpConnectionRoutes } from "./mcp-connections";
+import { mcpProxyRoutes } from "./mcp-proxy";
 /**
  * Canonical control-plane HTTP route catalog.
  *
@@ -92,6 +94,8 @@ export const catalog: readonly RouteModule[] = [
 
   // MCP servers
   mcpServerRoutes,
+  mcpConnectionRoutes,
+  mcpProxyRoutes,
 
   // Analytics
   analyticsRoutes,

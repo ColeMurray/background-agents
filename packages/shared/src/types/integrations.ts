@@ -4,6 +4,14 @@ import { harnessIdSchema } from "../harnesses";
 import { escapeRegExp } from "../regex";
 import { z } from "zod";
 import { teamSettingsSchema } from "./teams";
+import {
+  mcpAuthModeSchema,
+  mcpOAuthProfileSchema,
+  type McpAuthMode,
+  type McpOAuthProfile,
+  type ManagedMcpServerConfig,
+} from "./managed-mcp";
+export * from "./managed-mcp";
 
 export type IntegrationId = "github" | "linear" | "code-server" | "vnc" | "sandbox" | "slack";
 
@@ -703,7 +711,14 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   repoScopes?: string[] | null;
   enabled: boolean;
+  authMode?: McpAuthMode;
+  authRevision?: number;
+  managedRouting?: boolean;
+  oauth?: McpOAuthProfile | null;
 }
+
+/** Managed entries are constructed by allowlisting, never by spreading a registry object. */
+export type RuntimeMcpServerConfig = McpServerConfig | ManagedMcpServerConfig;
 
 export const DEFAULT_MCP_SERVER_ENABLED = true;
 export const mcpServerTypeSchema = z.enum(["local", "remote"]);
@@ -732,6 +747,9 @@ export const createMcpServerInputSchema = z.discriminatedUnion("type", [
       type: z.literal("remote"),
       url: z.url(),
       headers: mcpServerCredentialMapSchema.optional(),
+      authMode: mcpAuthModeSchema.optional(),
+      managedRouting: z.boolean().optional(),
+      oauth: mcpOAuthProfileSchema.nullable().optional(),
       enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
     })
     .strict(),
@@ -746,6 +764,9 @@ export const updateMcpServerInputSchema = z
     url: z.url(),
     env: mcpServerCredentialMapSchema,
     headers: mcpServerCredentialMapSchema,
+    authMode: mcpAuthModeSchema,
+    managedRouting: z.boolean(),
+    oauth: mcpOAuthProfileSchema.nullable(),
     /**
      * Stored credential names to keep, values unchanged, beside the `env` or
      * `headers` sent. A sent name replaces a kept one, and stored names neither
@@ -786,6 +807,10 @@ export interface McpServerMetadata {
   credentialKeys?: string[];
   repoScopes?: string[] | null;
   enabled: boolean;
+  authMode?: McpAuthMode;
+  authRevision?: number;
+  managedRouting?: boolean;
+  oauth?: McpOAuthProfile | null;
 }
 
 export const INTEGRATION_DEFINITIONS: {

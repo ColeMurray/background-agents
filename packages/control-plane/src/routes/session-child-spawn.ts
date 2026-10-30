@@ -368,6 +368,7 @@ export async function handleSpawnChild(
       content: body.prompt,
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
+      ...(spawnContext.promptAuthor.mcpEligible ? { mcpEligible: true } : {}),
       promptAccountUserId,
       source: "agent",
     } satisfies EnqueuePromptRequest;

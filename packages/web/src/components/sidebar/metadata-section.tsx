@@ -441,6 +441,11 @@ export function MetadataSection({
                 {(warning.repoOwner && warning.repoName
                   ? `${warning.repoOwner}/${warning.repoName}: `
                   : "") + warning.message}
+                {warning.scope === "mcp" && (
+                  <a className="ml-1 underline" href="/settings?tab=mcp-connections">
+                    Your MCP connections
+                  </a>
+                )}
               </span>
             </div>
           ))}

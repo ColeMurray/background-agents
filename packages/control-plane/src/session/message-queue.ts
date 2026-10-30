@@ -1,3 +1,4 @@
+import type { ManagedMcpExecution } from "@open-inspect/shared/types/integrations";
 import {
   checkHarnessPromptCompatibility,
   resolveHarnessModel,
@@ -7,6 +8,7 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { inheritReasoningEffort } from "../harness-admission";
 import { generateId, hashToken } from "../auth/crypto";
+import { McpError } from "../mcp/errors";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
 import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
@@ -177,7 +179,8 @@ export class SessionMessageQueue {
     /** Resolved per use so it honors settings persisted after construction. */
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
-    private readonly getSandboxPromptBlockReason: () => string | null
+    private readonly getSandboxPromptBlockReason: () => string | null,
+    private readonly prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>
   ) {}
 
   async enqueueAutofix(
@@ -293,6 +296,8 @@ export class SessionMessageQueue {
       enqueued = await this.enqueuePromptCore({
         participant,
         userId: client.userId,
+        admittedCanonicalUserId: client.userId,
+        mcpEligible: true,
         content: data.content,
         source: "web",
         model: data.model,
@@ -582,6 +587,48 @@ export class SessionMessageQueue {
       return;
     }
 
+    if (this.prepareManagedMcp) {
+      try {
+        const managed = await this.prepareManagedMcp(message.id);
+        if (managed.servers.length || managed.unavailable.length) command.managedMcp = managed;
+      } catch (error) {
+        if (
+          error instanceof McpError &&
+          error.code === "mcp_context_changed" &&
+          this.messageRepository.getMessageStatus(message.id) === "processing"
+        ) {
+          // The allocation changed under preparation; retry the unsent claim
+          // with fresh context instead of failing a prompt that never ran.
+          this.messageRepository.updateMessageToPending(message.id);
+          this.broadcastPromptQueue();
+          await this.processMessageQueue();
+          return;
+        }
+        if (
+          this.failMessage(message, "Managed MCP preparation unavailable", Date.now(), "processing")
+        ) {
+          this.broadcastPromptQueue();
+          await this.sessionStatus.reconcileAfterExecution(false);
+          await this.processMessageQueue();
+        }
+        return;
+      }
+      if (
+        !this.mayDispatch() ||
+        this.messageRepository.getMessageStatus(message.id) !== "processing"
+      )
+        return;
+      const currentTarget = this.wsManager.getSandboxCommandTarget();
+      if (currentTarget.kind !== "dispatch" || currentTarget.socket !== sandboxWs) {
+        // Preparation yields to bridge replacement and lifecycle changes.
+        // Retry the unsent claim with fresh MCP context; never send on a
+        // superseded socket or terminate its healthy replacement on failure.
+        this.messageRepository.updateMessageToPending(message.id);
+        this.broadcastPromptQueue();
+        await this.processMessageQueue();
+        return;
+      }
+    }
     const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
@@ -781,6 +828,8 @@ export class SessionMessageQueue {
       participant,
       promptAccountUserId: data.promptAccountUserId,
       userId: data.authorId,
+      admittedCanonicalUserId: data.canonicalUserId,
+      mcpEligible: data.mcpEligible === true,
       content: data.content,
       source: data.source,
       model: data.model,
@@ -928,6 +977,8 @@ export class SessionMessageQueue {
               data.promptAccountUserId !== undefined
                 ? data.promptAccountUserId
                 : (participant.canonical_user_id ?? null),
+            admittedCanonicalUserId: data.admittedCanonicalUserId,
+            mcpEligible: data.mcpEligible,
             content: data.content,
             source: data.source,
             model: messageModel,

@@ -959,3 +959,28 @@ variable "docs_custom_domain" {
   type        = string
   default     = null
 }
+
+variable "managed_mcp_routing_enabled" {
+  description = "Enable opted-in managed service/public remote MCP routing."
+  type        = bool
+  default     = false
+}
+variable "mcp_user_delegation_enabled" {
+  description = "Enable personal MCP only after runtime and upstream verification gates."
+  type        = bool
+  default     = false
+}
+variable "mcp_multiplayer_enabled" {
+  description = "Explicitly accept active-context attribution after alternating-author native lifecycle verification."
+  type        = bool
+  default     = false
+}
+variable "mcp_allowed_upstream_origins" {
+  description = "Comma-separated trusted HTTPS MCP resource and OAuth issuer origins; no redirects or private destinations."
+  type        = string
+  default     = ""
+  validation {
+    condition     = alltrue([for origin in compact([for o in split(",", var.mcp_allowed_upstream_origins) : trimspace(o)]) : can(regex("^https://[^/?#@:]+$", origin))])
+    error_message = "Use HTTPS origins without paths, credentials, or non-default ports."
+  }
+}

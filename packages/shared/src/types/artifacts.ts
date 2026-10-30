@@ -227,6 +227,7 @@ export type GeneratedFileArtifactInfo = z.infer<typeof generatedFileArtifactInfo
 export type StoredFileArtifactInfo = MediaArtifactInfo | GeneratedFileArtifactInfo;
 
 export interface AgentResponse {
+  mcpWarnings?: string[];
   textContent: string;
   toolCalls: ToolCallSummary[];
   artifacts: ArtifactInfo[];

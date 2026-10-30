@@ -43,7 +43,7 @@ const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per
 // mutating session route, so the default per-test budget is too small under
 // full-suite load.
-const MATRIX_TIMEOUT_MS = 60_000;
+const MATRIX_TIMEOUT_MS = 120_000;
 /** Every production route with its policy, in precedence order, as Hono registered it. */
 const routes: readonly RouteContract[] = listRouteContracts(
   createControlPlaneApp(catalog, cloudflareHost)
@@ -243,7 +243,14 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       // Raw web-service routes (browser auth, autofix activity) admit the web
       // principal and then let their handler own every status, including 403.
-      if (kind !== "web-service") {
+      if (route.path === "/mcp-connections/:serverId/connect") {
+        // The principal is admitted, but this fixture has no matching server
+        // or browser credential binding. The handler must fail closed.
+        expect(response.status, identity).toBe(403);
+        await expect(response.clone().json(), identity).resolves.toMatchObject({
+          code: "mcp_denied",
+        });
+      } else if (kind !== "web-service") {
         expect(PROTECTED_STATUSES.has(response.status), `${identity} -> ${response.status}`).toBe(
           false
         );
@@ -332,9 +339,18 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       };
 
       const admitted = await SELF.fetch(url, init);
-      expect(PROTECTED_STATUSES.has(admitted.status), `${identity} -> ${admitted.status}`).toBe(
-        false
-      );
+      if (route.path === "/sessions/:id/mcp/:serverId") {
+        // Sandbox authentication succeeds, but a server absent from the
+        // allocation's managed launch configuration cannot be proxied.
+        expect(admitted.status, identity).toBe(403);
+        await expect(admitted.clone().json(), identity).resolves.toMatchObject({
+          code: "mcp_denied",
+        });
+      } else {
+        expect(PROTECTED_STATUSES.has(admitted.status), `${identity} -> ${admitted.status}`).toBe(
+          false
+        );
+      }
       if (admitted.status === 404) {
         expect(await bodyText(admitted), identity).not.toBe(ROUTE_MISS_BODY);
       }

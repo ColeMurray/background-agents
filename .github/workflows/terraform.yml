@@ -269,6 +269,10 @@ jobs:
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
           TF_VAR_sandbox_unattended_inactivity_timeout_ms: "${{ vars.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || '120000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
+          TF_VAR_managed_mcp_routing_enabled: "${{ vars.MANAGED_MCP_ROUTING_ENABLED || 'false' }}"
+          TF_VAR_mcp_user_delegation_enabled: "${{ vars.MCP_USER_DELEGATION_ENABLED || 'false' }}"
+          TF_VAR_mcp_multiplayer_enabled: "${{ vars.MCP_MULTIPLAYER_ENABLED || 'false' }}"
+          TF_VAR_mcp_allowed_upstream_origins: ${{ vars.MCP_ALLOWED_UPSTREAM_ORIGINS }}
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}
@@ -554,6 +558,10 @@ jobs:
           TF_VAR_sandbox_inactivity_timeout_ms: "${{ vars.SANDBOX_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_INACTIVITY_TIMEOUT_MS || '600000' }}"
           TF_VAR_sandbox_unattended_inactivity_timeout_ms: "${{ vars.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || secrets.SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS || '120000' }}"
           TF_VAR_teams_enforcement: "${{ vars.TEAMS_ENFORCEMENT || secrets.TEAMS_ENFORCEMENT || 'shadow' }}"
+          TF_VAR_managed_mcp_routing_enabled: "${{ vars.MANAGED_MCP_ROUTING_ENABLED || 'false' }}"
+          TF_VAR_mcp_user_delegation_enabled: "${{ vars.MCP_USER_DELEGATION_ENABLED || 'false' }}"
+          TF_VAR_mcp_multiplayer_enabled: "${{ vars.MCP_MULTIPLAYER_ENABLED || 'false' }}"
+          TF_VAR_mcp_allowed_upstream_origins: ${{ vars.MCP_ALLOWED_UPSTREAM_ORIGINS }}
           TF_VAR_sandbox_boot_timeout_ms: "${{ vars.SANDBOX_BOOT_TIMEOUT_MS || secrets.SANDBOX_BOOT_TIMEOUT_MS || '1800000' }}"
           TF_VAR_daytona_api_url: ${{ vars.DAYTONA_API_URL || secrets.DAYTONA_API_URL }}
           TF_VAR_daytona_api_key: ${{ secrets.DAYTONA_API_KEY }}

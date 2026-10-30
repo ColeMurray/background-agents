@@ -600,7 +600,7 @@ describe("Child session operations (list, get, cancel)", () => {
         .run();
       await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
         state.storage.sql.exec(
-          "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+          "UPDATE messages SET admitted_canonical_user_id = ? WHERE status = 'processing'",
           ownerId
         );
       });
@@ -639,7 +639,7 @@ describe("Child session operations (list, get, cancel)", () => {
           .run();
         await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
           state.storage.sql.exec(
-            "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+            "UPDATE messages SET admitted_canonical_user_id = ? WHERE status = 'processing'",
             authorId
           );
         });
@@ -679,13 +679,18 @@ describe("Child session operations (list, get, cancel)", () => {
   });
 
   describe("POST /sessions/:parentId/children/:childId/prompt", () => {
-    it("does not prompt a private child for an unverified parent prompt author", async () => {
-      const { pName, childName, sandboxToken } = await setupParentAndChild();
+    it("does not authorize a private child from a participant linked after prompt admission", async () => {
+      const { pName, childName, parentStub, sandboxToken } = await setupParentAndChild();
       const ownerId = "22222222222222222222222222222222";
       await seedActiveUser(ownerId);
       await env.DB.prepare("UPDATE sessions SET visibility = 'private', user_id = ? WHERE id = ?")
         .bind(ownerId, childName)
         .run();
+      await queryDO(
+        parentStub,
+        "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+        ownerId
+      );
       const response = await SELF.fetch(
         `https://test.local/sessions/${pName}/children/${childName}/prompt`,
         {
@@ -707,7 +712,7 @@ describe("Child session operations (list, get, cancel)", () => {
         .run();
       await runInSessionDO(parentStub, (_instance: SessionDO, state) => {
         state.storage.sql.exec(
-          "UPDATE participants SET canonical_user_id = ? WHERE role = 'owner'",
+          "UPDATE messages SET admitted_canonical_user_id = ? WHERE status = 'processing'",
           ownerId
         );
       });
@@ -814,8 +819,9 @@ describe("Child session operations (list, get, cancel)", () => {
       if (!secondUser) throw new Error("Expected second participant");
       await runInSessionDO(parentStub, (instance: SessionDO, state) => {
         state.storage.sql.exec(
-          "UPDATE messages SET author_id = ? WHERE id = ?",
+          "UPDATE messages SET author_id = ?, admitted_canonical_user_id = ? WHERE id = ?",
           secondUser.id,
+          "canonical-2",
           processing.id
         );
       });

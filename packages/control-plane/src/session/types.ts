@@ -1,3 +1,4 @@
+import type { ManagedMcpExecution } from "@open-inspect/shared/types/integrations";
 /**
  * Session-specific type definitions.
  */
@@ -114,6 +115,11 @@ export const participantRowSchema = z.object({
 export type ParticipantRow = z.infer<typeof participantRowSchema>;
 
 export const messageRowSchema = z.object({
+  admitted_canonical_user_id: z.string().nullable().optional(),
+  mcp_eligible: z.number().optional(),
+  mcp_revision: z.number().optional(),
+  mcp_context: z.string().nullable().optional(),
+  mcp_closed: z.number().optional(),
   id: z.string(),
   author_id: z.string(),
   author_canonical_user_id: z.string().nullable().optional(), // Account when queued
@@ -230,6 +236,7 @@ export type SandboxAccessKind = "codeServer" | "vnc" | "ttyd";
 // Command types for sandbox communication
 
 interface PromptCommand {
+  managedMcp?: ManagedMcpExecution;
   type: "prompt";
   messageId: string;
   content: string;

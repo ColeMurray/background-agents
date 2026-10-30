@@ -319,6 +319,7 @@ export async function seedMessage(
   msg: {
     id: string;
     authorId: string;
+    admittedCanonicalUserId?: string | null;
     content: string;
     source: string;
     status: string;
@@ -328,14 +329,15 @@ export async function seedMessage(
 ): Promise<void> {
   await runInSessionDO(stub, (instance: SessionDO, state) => {
     state.storage.sql.exec(
-      "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO messages (id, author_id, content, source, status, created_at, started_at, admitted_canonical_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       msg.id,
       msg.authorId,
       msg.content,
       msg.source,
       msg.status,
       msg.createdAt,
-      msg.startedAt ?? null
+      msg.startedAt ?? null,
+      msg.admittedCanonicalUserId ?? null
     );
   });
 }

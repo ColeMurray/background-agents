@@ -12,6 +12,7 @@ export const enqueuePromptRequestSchema = z
   .object({
     content: promptContentSchema,
     authorId: z.string(),
+    mcpEligible: z.boolean().optional(),
     canonicalUserId: z.string().nullable().optional(),
     /**
      * The account the prompt counts as when it isn't the author participant's: a prompt one session

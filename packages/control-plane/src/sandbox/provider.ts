@@ -10,7 +10,7 @@ import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-build
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
 import { RequestDeadlineError } from "./request-deadline";
-import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
+import type { RuntimeMcpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
@@ -147,7 +147,7 @@ export interface CreateSandboxConfig {
    */
   agentSlackNotifyEnabled?: boolean;
   /** MCP servers to inject into the agent session */
-  mcpServers?: McpServerConfig[];
+  mcpServers?: RuntimeMcpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
   /** Previous logical allocation identity, used by providers supporting ambiguous-create recovery. */
@@ -242,7 +242,7 @@ export interface RestoreConfig {
   /** Git branch to work on (defaults to repo's default branch) */
   branch?: string | null;
   /** MCP servers to inject into the sandbox */
-  mcpServers?: McpServerConfig[];
+  mcpServers?: RuntimeMcpServerConfig[];
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
   /** Whether to enable code-server (browser-based editor) in the sandbox */

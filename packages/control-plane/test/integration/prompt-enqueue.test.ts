@@ -25,6 +25,37 @@ describe("POST /sessions/:id/prompt", () => {
     await cleanD1Tables();
   });
 
+  it("preserves admitted identity and stored attribution without optional GitHub enrichment", async () => {
+    const caller = { userId: "a".repeat(32), role: "member" } as const;
+    const sessionName = `public-prompt-unlinked-${crypto.randomUUID()}`;
+    const url = `https://cp.test/sessions/${sessionName}/prompt`;
+    const body = JSON.stringify({ content: "Fix the bug" });
+    const headers = await serviceRequestHeaders(url, { method: "POST", body, as: caller });
+    await env.DB.prepare("DELETE FROM user_identities WHERE user_id = ?").bind(caller.userId).run();
+    const { stub } = await initSession({
+      sessionName,
+      userId: caller.userId,
+      scmLogin: "stored-login",
+    });
+
+    const response = await handleControlPlaneHttp(
+      new Request(url, { method: "POST", headers, body }),
+      createCloudflareEnv(env),
+      createExecutionContext()
+    );
+
+    expect(response.status).toBe(200);
+    const { messageId } = await response.json<{ messageId: string }>();
+    expect(
+      await queryDO<{ user_id: string; scm_login: string }>(
+        stub,
+        `SELECT p.user_id, p.scm_login FROM messages m
+         JOIN participants p ON p.id = m.author_id WHERE m.id = ?`,
+        messageId
+      )
+    ).toEqual([{ user_id: caller.userId, scm_login: "stored-login" }]);
+  });
+
   it("rejects a caller-provided authorId without dispatching to the runtime", async () => {
     const caller = { userId: "a".repeat(32), role: "member" } as const;
     const sessionName = `public-prompt-author-${crypto.randomUUID()}`;

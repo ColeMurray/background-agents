@@ -41,7 +41,11 @@ export class SandboxRuntimeEventHandler {
     private readonly backgroundTasks: BackgroundTasks,
     private readonly messageQueue: Pick<SessionMessageQueue, "processMessageQueue">,
     private readonly log: Logger,
-    private readonly lifecycle: SandboxReadiness
+    private readonly lifecycle: SandboxReadiness,
+    private readonly recordManagedMcpVersion: (
+      version: number,
+      bridgeInstanceId?: string
+    ) => void = () => {}
   ) {}
 
   handleHeartbeat(context: SandboxEventContext): void {
@@ -84,6 +88,10 @@ export class SandboxRuntimeEventHandler {
     persistSandboxEvent(this.eventRepository, event, context);
     this.messenger.broadcast({ type: "sandbox_event", event });
 
+    // An already-ready allocation still reports ready on bridge reconnect.
+    // Observe uncertainty before the lifecycle's duplicate-ready no-op guard;
+    // the current authenticated socket is not proof of native client teardown.
+    this.recordManagedMcpVersion(event.managedMcpVersion ?? 0, event.bridgeInstanceId);
     // No await between the authorized event and the lifecycle-owned commit.
     // Repeated, fenced or retired readiness must not wake the prompt queue.
     if (

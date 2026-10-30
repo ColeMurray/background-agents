@@ -89,6 +89,17 @@ class FakeSdkClient:
         messages = [message async for message in prompt]
         self.queries.append(messages)
 
+    async def get_mcp_status(self):
+        return {
+            "mcpServers": [
+                {"name": name, "status": "connected"}
+                for name in self.options.get("mcp_servers", {})
+            ]
+        }
+
+    async def toggle_mcp_server(self, server_name, enabled):
+        return None
+
     async def interrupt(self) -> None:
         self.interrupts += 1
         if self.hang_interrupt:

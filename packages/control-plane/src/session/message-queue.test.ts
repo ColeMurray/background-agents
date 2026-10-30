@@ -8,6 +8,7 @@ import {
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import type { ManagedMcpExecution } from "@open-inspect/shared/types/integrations";
 import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
@@ -24,6 +25,7 @@ import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
+import { McpError } from "../mcp/errors";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -120,6 +122,12 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 const EXECUTION_TIMEOUT_MS = 60_000;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
+}
+
 it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   const fingerprint = await fingerprintWebPrompt("part-1", {
     content: "hello",
@@ -139,7 +147,8 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 
 function buildQueue(
   mayDispatch: () => boolean = () => true,
-  getSandboxPromptBlockReason: () => string | null = () => null
+  getSandboxPromptBlockReason: () => string | null = () => null,
+  prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -309,7 +318,8 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    prepareManagedMcp
   );
 
   return {
@@ -338,6 +348,87 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it.each([1, 3])(
+    "reprepares for the replacement bridge without sending to the old socket (state %i)",
+    async (readyState) => {
+      const entered = deferred<void>();
+      const prepared = deferred<ManagedMcpExecution>();
+      const prepare = vi.fn().mockImplementationOnce(() => {
+        entered.resolve();
+        return prepared.promise;
+      });
+      prepare.mockResolvedValue({ messageId: "msg-1", revision: 2, servers: [], unavailable: [] });
+      const h = buildQueue(undefined, undefined, prepare);
+      const oldSocket = { readyState } as WebSocket;
+      const replacementSocket = { readyState: 1 } as WebSocket;
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.repository.getMessageStatus.mockReturnValue("processing");
+      h.wsManager.getSandboxSocket.mockReturnValue(oldSocket);
+
+      const dispatch = h.queue.processMessageQueue();
+      await entered.promise;
+      h.wsManager.getSandboxSocket.mockReturnValue(replacementSocket);
+      prepared.resolve({ messageId: "msg-1", revision: 1, servers: ["old"], unavailable: [] });
+      await dispatch;
+
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(h.wsManager.send).toHaveBeenCalledExactlyOnceWith(
+        replacementSocket,
+        expect.objectContaining({ type: "prompt", messageId: "msg-1" })
+      );
+      expect(h.wsManager.send.mock.calls[0][1]).not.toHaveProperty("managedMcp");
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("retries the unsent claim when MCP context changes during preparation", async () => {
+    const prepare = vi.fn().mockRejectedValueOnce(new McpError("mcp_context_changed", 409));
+    prepare.mockResolvedValue({ messageId: "msg-1", revision: 2, servers: [], unavailable: [] });
+    const h = buildQueue(undefined, undefined, prepare);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.repository.getMessageStatus.mockReturnValue("processing");
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledOnce();
+  });
+
+  it.each(["booting", "unavailable"] as const)(
+    "releases the unsent processing claim when the target becomes %s during MCP preparation",
+    async (kind) => {
+      const entered = deferred<void>();
+      const prepared = deferred<ManagedMcpExecution>();
+      const h = buildQueue(undefined, undefined, () => {
+        entered.resolve();
+        return prepared.promise;
+      });
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.repository.getMessageStatus.mockReturnValue("processing");
+      h.repository.updateMessageToPending.mockImplementation(() => {
+        h.repository.getMessageStatus.mockReturnValue("pending");
+      });
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+      const dispatch = h.queue.processMessageQueue();
+      await entered.promise;
+      h.wsManager.getSandboxCommandTarget.mockReturnValue(
+        kind === "booting" ? { kind, phase: null } : { kind }
+      );
+      prepared.resolve({ messageId: "msg-1", revision: 1, servers: [], unavailable: [] });
+      await dispatch;
+
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(kind === "unavailable" ? 1 : 0);
+    }
+  );
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

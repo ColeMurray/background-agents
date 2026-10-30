@@ -68,6 +68,10 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const repository = {
     listParticipants: vi.fn(),
+    getProcessingMessageAuthority: vi.fn(() => ({
+      canonicalUserId: null as string | null,
+      mcpEligible: false,
+    })),
     getProcessingMessageAuthor: vi.fn<() => { author_id: string } | null>(() => ({
       author_id: "participant-1",
     })),
@@ -102,6 +106,26 @@ function createHandler() {
 }
 
 describe("ChildSessionsHandler", () => {
+  it("inherits immutable message authority, never a relinked participant's grant", async () => {
+    const { handler, repository, getSession } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getParticipantById.mockReturnValue(createParticipant({ canonical_user_id: "bob" }));
+    repository.getProcessingMessageAuthority.mockReturnValue({
+      canonicalUserId: "alice",
+      mcpEligible: true,
+    });
+    expect(await handler.getActivePromptAuthor().json()).toMatchObject({
+      canonicalUserId: "alice",
+      mcpEligible: true,
+    });
+    repository.getProcessingMessageAuthority.mockReturnValue({
+      canonicalUserId: null,
+      mcpEligible: false,
+    });
+    expect(await handler.getActivePromptAuthor().json()).not.toHaveProperty("canonicalUserId");
+    expect(await handler.getActivePromptAuthor().json()).not.toHaveProperty("mcpEligible");
+  });
+
   describe("parentPrompt", () => {
     function request(body: unknown): Request {
       const withAuthor =
@@ -342,6 +366,10 @@ describe("ChildSessionsHandler", () => {
       })
     );
 
+    repository.getProcessingMessageAuthority.mockReturnValue({
+      canonicalUserId: "canonical-2",
+      mcpEligible: true,
+    });
     const response = handler.getSpawnContext();
 
     expect(response.status).toBe(200);
@@ -373,6 +401,10 @@ describe("ChildSessionsHandler", () => {
       })
     );
 
+    repository.getProcessingMessageAuthority.mockReturnValue({
+      canonicalUserId: "canonical-2",
+      mcpEligible: true,
+    });
     // Queued before the author was linked to an account.
     repository.getProcessingPromptAccount.mockReturnValue(null);
 
@@ -447,7 +479,9 @@ describe("ChildSessionsHandler", () => {
     const response = handler.getSpawnContext();
 
     const body = await response.json<Record<string, unknown>>();
-    expect(body.promptAuthor).toMatchObject({ canonicalUserId: "canonical-2" });
+    // The author identity is the one admitted with the prompt, which an Autofix turn lacks.
+    expect(body.promptAuthor).toMatchObject({ userId: "github:7" });
+    expect(body.promptAuthor).not.toHaveProperty("canonicalUserId");
     expect(body.promptAccountUserId).toBeNull();
   });
 

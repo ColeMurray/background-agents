@@ -70,6 +70,7 @@ class HarnessPrompt:
 
     message_id: str
     text: str
+    managed_mcp: Mapping[str, Any] | None = None
     model: str | None = None
     reasoning_effort: str | None = None
     attachments: Sequence[HydratedSessionAttachment] = ()
@@ -163,6 +164,20 @@ class AgentHarness(Protocol):
         execution are no longer active. Implementations may terminate only
         their own process domain when a cooperative interrupt is insufficient.
         """
+        ...
+
+
+class ManagedMcpNativeHarness(AgentHarness, Protocol):
+    """Native operations needed by the personal-MCP turn wrapper."""
+
+    limits: PromptLimits
+
+    async def prepare_managed_mcp(self, allowed: set[str]) -> list[str]:
+        """Prepare the turn's connectors, returning known unavailable names."""
+        ...
+
+    async def close_managed_mcp(self) -> None:
+        """Confirm owned connector cleanup, or raise when state is uncertain."""
         ...
 
 

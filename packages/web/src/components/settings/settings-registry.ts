@@ -95,6 +95,19 @@ export const SETTINGS_GROUPS = [
           )
         ),
       },
+      {
+        id: "mcp-connections",
+        label: "Connections",
+        description: "Connect your personal MCP accounts",
+        keywords: "mcp oauth personal integrations",
+        icon: IntegrationsIcon,
+        visibility: publicSettings,
+        panel: lazyPanel(() =>
+          import("./mcp-connections-settings").then(
+            ({ McpConnectionsSettings }) => McpConnectionsSettings
+          )
+        ),
+      },
     ],
   },
   {

@@ -14,6 +14,10 @@ import type { ObjectStorage } from "./storage/object-storage";
  * so any host can supply them.
  */
 export interface EnvConfig {
+  MANAGED_MCP_ROUTING_ENABLED?: string;
+  MCP_USER_DELEGATION_ENABLED?: string;
+  MCP_MULTIPLAYER_ENABLED?: string;
+  MCP_ALLOWED_UPSTREAM_ORIGINS?: string;
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;

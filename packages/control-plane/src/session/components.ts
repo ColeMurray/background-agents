@@ -1,3 +1,5 @@
+import { SessionMcpContext } from "./mcp-context";
+import type { RuntimeMcpServerConfig } from "@open-inspect/shared/types/integrations";
 /**
  * Composition root for one session runtime.
  *
@@ -306,6 +308,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
   // for access secrets, so it takes the key.
   const sandboxRepository = new SandboxRepository(sql, log, repoSecretsEncryptionKey);
 
+  const mcpContext = new SessionMcpContext(sql, db, env, sessionCoreRepository, sandboxRepository);
+
   // Tier 2 — sockets and alarm scheduling.
   const alarmScheduler = createEarliestAlarmScheduler(alarmStore, alarmDeadlines);
   const wsManager: SessionWebSocketManager = new SessionWebSocketManagerImpl(
@@ -500,6 +504,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     retireAccess: () => access.retireShutdownAccess(),
   });
   const lifecycleManager = createLifecycleManager({
+    recordMcpServers: (servers) => mcpContext.recordLaunch(servers),
     provider: sandboxProvider,
     shutdown,
     access,
@@ -564,7 +569,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     executionStop,
     getExecutionTimeoutMs,
     () => lifecycleManager.mayProcessQueuedWork(),
-    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot())
+    () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
+    (messageId) => mcpContext.prepare(messageId)
   );
 
   // Tier 7 — services over the queue and lifecycle.
@@ -633,7 +639,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     transaction,
     (title) => {
       titleService.applySessionTitleUpdate(title, { onlyIfUnset: true });
-    }
+    },
+    () => mcpContext.disableRuntime()
   );
   const runtimeEventHandler = new SandboxRuntimeEventHandler(
     sessionCoreRepository,
@@ -652,7 +659,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     backgroundTasks,
     messageQueue,
     log,
-    lifecycleManager
+    lifecycleManager,
+    (version, bridgeInstanceId) => mcpContext.recordRuntimeVersion(version, bridgeInstanceId)
   );
   const pushService = new SandboxPushService(log, wsManager, () =>
     lifecycleManager.pushAdmissionDecision()
@@ -972,6 +980,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     archive: () => sessionLifecycleHandler.archive(),
     unarchive: () => sessionLifecycleHandler.unarchive(),
     expireDraft: () => sessionLifecycleHandler.expireDraft(),
+    mcpContext: (request) => mcpContext.handle(request),
+    mcpClose: (request) => mcpContext.close(request),
     verifySandboxToken: (request, _url, requestLog) =>
       sandboxHandler.verifySandboxToken(request, requestLog),
     openaiTokenRefresh: (_request, _url, requestLog) =>
@@ -1103,6 +1113,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 }
 
 interface LifecycleManagerDeps {
+  recordMcpServers: (servers: RuntimeMcpServerConfig[]) => void;
   recordWarning: (message: string, eventId: string) => void;
   resumeQueuedWork: () => Promise<void>;
   shutdown: SandboxShutdownLifecycle;
@@ -1151,7 +1162,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
 
   const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
   const mcpServerLookup: McpServerLookup = {
-    getDecryptedForSession: (repositories) => mcpStore.getDecryptedForSession(repositories),
+    getDecryptedForSession: (repositories) =>
+      mcpStore.getForLaunch(repositories, env.MANAGED_MCP_ROUTING_ENABLED === "true"),
   };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
@@ -1178,6 +1190,8 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
+    managedMcpRoutingEnabled: env.MANAGED_MCP_ROUTING_ENABLED === "true",
+    recordMcpServers: deps.recordMcpServers,
     model: DEFAULT_MODEL,
     // Re-derived per use until the session row exists: on the first-ever
     // activation the manager is built during the init request, before the row

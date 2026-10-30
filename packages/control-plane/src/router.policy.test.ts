@@ -39,13 +39,27 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(241);
+    expect(routes).toHaveLength(250);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(184);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
+    expect(new Set(paths).size).toBe(191);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(250);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires an audited human settings writer to revoke personal MCP connections", () => {
+    expect(routeFor("POST", "/mcp-servers/server-1/revoke-connections")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "mcp_servers.manage" }],
+        service: { kind: "deny" },
+        auditAllowed: true,
+      },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
     });

@@ -233,6 +233,8 @@ describe("MessageRepository", () => {
 
   it("creates a message with all fields", () => {
     repository.createMessage({
+      admittedCanonicalUserId: "alice",
+      mcpEligible: true,
       id: "msg-1",
       authorId: "p-1",
       authorCanonicalUserId: "user-1",
@@ -262,6 +264,8 @@ describe("MessageRepository", () => {
       null,
       "pending",
       1000,
+      "alice",
+      1,
     ]);
   });
 
@@ -316,7 +320,7 @@ describe("MessageRepository", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
-  it("admits pending Autofix feedback with its rolling PR key", () => {
+  it("admits pending Autofix feedback with its rolling PR key and no delegated authority", () => {
     mock.setOne({ count: 0 });
     expect(
       repository.admitAutofixMessage({
@@ -355,6 +359,8 @@ describe("MessageRepository", () => {
       "{}",
       "pending",
       2000,
+      null,
+      0,
     ]);
   });
 

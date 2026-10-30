@@ -112,3 +112,6 @@ terraform/environments/aws-staging/plan.out
 terraform/environments/aws-production/plan.out
 
 # Stable local advisory-lock inode for sandbox release selection writers.
+
+# Loopback-only managed MCP canary bundle.
+scripts/managed-mcp/.example-server.mjs

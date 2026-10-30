@@ -31,6 +31,7 @@ import os
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -150,6 +151,7 @@ class AgentBridge:
         reconnect_backoff: ReconnectBackoff | None = None,
     ):
         self.sandbox_id = sandbox_id
+        self.bridge_instance_id = str(uuid.uuid4())
         self.session_id = session_id
         self.control_plane_url = control_plane_url
         self.auth_token = auth_token
@@ -298,8 +300,18 @@ class AgentBridge:
             "type": "ready",
             "sandboxId": self.sandbox_id,
             "opencodeSessionId": harness.session_id,
+            "bridgeInstanceId": self.bridge_instance_id,
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
+            **(
+                {
+                    "managedMcpVersion": (
+                        1 if harness.id in (HarnessId.OPENCODE, HarnessId.CLAUDE) else 0
+                    )
+                }
+                if getattr(harness, "cleanup_failed", False) is not True
+                else {}
+            ),
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -808,6 +820,7 @@ class AgentBridge:
                 HarnessPrompt(
                     message_id=message_id,
                     text=content,
+                    managed_mcp=cmd.get("managedMcp"),
                     model=model,
                     reasoning_effort=reasoning_effort,
                     attachments=tuple(attachments or ()),
@@ -894,6 +907,11 @@ class AgentBridge:
             "type": "execution_complete",
             "messageId": message_id,
             "success": not had_error,
+            **(
+                {"managedMcpReady": False}
+                if getattr(self.harness, "cleanup_failed", False) is True
+                else {}
+            ),
             **({"error": error_message} if error_message else {}),
             **({"messageCostUsd": message_cost_usd} if message_cost_usd is not None else {}),
         }

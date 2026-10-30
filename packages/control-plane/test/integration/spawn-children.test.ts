@@ -88,6 +88,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     await seedMessage(stub, {
       id: `processing-${parentName}`,
       authorId: owner.id,
+      admittedCanonicalUserId: opts?.canonicalUserId ?? null,
       content: "Spawn a child",
       source: "web",
       status: "processing",
@@ -190,6 +191,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+    expect(
+      await queryDO(childStub, "SELECT admitted_canonical_user_id, mcp_eligible FROM messages")
+    ).toEqual([{ admitted_canonical_user_id: "canonical-abc123", mcp_eligible: 0 }]);
   });
 
   it.each([
@@ -323,7 +327,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
           Date.now()
         );
         state.storage.sql.exec(
-          "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+          "UPDATE messages SET author_id = ?, admitted_canonical_user_id = NULL WHERE status = 'processing'",
           "reviewer-participant"
         );
       });
@@ -371,8 +375,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         Date.now()
       );
       state.storage.sql.exec(
-        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
-        "other-author"
+        "UPDATE messages SET author_id = ?, admitted_canonical_user_id = ? WHERE status = 'processing'",
+        "other-author",
+        authorId
       );
     });
     const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
@@ -414,8 +419,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         Date.now()
       );
       state.storage.sql.exec(
-        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
-        "participant-second-user"
+        "UPDATE messages SET author_id = ?, admitted_canonical_user_id = ? WHERE status = 'processing'",
+        "participant-second-user",
+        "canonical-user-2"
       );
     });
 
