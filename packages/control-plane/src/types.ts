@@ -96,7 +96,7 @@ export interface EnvConfig {
   BOAT_SANDBOX_TYPE?: string; // Machine size when a session requests no resources: small, default (default), large, xlarge
 
   // Image builds
-  IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS?: string; // Minimum interval (ms) between rebuilds caused only by base-branch commits; unset or 0 rebuilds whenever the branch moves
+  IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS?: string; // Minimum interval (ms) between rebuilds caused only by base-branch commits; whole ms; unset rebuilds whenever the branch moves
 
   // Sandbox lifecycle configuration
   SANDBOX_INACTIVITY_TIMEOUT_MS?: string; // Inactivity timeout in ms; defaults to DEFAULT_INACTIVITY_CONFIG.timeoutMs

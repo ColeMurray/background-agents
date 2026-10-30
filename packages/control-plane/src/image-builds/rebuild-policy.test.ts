@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import type { ImageBuildProvider } from "./model";
-import { evaluateImageBuildRebuildPolicy, resolveMinRebuildIntervalMs } from "./rebuild-policy";
+import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 
 const unit = {
@@ -9,6 +9,8 @@ const unit = {
   repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
   repositoriesFingerprint: "fp-current",
 };
+
+const NO_INTERVAL = { now: 0, minRebuildIntervalMs: 0 };
 
 function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordView {
   return {
@@ -29,14 +31,16 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
 
 describe("evaluateImageBuildRebuildPolicy", () => {
   it("skips an active build for the active provider", () => {
-    expect(evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal")).toEqual({
+    expect(
+      evaluateImageBuildRebuildPolicy(unit, [row({ status: "building" })], "modal", NO_INTERVAL)
+    ).toEqual({
       type: "skip",
       reason: "building",
     });
   });
 
   it("rebuilds for a missing fingerprint, incompatible runtime, or malformed provenance", () => {
-    expect(evaluateImageBuildRebuildPolicy(unit, [], "modal")).toMatchObject({
+    expect(evaluateImageBuildRebuildPolicy(unit, [], "modal", NO_INTERVAL)).toMatchObject({
       type: "rebuild",
       reason: "missing_image",
     });
@@ -44,17 +48,18 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       evaluateImageBuildRebuildPolicy(
         unit,
         [row({ runtimeVersion: "v56-managed-provider-runtime" })],
-        "modal"
+        "modal",
+        NO_INTERVAL
       )
     ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ repositoryShas: null })], "modal")
+      evaluateImageBuildRebuildPolicy(unit, [row({ repositoryShas: null })], "modal", NO_INTERVAL)
     ).toMatchObject({ type: "rebuild", reason: "invalid_provenance" });
   });
 
   it("ignores ready images from another provider", () => {
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ provider: "vercel" })], "modal")
+      evaluateImageBuildRebuildPolicy(unit, [row({ provider: "vercel" })], "modal", NO_INTERVAL)
     ).toMatchObject({ type: "rebuild", reason: "missing_image" });
   });
 
@@ -65,7 +70,9 @@ describe("evaluateImageBuildRebuildPolicy", () => {
   ])(
     "rebuilds outdated Modal image %s even when repository SHAs are unchanged",
     (runtimeVersion) => {
-      expect(evaluateImageBuildRebuildPolicy(unit, [row({ runtimeVersion })], "modal")).toEqual({
+      expect(
+        evaluateImageBuildRebuildPolicy(unit, [row({ runtimeVersion })], "modal", NO_INTERVAL)
+      ).toEqual({
         type: "rebuild",
         reason: "runtime_incompatible",
       });
@@ -79,7 +86,12 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ];
     for (const [provider, runtimeVersion] of superseded) {
       expect(
-        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider)
+        evaluateImageBuildRebuildPolicy(
+          unit,
+          [row({ provider, runtimeVersion })],
+          provider,
+          NO_INTERVAL
+        )
       ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     }
 
@@ -89,13 +101,18 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     ];
     for (const [provider, runtimeVersion] of current) {
       expect(
-        evaluateImageBuildRebuildPolicy(unit, [row({ provider, runtimeVersion })], provider).type
+        evaluateImageBuildRebuildPolicy(
+          unit,
+          [row({ provider, runtimeVersion })],
+          provider,
+          NO_INTERVAL
+        ).type
       ).toBe("check_branches");
     }
   });
 
   it("defers a compatible image to branch-head comparison", () => {
-    const decision = evaluateImageBuildRebuildPolicy(unit, [row()], "modal");
+    const decision = evaluateImageBuildRebuildPolicy(unit, [row()], "modal", NO_INTERVAL);
     expect(decision.type).toBe("check_branches");
     if (decision.type === "check_branches") {
       expect(decision.recordedShas.get("acme/web")).toBe("abc123");
@@ -106,56 +123,64 @@ describe("evaluateImageBuildRebuildPolicy", () => {
 describe("minimum rebuild interval", () => {
   const HOUR = 60 * 60 * 1000;
   const now = 1_000 * HOUR;
+  const clock = { now, minRebuildIntervalMs: 24 * HOUR };
+  const young = { createdAt: now - HOUR };
 
   it("skips the branch check while the ready image is younger than the interval", () => {
-    expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - 2 * HOUR })], "modal", {
-        minRebuildIntervalMs: 24 * HOUR,
-        now,
-      })
-    ).toEqual({ type: "skip", reason: "fresh" });
-  });
-
-  it("checks branches once the ready image is older than the interval", () => {
-    expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - 25 * HOUR })], "modal", {
-        minRebuildIntervalMs: 24 * HOUR,
-        now,
-      })
-    ).toMatchObject({ type: "check_branches" });
-  });
-
-  it("never delays a rebuild for a missing or incompatible image", () => {
-    const options = { minRebuildIntervalMs: 24 * HOUR, now };
-    expect(evaluateImageBuildRebuildPolicy(unit, [], "modal", options)).toMatchObject({
-      type: "rebuild",
-      reason: "missing_image",
+    expect(evaluateImageBuildRebuildPolicy(unit, [row(young)], "modal", clock)).toEqual({
+      type: "skip",
+      reason: "min_rebuild_interval",
     });
-    expect(
-      evaluateImageBuildRebuildPolicy(
-        unit,
-        [row({ createdAt: now - HOUR, runtimeVersion: "v1-old" })],
-        "modal",
-        options
-      )
-    ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
   });
 
-  it("keeps the old behavior without an interval", () => {
+  it("checks branches once the ready image is exactly as old as the interval", () => {
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - HOUR })], "modal")
+      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - 24 * HOUR })], "modal", clock)
     ).toMatchObject({ type: "check_branches" });
   });
 
-  it("reads IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS, treating blank or invalid values as no interval", () => {
-    expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "604800000" })).toBe(
-      168 * HOUR
-    );
-    expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: " 3600000 " })).toBe(
-      HOUR
-    );
-    for (const value of [undefined, "", "abc", "-1", "0"]) {
-      expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: value })).toBe(0);
-    }
+  it("checks branches when the interval is 0", () => {
+    expect(
+      evaluateImageBuildRebuildPolicy(unit, [row(young)], "modal", {
+        now,
+        minRebuildIntervalMs: 0,
+      })
+    ).toMatchObject({ type: "check_branches" });
+  });
+
+  it.each<[string, ImageBuildRecordView[], object]>([
+    ["no image", [], { type: "rebuild", reason: "missing_image" }],
+    [
+      "repository set or base branch changed",
+      [row({ ...young, repositoriesFingerprint: "fp-old" })],
+      { type: "rebuild", reason: "missing_image" },
+    ],
+    [
+      "runtime below the rebuild floor",
+      [row({ ...young, runtimeVersion: "v1-old" })],
+      { type: "rebuild", reason: "runtime_incompatible" },
+    ],
+    [
+      "missing provenance",
+      [row({ ...young, repositoryShas: null })],
+      { type: "rebuild", reason: "invalid_provenance" },
+    ],
+    [
+      "provenance missing a scope repository",
+      [
+        row({
+          ...young,
+          repositoryShas: [{ repoOwner: "acme", repoName: "other", baseSha: "abc123" }],
+        }),
+      ],
+      { type: "rebuild", reason: "invalid_provenance" },
+    ],
+    [
+      "build in flight",
+      [row({ id: "build-2", status: "building", createdAt: now }), row(young)],
+      { type: "skip", reason: "building" },
+    ],
+  ])("%s is not delayed by the interval", (_name, rows, expected) => {
+    expect(evaluateImageBuildRebuildPolicy(unit, rows, "modal", clock)).toEqual(expected);
   });
 });
