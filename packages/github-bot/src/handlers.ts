@@ -14,10 +14,20 @@ import { startSession, type HandlerResult } from "./session-startup";
 
 export type { HandlerResult } from "./session-startup";
 
+/** GitHub logins are case-insensitive. */
+function isBotLogin(login: string | undefined, botUsername: string): boolean {
+  return login?.toLowerCase() === botUsername.toLowerCase();
+}
+
+/** GitHub rejects APPROVE and REQUEST_CHANGES reviews from a PR's author, including the App. */
+function isAuthoredByBot(pr: { user: { login: string } }, env: Env): boolean {
+  return isBotLogin(pr.user.login, env.GITHUB_BOT_USERNAME);
+}
+
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
   if (!parsed.success) return false;
-  return parsed.data.requested_reviewer?.login === botUsername;
+  return isBotLogin(parsed.data.requested_reviewer?.login, botUsername);
 }
 
 export async function handleReviewRequested(
@@ -28,7 +38,7 @@ export async function handleReviewRequested(
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, requested_reviewer, sender } = payload;
 
-  if (requested_reviewer?.login !== env.GITHUB_BOT_USERNAME) {
+  if (!isBotLogin(requested_reviewer?.login, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.review_not_for_bot", {
       trace_id: traceId,
       requested_reviewer: requested_reviewer?.login,
@@ -55,6 +65,7 @@ export async function handleReviewRequested(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
+        isSelfReview: isAuthoredByBot(pr, env),
       }),
   });
 }
@@ -91,7 +102,7 @@ export async function handlePullRequestOpened(
         head: pr.head.ref,
         isPublic: !repo.private,
         codeReviewInstructions: config.codeReviewInstructions,
-        isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
+        isSelfReview: isAuthoredByBot(pr, env),
       }),
   });
 }
@@ -118,7 +129,7 @@ export async function handleIssueComment(
     return { outcome: "skipped", skip_reason: "no_mention" };
   }
 
-  if (sender.login === env.GITHUB_BOT_USERNAME) {
+  if (isBotLogin(sender.login, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.self_comment_ignored", { trace_id: traceId });
     return { outcome: "skipped", skip_reason: "self_comment" };
   }
@@ -165,7 +176,7 @@ export async function handleReviewComment(
     return { outcome: "skipped", skip_reason: "no_mention" };
   }
 
-  if (sender.login === env.GITHUB_BOT_USERNAME) {
+  if (isBotLogin(sender.login, env.GITHUB_BOT_USERNAME)) {
     log.debug("handler.self_comment_ignored", { trace_id: traceId });
     return { outcome: "skipped", skip_reason: "self_comment" };
   }

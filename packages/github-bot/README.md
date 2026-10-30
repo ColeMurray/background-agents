@@ -142,16 +142,18 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
 people to request the GitHub App bot through the PR reviewer picker.
 
-1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
+1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` (case-insensitive) — return early
+   if not
 2. Post eyes reaction on the PR (fire-and-forget)
 3. Create session via control plane
-4. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+4. Send code review prompt (includes PR metadata + `gh` CLI instructions). As with auto-review,
+   reviews of the bot's own PRs use `COMMENT`.
 
 **Issue Comment:**
 
 1. Check `issue.pull_request` exists — ignore non-PR comments
 2. Check comment body contains `@{GITHUB_BOT_USERNAME}` — ignore if no mention
-3. Check `sender.login !== GITHUB_BOT_USERNAME` — prevent loops
+3. Check `sender.login` is not `GITHUB_BOT_USERNAME` (case-insensitive) — prevent loops
 4. Strip @mention, post eyes reaction, create session, send comment action prompt
 
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
