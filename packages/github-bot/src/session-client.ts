@@ -9,6 +9,29 @@ import type { Env } from "./types";
 import type { SessionTargetFields } from "./session-target";
 
 const sessionCreationErrorSchema = z.object({ code: z.string() });
+const promptErrorSchema = z.object({ code: z.string().optional() });
+
+/** Prompt POST failed. `code` is the control plane's machine-readable reason. */
+export class PromptDeliveryError extends Error {
+  readonly status: number;
+  readonly code: string | undefined;
+
+  constructor(status: number, body: string) {
+    super(`Prompt delivery failed: ${status} ${body}`);
+    this.name = "PromptDeliveryError";
+    this.status = status;
+    this.code = readPromptErrorCode(body);
+  }
+}
+
+function readPromptErrorCode(body: string): string | undefined {
+  try {
+    const parsed = promptErrorSchema.safeParse(JSON.parse(body));
+    return parsed.success ? parsed.data.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type SessionCreationResult =
   | { ok: true; sessionId: string }
@@ -88,7 +111,7 @@ export async function sendPrompt(
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Prompt delivery failed: ${response.status} ${body}`);
+    throw new PromptDeliveryError(response.status, body);
   }
   const result = sendPromptResponseSchema.safeParse(await response.json());
   if (!result.success) {
