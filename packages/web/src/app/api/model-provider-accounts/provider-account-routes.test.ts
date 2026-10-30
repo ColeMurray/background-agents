@@ -7,6 +7,7 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET as listAccounts } from "./route";
 import { PATCH as renameAccount } from "./[id]/route";
 import { PUT as setDefault } from "../model-provider-account-defaults/[provider]/route";
+import { PUT as setRouting } from "../model-provider-account-routing/[provider]/route";
 import { POST as startDeviceAuthorization } from "./device-authorizations/[provider]/route";
 import { DELETE as cancelDeviceAuthorization } from "./device-authorizations/[provider]/[transactionId]/route";
 import { POST as pollDeviceAuthorization } from "./device-authorizations/[provider]/[transactionId]/poll/route";
@@ -67,6 +68,20 @@ describe("provider account BFF routes", () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+
+    const routing = await setRouting(
+      new NextRequest("http://localhost/api/model-provider-account-routing/unknown", {
+        method: "PUT",
+        headers: { Cookie: "openinspect.session_token=value" },
+        body: JSON.stringify({
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        }),
+      }),
+      { params: Promise.resolve({ provider: "../openai" }) }
+    );
+    expect(routing.status).toBe(400);
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 

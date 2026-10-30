@@ -4,9 +4,11 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   modelProviderAccountReconnectMethod,
+  PROVIDER_ACCOUNT_POOL_MAX_SIZE,
   STATIC_CREDENTIAL_PROVIDER_IDS,
   SUBSCRIPTION_PROVIDER_DISPLAY_METADATA,
   type ModelProviderAccount,
+  type ProviderAccountRouting,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
@@ -16,7 +18,9 @@ import {
   renameProviderAccount,
   runProviderAccountAction,
   setProviderAccountDefault,
+  setProviderAccountRouting,
   useLegacyProviderCredentials,
+  useProviderAccountRouting,
   useProviderAccounts,
   type LegacyProviderKeyLocation,
 } from "@/hooks/use-provider-accounts";
@@ -31,6 +35,7 @@ import {
 } from "@/components/settings/provider-authorization-code-dialog";
 import { formatRelativeTime } from "@/lib/time";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -212,18 +217,108 @@ function LegacyReconnectForm({
   );
 }
 
+function inRandomPool(routing: readonly ProviderAccountRouting[], account: ModelProviderAccount) {
+  return routing.some(
+    (item) =>
+      item.provider === account.provider &&
+      item.selection.mode === "random" &&
+      item.selection.accountIds.includes(account.id)
+  );
+}
+
+function RandomPoolEditor({
+  provider,
+  accountIds,
+  accounts,
+  unattendedMode,
+  disabled,
+  onUnattendedMode,
+  onToggle,
+}: {
+  provider: SubscriptionProviderId;
+  accountIds: readonly string[];
+  accounts: readonly ModelProviderAccount[];
+  unattendedMode: "provider_account" | "api_key";
+  disabled: boolean;
+  onUnattendedMode: (mode: "provider_account" | "api_key") => void;
+  onToggle: (accountId: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label htmlFor={`unattended-${provider}`}>Automated authentication</Label>
+        <Select
+          disabled={disabled}
+          value={unattendedMode}
+          onValueChange={(value: "provider_account" | "api_key") => onUnattendedMode(value)}
+        >
+          <SelectTrigger id={`unattended-${provider}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="provider_account">Use a pooled account</SelectItem>
+            <SelectItem value="api_key">No account (API key)</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-muted-foreground">Pool</p>
+        {accounts.length === 0 ? (
+          <p className="text-sm text-foreground">No eligible accounts remain in this pool.</p>
+        ) : (
+          accounts.map((account) => {
+            const checked = accountIds.includes(account.id);
+            const inputId = `pool-${provider}-${account.id}`;
+            return (
+              <label key={account.id} htmlFor={inputId} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  id={inputId}
+                  checked={checked}
+                  disabled={disabled}
+                  onCheckedChange={(value) => onToggle(account.id, value === true)}
+                />
+                {account.displayName}
+              </label>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Displays provider accounts while restricting connection and account-management actions by permission.
  */
 export function ProviderAccountsSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
   const canManage = hasPermission("provider_accounts.manage");
-  const { providers, accounts, defaults, loading, error, refresh } = useProviderAccounts();
+  const {
+    providers,
+    accounts,
+    defaults,
+    loading: accountsLoading,
+    error: accountsError,
+    refresh: refreshAccounts,
+  } = useProviderAccounts();
+  const {
+    randomEnabled,
+    routing,
+    loading: routingLoading,
+    error: routingError,
+    refresh: refreshRouting,
+  } = useProviderAccountRouting();
+  const loading = accountsLoading || routingLoading;
+  const error = accountsError ?? routingError;
   const legacyCredentials = useLegacyProviderCredentials();
   const [connection, setConnection] = useState<Connection | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [saving, setSaving] = useState(false);
   const operationInFlightRef = useRef(false);
+
+  function refresh() {
+    return Promise.all([refreshAccounts(), refreshRouting()]);
+  }
 
   async function run(operation: () => Promise<unknown>, success: string) {
     if (operationInFlightRef.current) return;
@@ -246,7 +341,7 @@ export function ProviderAccountsSettings() {
     setConfirm(null);
     toast.success(success);
     try {
-      await refresh();
+      await Promise.all([refreshAccounts(), refreshRouting()]);
     } catch {
       toast.error("Saved, but the account list could not be refreshed. Reload the page to see it.");
     }
@@ -385,6 +480,11 @@ export function ProviderAccountsSettings() {
                               {isDefaultForAutomation && (
                                 <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
                                   Default for automation
+                                </span>
+                              )}
+                              {randomEnabled && inRandomPool(routing, account) && (
+                                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
+                                  In random pool
                                 </span>
                               )}
                             </div>
@@ -572,14 +672,31 @@ export function ProviderAccountsSettings() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Choose credentials for sessions started by automations, bots, or other agents.
               </p>
+              {randomEnabled && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Random assignment gives each new session one account from the pool. A retry of
+                  that session keeps the same account, and child sessions inherit it.
+                </p>
+              )}
             </div>
             <div className="divide-y divide-border-muted">
               {providers.map((provider) => {
                 const providerDefault = defaults.find(
                   (item) => item.provider === provider.provider
                 );
+                const policy = routing.find((item) => item.provider === provider.provider);
+                const randomPool =
+                  randomEnabled && policy?.selection.mode === "random"
+                    ? {
+                        unattendedMode: policy.unattendedMode,
+                        accountIds: policy.selection.accountIds,
+                      }
+                    : null;
                 const defaultAccount = accounts.find(
                   (account) => account.id === providerDefault?.providerAccountId
+                );
+                const activeAccounts = accounts.filter(
+                  (account) => account.provider === provider.provider && account.status === "active"
                 );
                 return (
                   <div
@@ -593,8 +710,109 @@ export function ProviderAccountsSettings() {
                       />
                       {provider.subscriptionName}
                     </div>
-                    <div>
-                      {providerDefault ? (
+                    <div className="space-y-3">
+                      {randomEnabled && (
+                        <div>
+                          <Label htmlFor={`assignment-${provider.provider}`}>
+                            New session assignment
+                          </Label>
+                          <Select
+                            disabled={!canManage || saving}
+                            value={randomPool ? "random" : "fixed"}
+                            onValueChange={(value: "fixed" | "random") => {
+                              if (operationInFlightRef.current) return;
+                              if (value === "random") {
+                                if (activeAccounts.length === 0) {
+                                  toast.error("Connect an active account before using a pool");
+                                  return;
+                                }
+                                void run(
+                                  () =>
+                                    setProviderAccountRouting(provider.provider, {
+                                      unattendedMode:
+                                        policy?.unattendedMode ??
+                                        providerDefault?.unattendedMode ??
+                                        "provider_account",
+                                      selection: {
+                                        mode: "random",
+                                        accountIds: activeAccounts
+                                          .slice(0, PROVIDER_ACCOUNT_POOL_MAX_SIZE)
+                                          .map((account) => account.id),
+                                      },
+                                    }),
+                                  "Random pool updated"
+                                );
+                                return;
+                              }
+                              if (policy?.selection.mode === "random") {
+                                void run(
+                                  () =>
+                                    setProviderAccountRouting(provider.provider, {
+                                      unattendedMode: policy.unattendedMode,
+                                      selection: { mode: "unconfigured" },
+                                    }),
+                                  "Random pool cleared"
+                                );
+                              }
+                            }}
+                          >
+                            <SelectTrigger id={`assignment-${provider.provider}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="fixed">One default account</SelectItem>
+                              <SelectItem value="random">Random account from a pool</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      {randomPool ? (
+                        <RandomPoolEditor
+                          provider={provider.provider}
+                          accountIds={randomPool.accountIds}
+                          accounts={activeAccounts}
+                          unattendedMode={randomPool.unattendedMode}
+                          disabled={!canManage || saving}
+                          onUnattendedMode={(unattendedMode) => {
+                            if (!operationInFlightRef.current)
+                              void run(
+                                () =>
+                                  setProviderAccountRouting(provider.provider, {
+                                    unattendedMode,
+                                    selection: {
+                                      mode: "random",
+                                      accountIds: randomPool.accountIds,
+                                    },
+                                  }),
+                                "Authentication updated"
+                              );
+                          }}
+                          onToggle={(accountId, checked) => {
+                            if (operationInFlightRef.current) return;
+                            const next = checked
+                              ? [...randomPool.accountIds, accountId]
+                              : randomPool.accountIds.filter((id) => id !== accountId);
+                            if (next.length === 0) {
+                              toast.error("A random pool needs at least one account");
+                              return;
+                            }
+                            if (next.length > PROVIDER_ACCOUNT_POOL_MAX_SIZE) {
+                              toast.error(
+                                `A random pool can include at most ${PROVIDER_ACCOUNT_POOL_MAX_SIZE} accounts`
+                              );
+                              return;
+                            }
+                            void run(
+                              () =>
+                                setProviderAccountRouting(provider.provider, {
+                                  unattendedMode: randomPool.unattendedMode,
+                                  selection: { mode: "random", accountIds: next },
+                                }),
+                              "Random pool updated"
+                            );
+                          }}
+                        />
+                      ) : providerDefault ? (
                         <>
                           <Label htmlFor={`unattended-${provider.provider}`}>
                             Automated authentication

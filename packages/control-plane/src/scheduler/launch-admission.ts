@@ -13,11 +13,17 @@ import type { ExecutionPrincipal } from "./launch-contracts";
 export async function resolveAutomationProviderAuth(
   db: SqlDatabase,
   automationId: string,
-  harness: HarnessId = DEFAULT_HARNESS
+  harness: HarnessId = DEFAULT_HARNESS,
+  randomEnabled = false
 ): Promise<SessionModelProviderAuthInput[]> {
   const pinRows = await new AutomationModelProviderAuthStore(db).list(automationId);
   const explicit = toProviderSelections(pinRows);
-  const resolved = await resolveSessionProviderAuth(db, { explicit, unattended: true, harness });
+  const resolved = await resolveSessionProviderAuth(db, {
+    explicit,
+    unattended: true,
+    harness,
+    randomEnabled,
+  });
   const pinnedProviders = new Set(pinRows.map((pin) => pin.provider));
   return resolved.map((auth) =>
     pinnedProviders.has(auth.provider) && auth.selectionSource === "explicit"

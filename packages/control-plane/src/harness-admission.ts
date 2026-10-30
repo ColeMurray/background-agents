@@ -122,10 +122,16 @@ export async function validateHarnessAutomationAuth(
   db: SqlDatabase,
   harness: HarnessId,
   model: string,
-  explicit: ModelProviderSelections
+  explicit: ModelProviderSelections,
+  randomEnabled = false
 ): Promise<void> {
   if (getHarnessCapabilities(harness).selectionPolicy === "legacy_fallback") return;
-  const resolved = await resolveSessionProviderAuth(db, { harness, unattended: true, explicit });
+  const resolved = await resolveSessionProviderAuth(db, {
+    harness,
+    unattended: true,
+    explicit,
+    randomEnabled,
+  });
   const incompatible = checkHarnessCompatibility(
     harness,
     model,

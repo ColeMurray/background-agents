@@ -102,6 +102,8 @@ export interface EnvConfig {
   EXECUTION_TIMEOUT_MS?: string; // Max processing time for one message before auto-fail, for sessions and for the automation runs watching them; overridden per session by sandboxTimeoutMs, and falls back to DEFAULT_SANDBOX_TIMEOUT_SECONDS
   SECRETS_CAP_ENFORCEMENT?: string; // "enforce" (default) fails spawn/build on oversized secret payloads; set "warn" to only log
   TEAMS_ENFORCEMENT?: string; // "off" | "shadow" (default) | "on"
+  // "true" admits random provider-account pools for new sessions. Anything else leaves them off.
+  PROVIDER_ACCOUNT_RANDOM_ENABLED?: string;
 
   // Logging
   LOG_LEVEL?: string; // "debug" | "info" | "warn" | "error" (default: "info")

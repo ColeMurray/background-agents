@@ -276,7 +276,14 @@ vi.mock("../db/user-store", () => ({
 
 vi.mock("../db/provider-account-defaults", () => ({
   ProviderDefaultStore: vi.fn().mockImplementation(function () {
-    return { get: vi.fn().mockResolvedValue(null) };
+    return {
+      get: vi.fn().mockResolvedValue(null),
+      getRouting: vi.fn(async (provider: string) => ({
+        provider,
+        unattendedMode: "provider_account",
+        selection: { mode: "unconfigured" },
+      })),
+    };
   }),
 }));
 

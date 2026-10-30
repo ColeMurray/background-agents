@@ -1,6 +1,7 @@
 import {
   SUBSCRIPTION_PROVIDER_IDS,
   type ModelProviderSelections,
+  type ProviderAccountRouting,
   type SubscriptionProviderId,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
@@ -10,16 +11,21 @@ import {
 } from "@open-inspect/shared/harnesses";
 import { ProviderDefaultStore } from "../db/provider-account-defaults";
 import { ModelProviderAccountStore } from "../db/model-provider-accounts";
+import { SessionIndexStore } from "../db/session-index";
 import type { SessionModelProviderAuthInput } from "../model-provider-accounts/provider-auth-contracts";
 import type { SqlDatabase } from "../db/sql-database";
 import { modelProviderAccountAdapterRegistry } from "../auth/model-provider-account-default-adapters";
 import {
   ProviderAccountSelectionPolicy,
+  ProviderAccountSelectionPolicyError,
   type ProviderAccountAdapterLookup,
 } from "../model-provider-accounts/selection-policy";
 
 interface ProviderAccountResolutionStores {
   defaults: Pick<ProviderDefaultStore, "get">;
+  routing?: Pick<ProviderDefaultStore, "getRouting">;
+  /** Inclusive of 0 and exclusive of 1. Defaults to Math.random. */
+  random?: () => number;
   accounts: Pick<ModelProviderAccountStore, "getById">;
   adapters: ProviderAccountAdapterLookup;
 }
@@ -43,6 +49,13 @@ const LEGACY_SCOPED_OAUTH_PROVIDERS: ReadonlySet<SubscriptionProviderId> = new S
 ]);
 
 export interface ProviderAccountResolutionInput {
+  /**
+   * When this session already has a provider-auth snapshot, that snapshot is
+   * reused so a retried create does not draw a different pool account.
+   */
+  sessionId?: string;
+  /** From `PROVIDER_ACCOUNT_RANDOM_ENABLED`. Random pools are refused while this is false. */
+  randomEnabled?: boolean;
   explicit?: ModelProviderSelections;
   unattended: boolean;
   /**
@@ -87,6 +100,11 @@ async function resolveProvider(
     };
   }
 
+  const routing = stores.routing ? await stores.routing.getRouting(provider) : null;
+  if (routing && routing.selection.mode !== "unconfigured") {
+    return resolveInstallationRouting(provider, routing, input, stores, policy);
+  }
+
   const providerDefault = await stores.defaults.get(provider);
   if (!providerDefault) {
     // A strict harness has no legacy scoped-OAuth path; with nothing selected it
@@ -110,6 +128,83 @@ async function resolveProvider(
   };
 }
 
+async function resolveInstallationRouting(
+  provider: SubscriptionProviderId,
+  routing: ProviderAccountRouting,
+  input: ProviderAccountResolutionInput,
+  stores: ProviderAccountResolutionStores,
+  policy: ProviderAccountSelectionPolicy
+): Promise<SessionModelProviderAuthInput> {
+  if (!harnessSupportsProviderAuth(input.harness, provider, "provider_account")) {
+    return apiKey(provider, "harness_fallback");
+  }
+  if (input.unattended && routing.unattendedMode === "api_key") {
+    return apiKey(provider, "unattended_policy");
+  }
+  if (routing.selection.mode === "random") {
+    if (!input.randomEnabled) {
+      throw new ProviderAccountSelectionPolicyError(
+        "Random provider allocation is temporarily unavailable",
+        409
+      );
+    }
+    const candidates = (
+      await Promise.all(
+        routing.selection.accountIds.map(async (id) => {
+          try {
+            return await policy.validateSelection(provider, id);
+          } catch (error) {
+            if (error instanceof ProviderAccountSelectionPolicyError) return null;
+            throw error;
+          }
+        })
+      )
+    ).filter((account) => account !== null);
+    if (!candidates.length) {
+      throw new ProviderAccountSelectionPolicyError(
+        "No eligible accounts in the configured provider pool",
+        409
+      );
+    }
+    const draw = (stores.random ?? Math.random)();
+    if (!(draw >= 0 && draw < 1)) throw new Error("Invalid provider allocation random value");
+    return {
+      provider,
+      authMode: "provider_account",
+      providerAccountId: candidates[Math.floor(draw * candidates.length)].id,
+      selectionSource: "installation_random",
+    };
+  }
+  if (routing.selection.mode !== "fixed") {
+    return apiKey(provider, "api_key_fallback");
+  }
+  const account = await policy.validateDefault(provider, routing.selection.accountId);
+  return {
+    provider,
+    authMode: "provider_account",
+    providerAccountId: account.id,
+    selectionSource: input.unattended ? "unattended_policy" : "installation_default",
+  };
+}
+
+function assertStableRetryIntent(
+  explicit: ModelProviderSelections | undefined,
+  existing: readonly SessionModelProviderAuthInput[]
+): void {
+  if (!explicit) return;
+  for (const binding of existing) {
+    const requested = explicit[binding.provider];
+    if (!requested) continue;
+    const accountMismatch =
+      requested.mode === "provider_account" &&
+      (binding.authMode !== "provider_account" ||
+        requested.accountId !== binding.providerAccountId);
+    if (requested.mode !== binding.authMode || accountMismatch) {
+      throw new ProviderAccountSelectionPolicyError("session_creation_intent_conflict", 409);
+    }
+  }
+}
+
 export async function resolveProviderAccountSelections(
   input: ProviderAccountResolutionInput,
   stores: ProviderAccountResolutionStores
@@ -120,12 +215,22 @@ export async function resolveProviderAccountSelections(
   );
 }
 
-export function resolveSessionProviderAuth(
+export async function resolveSessionProviderAuth(
   db: SqlDatabase,
   input: ProviderAccountResolutionInput
 ): Promise<SessionModelProviderAuthInput[]> {
+  if (input.sessionId) {
+    const sessions = new SessionIndexStore(db);
+    if (await sessions.get(input.sessionId)) {
+      const existing = await sessions.getCompleteProviderAuth(input.sessionId);
+      assertStableRetryIntent(input.explicit, existing);
+      return existing;
+    }
+  }
+  const defaults = new ProviderDefaultStore(db);
   return resolveProviderAccountSelections(input, {
-    defaults: new ProviderDefaultStore(db),
+    defaults,
+    routing: defaults,
     accounts: new ModelProviderAccountStore(db),
     adapters: modelProviderAccountAdapterRegistry,
   });

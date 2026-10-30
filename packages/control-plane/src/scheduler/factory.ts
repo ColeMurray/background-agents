@@ -35,6 +35,7 @@ import {
   AutomationSessionService,
   type AutomationSessionServiceDeps,
 } from "./automation-session-service";
+import { providerAccountRandomEnabled } from "../model-provider-accounts/random-allocation";
 import { resolveAutomationProviderAuth } from "./launch-admission";
 import { AutomationLaunchAdmissionService } from "./launch-admission-service";
 import { executionDeadlineMs } from "./launch-policy";
@@ -130,7 +131,12 @@ export function createScheduler(
       resolveAutomationSessionTarget(env, run, createRequestContext(automation, run), log),
     grants: new TeamRepositoryGrantStore(db),
     resolveProviderAuth: (automationId, harness) =>
-      resolveAutomationProviderAuth(db, automationId, harness),
+      resolveAutomationProviderAuth(
+        db,
+        automationId,
+        harness,
+        providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED)
+      ),
     validateHarness: (input, modes) => validateHarnessExecution(db, input, modes),
   });
   const attribution = new AutomationAttributionService({ users, scmProvider, db, env, log });

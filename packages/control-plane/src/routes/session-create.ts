@@ -32,6 +32,7 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import { resolvedPin } from "../session/pinned";
 import { createSessionMemorySelector } from "../memory/session-memory-selector-factory";
 import type { Env } from "../types";
+import { providerAccountRandomEnabled } from "../model-provider-accounts/random-allocation";
 import { resolveSessionProviderAuth } from "../session/provider-account-resolution";
 import { ProviderAccountSelectionPolicyError } from "../model-provider-accounts/selection-policy";
 import { authorizeEnvironmentTarget, authorizeSessionTarget } from "./session-target-authorization";
@@ -283,9 +284,11 @@ export async function handleCreateSession(
   let providerAuth;
   try {
     providerAuth = await resolveSessionProviderAuth(ctx.db, {
+      sessionId,
       explicit: body.providerSelections,
       unattended: spawnSource !== undefined && spawnSource !== "user",
       harness,
+      randomEnabled: providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED),
     });
   } catch (e) {
     if (e instanceof ProviderAccountSelectionPolicyError) return error(e.message, e.status);

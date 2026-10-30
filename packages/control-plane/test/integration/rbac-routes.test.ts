@@ -298,6 +298,7 @@ describe("RBAC routes", () => {
       ["/skill-profiles/profile-1", "DELETE", "skill_profiles.manage_own", undefined],
       ["/model-provider-accounts", "GET", "provider_accounts.read", undefined],
       ["/model-provider-account-defaults", "GET", "provider_accounts.read", undefined],
+      ["/model-provider-account-routing", "GET", "provider_accounts.read", undefined],
       ["/model-provider-accounts/legacy-credentials", "GET", "provider_accounts.read", undefined],
     ] as const) {
       const denied = await serviceFetch(`https://cp.test${path}`, {

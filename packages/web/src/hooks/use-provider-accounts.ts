@@ -5,6 +5,8 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   modelProviderAccountDefaultsResponseSchema,
   modelProviderAccountDefaultResponseSchema,
+  providerAccountRoutingListResponseSchema,
+  providerAccountRoutingResponseSchema,
   modelProviderAccountResponseSchema,
   modelProviderAccountsResponseSchema,
   providerAuthorizationCodeStatusResponseSchema,
@@ -23,6 +25,7 @@ import {
   type ConnectModelProviderAccountRequest,
   type ModelProviderAccount,
   type ModelProviderAccountDefault,
+  type ProviderAccountRoutingRequest,
   type ProviderAuthorizationCodeStatusResponse,
   type ReconnectModelProviderAccountRequest,
   type StartProviderAuthorizationCodeRequest,
@@ -36,6 +39,7 @@ import {
 
 const ACCOUNTS_KEY = "/api/model-provider-accounts";
 const DEFAULTS_KEY = "/api/model-provider-account-defaults";
+const ROUTING_KEY = "/api/model-provider-account-routing";
 const LEGACY_CREDENTIALS_KEY = "/api/model-provider-accounts/legacy-credentials";
 const providerErrorResponseSchema = z.object({
   error: z.string(),
@@ -116,6 +120,21 @@ export function useProviderAccounts() {
     loading: accounts.isLoading || defaults.isLoading,
     error: accounts.error ?? defaults.error,
     refresh: async () => Promise.all([accounts.mutate(), defaults.mutate()]),
+  };
+}
+
+export function useProviderAccountRouting() {
+  const { hasPermission } = useCurrentUserAuthorization();
+  const canRead = hasPermission("provider_accounts.read");
+  const result = useSWR(canRead ? ROUTING_KEY : null, async (path) => {
+    return requestProviderResource(path, providerAccountRoutingListResponseSchema);
+  });
+  return {
+    randomEnabled: result.data?.randomEnabled ?? false,
+    routing: result.data?.routing ?? [],
+    loading: result.isLoading,
+    error: result.error,
+    refresh: () => result.mutate(),
   };
 }
 
@@ -276,6 +295,19 @@ export async function runProviderAccountAction(
 
 export async function archiveProviderAccount(id: string) {
   return requestProviderResourceWithoutContent(`${ACCOUNTS_KEY}/${id}`, { method: "DELETE" });
+}
+
+export async function setProviderAccountRouting(
+  provider: SubscriptionProviderId,
+  input: ProviderAccountRoutingRequest
+) {
+  return (
+    await requestProviderResource(
+      `${ROUTING_KEY}/${subscriptionProviderIdSchema.parse(provider)}`,
+      providerAccountRoutingResponseSchema,
+      { method: "PUT", body: input }
+    )
+  ).routing;
 }
 
 export async function setProviderAccountDefault(

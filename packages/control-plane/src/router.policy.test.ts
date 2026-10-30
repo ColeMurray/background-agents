@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(241);
+    expect(routes).toHaveLength(243);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(184);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
+    expect(new Set(paths).size).toBe(186);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(243);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -533,6 +533,8 @@ describe("route policy table", () => {
     ["GET", "/model-provider-accounts/legacy-credentials", "user"],
     ["GET", "/model-provider-account-defaults", "user"],
     ["PUT", "/model-provider-account-defaults/openai", "user"],
+    ["GET", "/model-provider-account-routing", "user"],
+    ["PUT", "/model-provider-account-routing/openai", "user"],
   ])("owns the auth policy for %s %s", (method, path, expectedKind) => {
     expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
   });

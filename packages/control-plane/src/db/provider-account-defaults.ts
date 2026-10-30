@@ -1,7 +1,11 @@
 import {
+  PROVIDER_ACCOUNT_POOL_MAX_SIZE,
   providerAuthModeSchema,
   subscriptionProviderIdSchema,
+  SUBSCRIPTION_PROVIDER_IDS,
   type ModelProviderAccountDefault,
+  type ProviderAccountRouting,
+  type ProviderAccountRoutingRequest,
   type ProviderAuthMode,
 } from "@open-inspect/shared/types/provider-accounts";
 import {
@@ -75,13 +79,16 @@ export class ProviderDefaultStore {
     const result = await this.db
       .prepare(
         `INSERT INTO model_provider_account_defaults (
-           provider, provider_account_id, unattended_mode, created_by, updated_by, created_at, updated_at
+           provider, provider_account_id, unattended_mode, selection_mode, write_token,
+           created_by, updated_by, created_at, updated_at
          )
-         SELECT ?, id, ?, ?, ?, ?, ? FROM model_provider_accounts
+         SELECT ?, id, ?, 'fixed', NULL, ?, ?, ?, ? FROM model_provider_accounts
          WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
          ON CONFLICT(provider) DO UPDATE SET
            provider_account_id = excluded.provider_account_id,
            unattended_mode = excluded.unattended_mode,
+           selection_mode = 'fixed',
+           write_token = NULL,
            updated_by = excluded.updated_by,
            updated_at = excluded.updated_at`
       )
@@ -90,6 +97,7 @@ export class ProviderDefaultStore {
     if (result.meta.changes === 0) {
       throw new ProviderDefaultConstraintError(`Default requires an active ${provider} account`);
     }
+    await this.clearPool(provider);
   }
 
   bindSetForFirstActiveAccount(
@@ -103,9 +111,9 @@ export class ProviderDefaultStore {
     return this.db
       .prepare(
         `INSERT INTO model_provider_account_defaults
-          (provider, provider_account_id, unattended_mode, created_by, updated_by,
-           created_at, updated_at)
-         SELECT ?, id, 'provider_account', ?, ?, ?, ?
+          (provider, provider_account_id, unattended_mode, selection_mode, write_token,
+           created_by, updated_by, created_at, updated_at)
+         SELECT ?, id, 'provider_account', 'fixed', NULL, ?, ?, ?, ?
          FROM model_provider_accounts
          WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
            AND NOT EXISTS (
@@ -134,7 +142,10 @@ export class ProviderDefaultStore {
   async get(provider: ModelProviderId): Promise<ProviderDefault | null> {
     assertModelProviderId(provider);
     const row = await this.db
-      .prepare("SELECT * FROM model_provider_account_defaults WHERE provider = ?")
+      .prepare(
+        `SELECT * FROM model_provider_account_defaults
+         WHERE provider = ? AND selection_mode = 'fixed'`
+      )
       .bind(provider)
       .first<unknown>();
     return row ? toDefault(parseDefaultRow(row)) : null;
@@ -142,17 +153,185 @@ export class ProviderDefaultStore {
 
   async list(): Promise<ProviderDefault[]> {
     const rows = await this.db
-      .prepare("SELECT * FROM model_provider_account_defaults ORDER BY provider")
+      .prepare(
+        `SELECT * FROM model_provider_account_defaults
+         WHERE selection_mode = 'fixed' ORDER BY provider`
+      )
       .all<unknown>();
     return rows.results.map((row) => toDefault(parseDefaultRow(row)));
   }
 
   async remove(provider: ModelProviderId): Promise<boolean> {
     assertModelProviderId(provider);
-    const result = await this.db
-      .prepare("DELETE FROM model_provider_account_defaults WHERE provider = ?")
+    const [members, defaults] = await this.db.batch([
+      this.db
+        .prepare("DELETE FROM model_provider_account_pool_members WHERE provider = ?")
+        .bind(provider),
+      this.db
+        .prepare("DELETE FROM model_provider_account_defaults WHERE provider = ?")
+        .bind(provider),
+    ]);
+    return members.meta.changes + defaults.meta.changes > 0;
+  }
+
+  async getRouting(provider: ModelProviderId): Promise<ProviderAccountRouting> {
+    assertModelProviderId(provider);
+    const row = await this.db
+      .prepare("SELECT * FROM model_provider_account_defaults WHERE provider = ?")
+      .bind(provider)
+      .first<unknown>();
+    if (!row) return unconfiguredRouting(provider);
+    const parsed = providerRoutingRowSchema.safeParse(row);
+    if (!parsed.success) throw new Error("Invalid provider routing row");
+    if (parsed.data.selection_mode === "fixed") {
+      if (!parsed.data.provider_account_id) throw new Error("Invalid provider routing row");
+      return {
+        provider,
+        unattendedMode: parsed.data.unattended_mode,
+        selection: { mode: "fixed", accountId: parsed.data.provider_account_id },
+      };
+    }
+    const members = await this.db
+      .prepare(
+        `SELECT provider_account_id FROM model_provider_account_pool_members
+         WHERE provider = ? ORDER BY provider_account_id`
+      )
+      .bind(provider)
+      .all<{ provider_account_id: string }>();
+    return {
+      provider,
+      unattendedMode: parsed.data.unattended_mode,
+      selection: {
+        mode: "random",
+        accountIds: members.results.map((member) => member.provider_account_id),
+      },
+    };
+  }
+
+  async listRouting(): Promise<ProviderAccountRouting[]> {
+    return Promise.all(SUBSCRIPTION_PROVIDER_IDS.map((provider) => this.getRouting(provider)));
+  }
+
+  /**
+   * Replace a provider's fixed default or random pool. Random membership is
+   * written only when every id is an active account, in one batch, and only
+   * while random allocation is enabled. The pool is capped so the statement
+   * stays under D1's parameter limit.
+   */
+  async setRouting(
+    provider: ModelProviderId,
+    input: ProviderAccountRoutingRequest,
+    actorId: string | null,
+    now: number,
+    randomEnabled: boolean
+  ): Promise<ProviderAccountRouting> {
+    assertModelProviderId(provider);
+    assertValidDefaultWrite(actorId, now);
+    if (input.selection.mode === "unconfigured") {
+      await this.remove(provider);
+      return this.getRouting(provider);
+    }
+    if (input.selection.mode === "fixed") {
+      await this.set(provider, input.selection.accountId, input.unattendedMode, actorId, now);
+      return this.getRouting(provider);
+    }
+    if (!randomEnabled) {
+      throw new ProviderDefaultConstraintError("Random provider allocation is not enabled");
+    }
+    const ids = [...input.selection.accountIds].sort();
+    if (new Set(ids).size !== ids.length) {
+      throw new ProviderDefaultConstraintError("Random pool contains duplicate accounts");
+    }
+    if (ids.length === 0 || ids.length > PROVIDER_ACCOUNT_POOL_MAX_SIZE) {
+      throw new ProviderDefaultConstraintError("Random pool size is outside the supported range");
+    }
+    const token = crypto.randomUUID();
+    const placeholders = ids.map(() => "?").join(", ");
+    const eligibility = `(SELECT COUNT(*) FROM model_provider_accounts
+         WHERE provider = ? AND id IN (${placeholders}) AND status = 'active' AND archived_at IS NULL) = ?`;
+    const eligible = [provider, ...ids, ids.length];
+    const [written, , inserted] = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO model_provider_account_defaults (
+             provider, provider_account_id, unattended_mode, selection_mode, write_token,
+             created_by, updated_by, created_at, updated_at
+           )
+           SELECT ?, ?, ?, 'random', ?, ?, ?, ?, ?
+           WHERE ${eligibility}
+           ON CONFLICT(provider) DO UPDATE SET
+             provider_account_id = excluded.provider_account_id,
+             unattended_mode = excluded.unattended_mode,
+             selection_mode = 'random',
+             write_token = excluded.write_token,
+             updated_by = excluded.updated_by,
+             updated_at = excluded.updated_at
+           WHERE ${eligibility}`
+        )
+        .bind(
+          provider,
+          ids[0],
+          input.unattendedMode,
+          token,
+          actorId,
+          actorId,
+          now,
+          now,
+          ...eligible,
+          ...eligible
+        ),
+      this.db
+        .prepare(
+          `DELETE FROM model_provider_account_pool_members
+           WHERE provider = ? AND EXISTS (
+             SELECT 1 FROM model_provider_account_defaults
+             WHERE provider = ? AND write_token = ?
+           )`
+        )
+        .bind(provider, provider, token),
+      this.db
+        .prepare(
+          `INSERT INTO model_provider_account_pool_members (provider, provider_account_id, created_at)
+           SELECT ?, id, ? FROM model_provider_accounts
+           WHERE provider = ? AND id IN (${placeholders}) AND status = 'active' AND archived_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM model_provider_account_defaults
+               WHERE provider = ? AND write_token = ?
+             )`
+        )
+        .bind(provider, now, provider, ...ids, provider, token),
+    ]);
+    if (written.meta.changes !== 1 || inserted.meta.changes !== ids.length) {
+      throw new ProviderDefaultConstraintError(
+        `Random pool requires ${ids.length} active ${provider} accounts`
+      );
+    }
+    return this.getRouting(provider);
+  }
+
+  private async clearPool(provider: ModelProviderId): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM model_provider_account_pool_members WHERE provider = ?")
       .bind(provider)
       .run();
-    return result.meta.changes > 0;
   }
+}
+
+const providerRoutingRowSchema = z.object({
+  provider: subscriptionProviderIdSchema,
+  provider_account_id: z.string().min(1).nullable(),
+  unattended_mode: providerAuthModeSchema,
+  selection_mode: z.enum(["fixed", "random"]),
+  created_by: auditUserIdSchema,
+  updated_by: auditUserIdSchema,
+  created_at: timestampMsSchema,
+  updated_at: timestampMsSchema,
+});
+
+function unconfiguredRouting(provider: ModelProviderId): ProviderAccountRouting {
+  return {
+    provider,
+    unattendedMode: "provider_account",
+    selection: { mode: "unconfigured" },
+  };
 }
