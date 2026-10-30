@@ -5,10 +5,12 @@
 import type { SentryAutomationEvent } from "../types";
 import {
   buildSentryContextBlock,
+  buildSentryEventAlertContextBlock,
   buildSentryIssueWebhookContextBlock,
   buildSentryMetricContextBlock,
 } from "./context";
 import {
+  sentryEventAlertSchema,
   sentryIssueAlertSchema,
   sentryIssueWebhookSchema,
   sentryMetricAlertSchema,
@@ -102,6 +104,39 @@ export function normalizeSentryEvent(
           },
         },
       };
+    }
+
+    // The shape Sentry documents and sends: the issue comes from the event, with no data.issue.
+    const eventAlertResult = sentryEventAlertSchema.safeParse(payload);
+    if (eventAlertResult.success) {
+      const { event, triggered_rule } = eventAlertResult.data.data;
+      const projectSlug = /\/projects\/[^/]+\/([^/]+)\/events\//.exec(event.url)?.[1];
+      if (projectSlug) {
+        const level = event.level ?? event.tags?.find(([key]) => key === "level")?.[1] ?? "error";
+        return {
+          status: "normalized",
+          event: {
+            source: "sentry",
+            automationId: automationId ?? "",
+            eventType: "issue.created",
+            triggerKey: `sentry_issue:${event.issue_id}`,
+            concurrencyKey: `sentry_issue:${event.issue_id}`,
+            sentryProject: projectSlug,
+            sentryLevel: level,
+            culpritFile: event.metadata?.filename,
+            contextBlock: buildSentryEventAlertContextBlock(
+              eventAlertResult.data,
+              projectSlug,
+              level
+            ),
+            meta: {
+              issueId: event.issue_id,
+              issueUrl: event.web_url,
+              triggeredRule: triggered_rule,
+            },
+          },
+        };
+      }
     }
 
     if (sentryHookResource === "event_alert") {

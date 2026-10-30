@@ -3,6 +3,7 @@
  */
 
 import type {
+  SentryEventAlertPayload,
   SentryIssueAlertPayload,
   SentryIssueWebhookPayload,
   SentryMetricAlertPayload,
@@ -55,6 +56,48 @@ export function buildSentryContextBlock(payload: SentryIssueAlertPayload): strin
   if (tags?.length) {
     lines.push("");
     lines.push(`Tags: ${tags.map((t) => `${t.key}=${t.value}`).join(", ")}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildSentryEventAlertContextBlock(
+  payload: SentryEventAlertPayload,
+  projectSlug: string,
+  level: string
+): string {
+  const { event, triggered_rule } = payload.data;
+  const metadata = event.metadata;
+  const title =
+    metadata?.type && metadata.value ? `${metadata.type}: ${metadata.value}` : event.title;
+
+  const lines: string[] = [
+    "This automation was triggered by a Sentry issue alert rule.",
+    "",
+    `Error: ${title ?? "(no title)"}`,
+    `Project: ${projectSlug}`,
+    `Level: ${level}`,
+    `Issue ID: ${event.issue_id}`,
+    `Alert rule: ${triggered_rule}`,
+  ];
+  if (event.culprit) lines.push(`Culprit: ${event.culprit}`);
+  if (event.web_url) lines.push(`URL: ${event.web_url}`);
+
+  const frames = event.exception?.values?.at(-1)?.stacktrace?.frames;
+  if (frames?.length) {
+    const top = [...frames].reverse().slice(0, MAX_STACK_FRAMES);
+    lines.push("");
+    lines.push(`Stack trace (top ${top.length} frames, most recent first):`);
+    for (const frame of top) {
+      const filename = frame.filename || frame.abs_path || "unknown";
+      const lineno = frame.lineno ? `:${frame.lineno}` : "";
+      lines.push(`  ${filename}${lineno}  ${frame.function || "?"}`);
+    }
+  }
+
+  if (event.tags?.length) {
+    lines.push("");
+    lines.push(`Tags: ${event.tags.map(([key, value]) => `${key}=${value}`).join(", ")}`);
   }
 
   return lines.join("\n");
