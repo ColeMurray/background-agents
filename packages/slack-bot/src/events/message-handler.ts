@@ -21,6 +21,7 @@ import {
   resolveChannelBinding,
 } from "../channel-bindings";
 import { loadTargetCatalog } from "../classifier/catalog";
+import { getBotIdentity } from "../bot-identity";
 import { stripMentions } from "../dm-utils";
 import {
   collectForwardedMessages,
@@ -56,6 +57,7 @@ import {
   reopenThreadSession,
   THREAD_CLOSED_MESSAGE,
 } from "../sessions/thread-session-store";
+import { lookupSoloThread } from "../sessions/solo-thread-store";
 import { buildTargetClarificationBlocks, getTargetCatalogNotice } from "../target-clarification";
 import { targetId } from "../targets";
 import type { BackgroundTaskScheduler, Env, ThreadSession } from "../types";
@@ -72,6 +74,14 @@ import {
   type SessionLaunchPlan,
 } from "../inline-flags";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
+import {
+  blockSoloThread,
+  decideSoloThreadReply,
+  readThreadParticipation,
+  toSoloThreadReply,
+  type SoloReplyDecision,
+  type SoloThreadReply,
+} from "../solo-threads";
 
 const log = createLogger("handler");
 
@@ -144,11 +154,13 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
+/** `quiet` drops a reply the thread cannot take without telling the thread why. */
 async function resolveThreadSessionAdmission(
   env: Env,
   channel: string,
   threadTs: string | undefined,
-  traceId?: string
+  traceId?: string,
+  { quiet = false }: { quiet?: boolean } = {}
 ): Promise<ThreadSessionAdmission> {
   if (!threadTs) return { kind: "launch" };
   let session = await lookupThreadSession(env, channel, threadTs);
@@ -160,9 +172,11 @@ async function resolveThreadSessionAdmission(
       channel,
       error: result.error,
     });
-    await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
-      thread_ts: threadTs,
-    });
+    if (!quiet) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
+        thread_ts: threadTs,
+      });
+    }
     return { kind: "stop" };
   }
   // Legacy mappings predate team ownership and represent workspace sessions.
@@ -186,7 +200,11 @@ async function resolveThreadSessionAdmission(
     });
   }
   if (session.closed) {
-    await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, { thread_ts: threadTs });
+    if (!quiet) {
+      await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
+        thread_ts: threadTs,
+      });
+    }
     return { kind: "stop" };
   }
   return { kind: "followUp", session, threadTs };
@@ -743,4 +761,82 @@ export async function handleDirectMessage(
     traceId,
     scheduleBackground,
   });
+}
+
+type FollowUpAdmission = Extract<ThreadSessionAdmission, { kind: "followUp" }>;
+
+async function decideUntaggedThreadReply(
+  reply: SoloThreadReply,
+  content: IncomingMessageContent,
+  env: Env,
+  traceId: string | undefined
+): Promise<SoloReplyDecision<FollowUpAdmission> | null> {
+  const { channel, threadTs, user } = reply;
+  try {
+    const botUserId = (await getBotIdentity(env, traceId))?.userId;
+    if (!botUserId) return null;
+    const actionable = hasRunnableContent(content) || Boolean(content.inlineFlagError);
+    const decision = await decideSoloThreadReply({ ...reply, actionable }, botUserId, {
+      record: () => lookupSoloThread(env, channel, threadTs),
+      openSession: async () => {
+        const admission = await resolveThreadSessionAdmission(env, channel, threadTs, traceId, {
+          quiet: true,
+        });
+        return admission.kind === "followUp" ? admission : null;
+      },
+      participation: () => readThreadParticipation(env, channel, threadTs, user, traceId),
+    });
+    if (decision.kind === "block") {
+      await blockSoloThread(env, { channel, threadTs, botUserId }, decision.reason, traceId);
+    }
+    return decision;
+  } catch (error) {
+    log.error("solo_thread.reply_check_failed", {
+      trace_id: traceId,
+      channel,
+      thread_ts: threadTs,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
+}
+
+/**
+ * Continue a solo thread's session from its owner's untagged reply (see
+ * `../solo-threads`). Returns true once the reply is taken, after which it is
+ * handled like a mentioned follow-up. A reply that is not taken gets no
+ * response unless it ends the solo thread, and the caller still offers it to
+ * channel automations.
+ */
+export async function handleUntaggedThreadReply(
+  event: Parameters<typeof toSoloThreadReply>[0],
+  env: Env,
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
+): Promise<boolean> {
+  const reply = toSoloThreadReply(event);
+  if (!reply) return false;
+  const content = parseMessageEventContent(reply, traceId);
+  const decision = await decideUntaggedThreadReply(reply, content, env, traceId);
+  if (decision?.kind !== "take") return false;
+
+  if (showsStartingStatusNow(content)) {
+    scheduleStartingStatus(scheduleBackground, env, reply.channel, reply.threadTs, traceId);
+  }
+  const channelInfo = await getChannelInfo(env.SLACK_BOT_TOKEN, reply.channel).catch(
+    () => undefined
+  );
+  await handleIncomingMessage({
+    content,
+    admission: decision.session,
+    user: reply.user,
+    channel: reply.channel,
+    ts: reply.ts,
+    threadTs: reply.threadTs,
+    ...describeChannel(channelInfo),
+    env,
+    traceId,
+    scheduleBackground,
+  });
+  return true;
 }

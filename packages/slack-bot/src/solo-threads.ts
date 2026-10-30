@@ -16,13 +16,15 @@
 
 import {
   getThreadMessages,
+  postMessage,
   type SlackMessageAttachment,
   type SlackMessageFile,
   type SlackThreadMessage,
 } from "@open-inspect/shared/slack";
 import { mentionsUser, startsWithUserMention } from "./dm-utils";
 import { createLogger } from "./logger";
-import type { SoloThreadRecord } from "./sessions/solo-thread-store";
+import { formatSoloThreadEndedNotice } from "./messages/blocks";
+import { storeSoloThread, type SoloThreadRecord } from "./sessions/solo-thread-store";
 import type { Env } from "./types";
 
 const log = createLogger("solo-thread");
@@ -82,6 +84,36 @@ export async function readThreadParticipation(
     });
   }
   return participation;
+}
+
+/**
+ * End a solo thread: store the block, then tell everyone in the thread that
+ * instructions need a mention again. Throws when the store fails, before
+ * anything is posted, so the notice never announces a block that was not kept.
+ */
+export async function blockSoloThread(
+  env: Env,
+  thread: { channel: string; threadTs: string; botUserId: string },
+  reason: SoloThreadBlockReason,
+  traceId?: string
+): Promise<void> {
+  const { channel, threadTs, botUserId } = thread;
+  await storeSoloThread(env, channel, threadTs, { kind: "blocked" });
+  log.info("solo_thread.blocked", { trace_id: traceId, channel, thread_ts: threadTs, reason });
+  const notice = await postMessage(
+    env.SLACK_BOT_TOKEN,
+    channel,
+    formatSoloThreadEndedNotice(botUserId),
+    { thread_ts: threadTs }
+  );
+  if (!notice.ok) {
+    log.warn("solo_thread.notice_failed", {
+      trace_id: traceId,
+      channel,
+      thread_ts: threadTs,
+      slack_error: notice.error,
+    });
+  }
 }
 
 /** A person's untagged reply in a channel thread, as the solo-thread checks see it. */

@@ -66,6 +66,11 @@ export function formatHarnessModelRefusal(controlPlaneMessage: string): string {
   return `${escapeMrkdwnText(controlPlaneMessage)} A thread keeps the harness its session started on. Reply without \`!model\`, or start a new thread to use that model.`;
 }
 
+/** Tell a solo thread that it has more people now, so instructions need a mention again. */
+export function formatSoloThreadEndedNotice(botUserId: string): string {
+  return `This thread now has multiple people. From now on, mention <@${botUserId}> to send an instruction to this session.`;
+}
+
 export interface WorkingMessage {
   /** Also the notification preview and the screen-reader fallback. */
   text: string;
