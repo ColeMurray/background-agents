@@ -50,6 +50,9 @@ automation owned by the intended team instead. Deprecation does not disable the 
 
 When **Auto-review new PRs** is enabled, Open-Inspect starts a review session for newly opened,
 non-draft PRs in enabled repositories. The agent inspects the PR diff and posts a GitHub review.
+Starting another auto-review, or an explicit review request, for that same pull request cancels the
+in-flight review so the older session does not keep running. A mention does not cancel a review, and
+a review does not cancel a mention.
 
 ### When It Skips
 

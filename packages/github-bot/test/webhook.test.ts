@@ -517,6 +517,9 @@ describe("POST /webhooks/github", () => {
       if (requestUrl === "https://internal/sessions") {
         return new Response(JSON.stringify({ sessionId: "session-123", status: "created" }));
       }
+      if (requestUrl === "https://internal/github-reviews/supersede") {
+        return Response.json({ displacedSessionIds: [] });
+      }
       if (requestUrl.endsWith("/prompt")) {
         return new Response(JSON.stringify({ messageId: "message-123" }));
       }

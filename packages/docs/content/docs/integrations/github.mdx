@@ -72,7 +72,7 @@ flowchart TB
 
 **Auto-review new PRs** is the deprecated, workspace-owned review-on-open path. It still works and does not use mention team routing. For team-owned event-driven reviews, use a [GitHub Event automation](/automations/github-events) owned by the intended team. Deprecation does not disable the setting.
 
-**When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review.
+**When it runs.** With **Auto-review new PRs** enabled, OpenInspect starts a review session for each newly opened, non-draft PR in an in-scope repository. The agent inspects the diff and posts a GitHub review. Another auto-review or explicit review request for that same pull request cancels the in-flight review. A mention does not cancel a review, and a review does not cancel a mention.
 
 **When it skips.** Auto-review does not run when the PR is a draft, the repository is outside the bot's scope, the opener is not an allowed trigger user, or auto-review is disabled globally or for that repository. A PR opened by the App bot itself can be reviewed if that bot login is explicitly allowed under **Allowed Trigger Users**; in that case the review uses a comment rather than an approval or change request. Converting a draft to ready for review does not trigger it; mention the bot in a comment instead.
 

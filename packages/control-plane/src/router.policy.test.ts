@@ -39,11 +39,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(241);
+    expect(routes).toHaveLength(242);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(184);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
+    expect(new Set(paths).size).toBe(185);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(242);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
       supportedScmProviders: "all",
@@ -460,6 +460,17 @@ describe("route policy table", () => {
         ],
       }
     );
+    expect(routeFor("POST", "/internal/github-reviews/supersede")).toMatchObject({
+      authentication: { kind: "service" },
+      authorization: {
+        kind: "service",
+        services: ["github-bot"],
+        actor: "optional",
+        auditAllowed: true,
+      },
+      supportedScmProviders: ["github"],
+      cacheControl: "private, no-store",
+    });
     expect(routeFor("POST", "/internal/github-event")?.authorization).toMatchObject({
       kind: "service",
       services: ["github-bot"],

@@ -17,6 +17,7 @@ import {
   mayAttachCallbackContext,
 } from "../routing/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { GitHubPrReviewStore } from "../db/github-pr-review-store";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
@@ -68,6 +69,16 @@ export async function handleSessionPrompt(
     return json(promptValidationError(bodyResult.error, rawBody), 400);
   }
   const body = bodyResult.data;
+
+  // A newer review for the same pull request owns the GitHub writes. Refuse
+  // before attribution or enqueue: a replaced session must not depend on
+  // either succeeding, and its prompt may already have been queued.
+  if (await new GitHubPrReviewStore(ctx.db).isSuperseded(sessionId)) {
+    return json(
+      { error: "Superseded by a newer pull request review", code: "review_superseded" },
+      409
+    );
+  }
 
   const attachments = validateAttachments(body.attachments);
   if (attachments instanceof Response) return attachments;

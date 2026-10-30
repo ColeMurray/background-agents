@@ -11,7 +11,8 @@ import {
   checkSenderPermission,
 } from "./github-auth";
 import { resolveSessionTarget } from "./session-target";
-import { createSession, sendPrompt } from "./session-client";
+import { supersedeInFlightReview } from "./review-supersession";
+import { createSession, PromptDeliveryError, sendPrompt } from "./session-client";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { resolveModelSelection } from "./model-selection";
 import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-prompt-flags";
@@ -19,6 +20,15 @@ import type { ParseInlinePromptFlagsResult } from "@open-inspect/shared/inline-p
 export type HandlerResult =
   | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
   | { outcome: "skipped"; skip_reason: string };
+
+const SUPERSEDED_PROMPT_CODES: ReadonlySet<string> = new Set([
+  "review_superseded",
+  "SESSION_NOT_PROMPTABLE",
+]);
+
+function isPullRequestReview(action: string): action is "review" | "auto_review" {
+  return action === "review" || action === "auto_review";
+}
 
 const githubRouteResponseSchema = z.discriminatedUnion("via", [
   z.object({ via: z.literal("workspace"), teamId: z.null() }),
@@ -289,11 +299,36 @@ export async function startSession(
         inline_model_override: modelSelection.overridden,
       });
 
+      if (isPullRequestReview(action)) {
+        // Claim before the prompt. A replaced review is cancelled and then
+        // refuses later prompts. If that cancel fails, the previous review
+        // stays current and this call throws so the webhook can retry.
+        await supersedeInFlightReview(env, traceId, {
+          sessionId,
+          repositoryId: repo.id,
+          pullNumber,
+        });
+      }
+
       const prompt = params.buildPrompt(config);
-      const messageId = await sendPrompt(env, traceId, sessionId, {
-        content: prompt,
-        authorId: `github:${sender.id}`,
-      });
+      let messageId: string;
+      try {
+        messageId = await sendPrompt(env, traceId, sessionId, {
+          content: prompt,
+          authorId: `github:${sender.id}`,
+        });
+      } catch (err) {
+        if (
+          isPullRequestReview(action) &&
+          err instanceof PromptDeliveryError &&
+          err.code !== undefined &&
+          SUPERSEDED_PROMPT_CODES.has(err.code)
+        ) {
+          log.info("review.superseded", { ...meta, session_id: sessionId });
+          return { outcome: "skipped", skip_reason: "review_superseded" };
+        }
+        throw err;
+      }
       log.info("prompt.sent", {
         ...meta,
         session_id: sessionId,

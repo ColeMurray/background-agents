@@ -84,6 +84,9 @@ function createMockEnv(): Env {
         })
       );
     }
+    if (url === "https://internal/github-reviews/supersede") {
+      return Promise.resolve(Response.json({ displacedSessionIds: [] }));
+    }
     if (/\/sessions\/.+\/prompt$/.test(url)) {
       return Promise.resolve(
         new Response(JSON.stringify({ messageId: "msg-456" }), { status: 200 })
@@ -732,7 +735,7 @@ describe("handlePullRequestOpened", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(3);
+    expect(cpFetch).toHaveBeenCalledTimes(4);
 
     const sessionBody = sessionCreateBody(cpFetch);
     expect(sessionBody.repoOwner).toBe("acme");
@@ -969,7 +972,7 @@ describe("handleReviewRequested", () => {
     );
 
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(4);
+    expect(cpFetch).toHaveBeenCalledTimes(5);
 
     // Verify session creation
     const sessionBody = sessionCreateBody(cpFetch);
@@ -1005,6 +1008,63 @@ describe("handleReviewRequested", () => {
         message_id: "msg-456",
       })
     );
+
+    const urls = cpFetch.mock.calls.map(([url]) => String(url));
+    const supersedeAt = urls.indexOf("https://internal/github-reviews/supersede");
+    const promptAt = urls.findIndex((url) => url.endsWith("/prompt"));
+    expect(supersedeAt).toBeGreaterThan(urls.indexOf("https://internal/sessions"));
+    expect(promptAt).toBeGreaterThan(supersedeAt);
+    const supersede = cpFetch.mock.calls[supersedeAt][1] as RequestInit;
+    expect(new Headers(supersede.headers).has("X-OpenInspect-Actor")).toBe(false);
+    expect(JSON.parse(String(supersede.body))).toEqual({
+      sessionId: "session-123",
+      repositoryId: 99,
+      pullNumber: 42,
+    });
+  });
+
+  it.each(["review_superseded", "SESSION_NOT_PROMPTABLE"])(
+    "skips without retrying when the prompt is refused as %s",
+    async (code) => {
+      const env = createMockEnv();
+      mockControlPlaneResponse(env, /\/sessions\/.+\/prompt$/, () =>
+        Response.json({ error: "replaced", code }, { status: 409 })
+      );
+
+      expect(
+        await handleReviewRequested(
+          env,
+          createMockLogger(),
+          reviewRequestedPayload,
+          "trace-replaced"
+        )
+      ).toEqual({ outcome: "skipped", skip_reason: "review_superseded" });
+    }
+  );
+
+  it("does not prompt when recording the current review fails", async () => {
+    const env = createMockEnv();
+    mockControlPlaneResponse(
+      env,
+      /^https:\/\/internal\/github-reviews\/supersede$/,
+      () => new Response("unavailable", { status: 503 })
+    );
+    const cpFetch = getControlPlaneFetch(env);
+
+    await expect(
+      handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-supersede")
+    ).rejects.toThrow("Review supersession failed: 503");
+    expect(cpFetch.mock.calls.some(([url]) => String(url).endsWith("/prompt"))).toBe(false);
+  });
+
+  it("does not supersede a mention session", async () => {
+    const env = createMockEnv();
+    await handleIssueComment(env, createMockLogger(), issueCommentPayload, "trace-mention");
+    expect(
+      getControlPlaneFetch(env).mock.calls.some(
+        ([url]) => String(url) === "https://internal/github-reviews/supersede"
+      )
+    ).toBe(false);
   });
 
   it("encodes nested repository owners in the reaction URL", async () => {
@@ -1408,7 +1468,7 @@ describe("error handling", () => {
     await handleReviewRequested(env, log, reviewRequestedPayload, "trace-reaction");
 
     // Session should still be created despite reaction failure
-    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(4);
+    expect(getControlPlaneFetch(env)).toHaveBeenCalledTimes(5);
     expect(log.warn).toHaveBeenCalledWith("acknowledgment.failed", expect.any(Object));
   });
 });
@@ -1626,7 +1686,7 @@ describe("integration config", () => {
 
     // Should proceed normally — null means all repos allowed
     const cpFetch = getControlPlaneFetch(env);
-    expect(cpFetch).toHaveBeenCalledTimes(4);
+    expect(cpFetch).toHaveBeenCalledTimes(5);
   });
 
   it("rejects sender not in allowedTriggerUsers (handleIssueComment)", async () => {
@@ -1892,6 +1952,9 @@ describe("default environment targets", () => {
             status: 200,
           })
         );
+      }
+      if (url === "https://internal/github-reviews/supersede") {
+        return Promise.resolve(Response.json({ displacedSessionIds: [] }));
       }
       if (/\/sessions\/.+\/prompt$/.test(url)) {
         return Promise.resolve(

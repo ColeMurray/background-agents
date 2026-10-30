@@ -49,8 +49,10 @@ Key design decisions:
 - **Unidirectional service binding**: The bot calls the control plane to create sessions and send
   prompts. There is no reverse binding — the agent posts results to GitHub directly from the
   sandbox.
-- **No session reuse**: Every non-duplicate webhook delivery creates a fresh session. Delivery
-  dedupe is handled separately in KV using `X-GitHub-Delivery`.
+- **Fresh session per delivery**: Every non-duplicate webhook delivery creates a fresh session.
+  Delivery dedupe is handled separately in KV using `X-GitHub-Delivery`. A new auto-review or
+  explicit review request for the same pull request cancels the in-flight review for that pull
+  request before the new prompt is sent. Mentions are not cancelled and do not cancel a review.
 - **No PR context fetching**: The bot only uses metadata already in the webhook payload. The agent
   gathers additional context (diffs, prior comments, file contents) itself using `gh` CLI.
 
@@ -134,7 +136,8 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
    explicitly listed in `allowedTriggerUsers`
 3. Post eyes reaction on the PR (fire-and-forget)
 4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
+5. Record it as the pull request's current review and cancel the in-flight review it replaced
+6. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
    PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
@@ -146,7 +149,8 @@ people to request the GitHub App bot through the PR reviewer picker.
    if not
 2. Post eyes reaction on the PR (fire-and-forget)
 3. Create session via control plane
-4. Send code review prompt (includes PR metadata + `gh` CLI instructions). As with auto-review,
+4. Record it as the pull request's current review and cancel the in-flight review it replaced
+5. Send code review prompt (includes PR metadata + `gh` CLI instructions). As with auto-review,
    reviews of the bot's own PRs use `COMMENT`.
 
 **Issue Comment:**
