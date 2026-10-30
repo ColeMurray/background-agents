@@ -190,6 +190,12 @@ automationLifecycleRoutes.post("/automations/:id/resume", AUTOMATION_MANAGE, (c)
 );
 automationLifecycleRoutes.post(
   "/automations/:id/trigger",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireAutomation("trigger") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireAutomation("trigger"),
+    // A token runs the automations its owner may run, within its grant. Pause and resume stay
+    // human-only: they change whether the schedule fires at all.
+    personalAccessTokens: "accept",
+  }),
   (c) => dispatch(c, handleTriggerAutomation)
 );

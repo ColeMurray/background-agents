@@ -17,6 +17,7 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
+      - "packages/mcp-server/**"
       - "packages/preview/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -57,6 +58,7 @@ on:
       - "packages/control-plane/**"
       - "packages/github-bot/**"
       - "packages/linear-bot/**"
+      - "packages/mcp-server/**"
       - "packages/preview/**"
       - "packages/sandbox-runtime/**"
       - "packages/sandbox-images/**"
@@ -373,3 +375,31 @@ jobs:
 
       - name: Run linear-bot tests
         run: npm test -w @open-inspect/linear-bot
+
+  test-mcp-server:
+    name: Test (MCP server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @open-inspect/shared
+
+      - name: Run MCP server tests
+        run: npm test -w @open-inspect/mcp-server
+
+      - name: Build MCP server
+        run: npm run build -w @open-inspect/mcp-server

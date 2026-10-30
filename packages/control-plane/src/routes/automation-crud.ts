@@ -935,6 +935,8 @@ automationCrudRoutes.post(
       permissionRequirement("automations.create"),
       permissionRequirement("sessions.create")
     ),
+    // A token creates as its owner, within its grant; target checks narrow with it.
+    personalAccessTokens: "accept",
   }),
   (c) => dispatch(c, handleCreateAutomation)
 );

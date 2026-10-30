@@ -55,10 +55,23 @@ export const AUTOMATIONS_READ_PERMISSION = admit({
   }),
 });
 
-/** Admission for routes that read one automation: hidden automations answer 404. */
+/**
+ * Listing automations, which a personal access token granted `automations.read` may also do. Kept
+ * apart from AUTOMATIONS_READ_PERMISSION so other routes on that permission stay closed to tokens.
+ */
+export const AUTOMATIONS_LIST = admit({
+  ...AUTOMATIONS_READ_PERMISSION.policy,
+  personalAccessTokens: "accept",
+});
+
+/**
+ * Admission for routes that read one automation: hidden automations answer 404. Every route on it
+ * is a read, so a personal access token granted `automations.read` may use them.
+ */
 export const AUTOMATION_READ = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requireAutomation("read"),
+  personalAccessTokens: "accept",
 });
 
 /** Admission for routes that change one automation; extend it for per-route response policy. */

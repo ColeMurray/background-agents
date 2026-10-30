@@ -383,6 +383,7 @@ sessionRuntimeProxyRoutes.get(
     authorization: requireSession("read", {
       actorlessGrants: [{ service: "slack-bot" }, { service: "linear-bot" }],
     }),
+    personalAccessTokens: "accept",
   }),
   (c) =>
     dispatchSession(
@@ -415,7 +416,11 @@ sessionRuntimeProxyRoutes.get(
 );
 sessionRuntimeProxyRoutes.get(
   "/sessions/:id/messages",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requireSession("read") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requireSession("read"),
+    personalAccessTokens: "accept",
+  }),
   (c) =>
     dispatchSession(
       c,

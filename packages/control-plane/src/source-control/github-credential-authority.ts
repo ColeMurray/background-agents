@@ -146,7 +146,9 @@ export async function resolveGitHubCredentialAuthority(
   if (context.authentication) {
     throw new Error("Non-user principal cannot carry browser-session provenance");
   }
-  if (context.principal.kind !== "service") {
+  // A personal access token, like a service, carries no browser session: enrichment comes from the
+  // stored user record of the canonical user admission already authorized.
+  if (context.principal.kind !== "service" && context.principal.kind !== "personal-access-token") {
     throw new Error("Principal cannot authorize GitHub user credentials");
   }
   return { kind: "service_principal" };

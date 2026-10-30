@@ -697,6 +697,18 @@ Two independent checks bound what a token can do, and both must pass:
   its grant or its owner, and loses a permission as soon as its owner does. A suspended owner's
   tokens are refused.
 
+Routes that accept tokens today are the ones the MCP server's tools use. `router.policy.test.ts`
+pins this list, so adding to it is a visible change:
+
+- reading sessions: `GET /sessions` and `/sessions/:id/{events,messages,diff}`
+- reading automations: `GET /automations` and `/automations/:id{,/invocations,/runs/:runId}`
+- reading skills: `GET /skills` and `/skills/:id`
+- creating an automation (`POST /automations`) and triggering one (`POST /automations/:id/trigger`)
+- skill import and re-import, with their previews
+
+Editing, pausing, or deleting automations, bulk skill import, and every session mutation, secret,
+and setting refuse tokens.
+
 The owner's workspace role still decides visibility within a granted permission. For example, an
 administrator's token that holds `sessions.read` sees the sessions the administrator sees.
 Authorization audit rows written for a token request record

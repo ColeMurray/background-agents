@@ -471,7 +471,11 @@ export const sessionIndexRoutes = new Hono<ControlPlaneHonoEnv>();
 
 sessionIndexRoutes.get(
   "/sessions",
-  admit({ ...GITHUB_USER_OR_SERVICE_ROUTE, authorization: requirePermission("sessions.read") }),
+  admit({
+    ...GITHUB_USER_OR_SERVICE_ROUTE,
+    authorization: requirePermission("sessions.read"),
+    personalAccessTokens: "accept",
+  }),
   (c) => dispatch(c, handleListSessions)
 );
 sessionIndexRoutes.get(

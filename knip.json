@@ -42,6 +42,10 @@
     "packages/linear-bot": {
       "project": ["src/**/*.ts"]
     },
+    "packages/mcp-server": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "packages/slack-bot": {
       "project": ["src/**/*.ts"]
     },

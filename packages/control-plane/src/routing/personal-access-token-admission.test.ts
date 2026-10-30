@@ -24,6 +24,7 @@ import {
   requirePermission,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  type UserRouteContext,
 } from "../routes/shared";
 import {
   admit,
@@ -275,6 +276,38 @@ describe("admit() with personalAccessTokens", () => {
     expectTypeOf<
       PolicyContext<HumanUserPolicy & { personalAccessTokens?: undefined }>["principal"]
     >().toEqualTypeOf<UserPrincipal>();
+  });
+
+  it("widens the handler context, so a handler that assumes a browser user does not compile", () => {
+    const typed = new Hono<ControlPlaneHonoEnv>();
+    typed.post(
+      "/probe/typed",
+      admit({
+        ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+        authorization: requirePermission("skills.manage"),
+        personalAccessTokens: "accept",
+      }),
+      (c) =>
+        // @ts-expect-error: the principal may be a personal access token, not a UserPrincipal.
+        dispatch(c, async (_request, _env, _params, ctx: UserRouteContext) =>
+          json({ userId: ctx.principal.userId })
+        )
+    );
+    typed.post(
+      "/probe/typed-human",
+      admit({
+        ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+        authorization: requirePermission("skills.manage"),
+      }),
+      (c) =>
+        dispatch(c, async (_request, _env, _params, ctx: UserRouteContext) =>
+          json({ userId: ctx.principal.userId })
+        )
+    );
+    // The assertion is the compiler's; this only keeps the routes from being optimized away.
+    expect(new Set(typed.routes.map((route) => route.path))).toEqual(
+      new Set(["/probe/typed", "/probe/typed-human"])
+    );
   });
 
   it("refuses at construction a token route no grant could narrow", () => {

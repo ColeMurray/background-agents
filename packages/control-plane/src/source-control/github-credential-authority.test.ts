@@ -184,6 +184,28 @@ describe("resolveGitHubCredentialAuthority", () => {
     expect(getUserAuth).not.toHaveBeenCalled();
   });
 
+  it("authorizes a personal access token from the stored user record, without Better Auth", async () => {
+    const getUserAuth = vi.fn(() => {
+      throw new Error("Better Auth must not be consulted for a token");
+    });
+
+    await expect(
+      resolveGitHubCredentialAuthority(
+        createContext({
+          getUserAuth,
+          principal: {
+            kind: "personal-access-token",
+            userId: "user-1",
+            tokenId: "token-1",
+            grant: ["automations.trigger.own"],
+          },
+        }),
+        BROWSER_HEADERS
+      )
+    ).resolves.toEqual({ kind: "service_principal" });
+    expect(getUserAuth).not.toHaveBeenCalled();
+  });
+
   it("rejects sandbox principals", async () => {
     await expect(
       resolveGitHubCredentialAuthority(

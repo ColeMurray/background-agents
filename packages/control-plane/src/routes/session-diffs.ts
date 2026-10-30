@@ -173,6 +173,7 @@ export const sessionDiffRoutes = new Hono<ControlPlaneHonoEnv>();
 const DIFF_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requireSession("read"),
+  personalAccessTokens: "accept",
 });
 const DIFF_WRITE = admit({
   ...SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,

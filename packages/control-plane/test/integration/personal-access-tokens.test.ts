@@ -271,7 +271,7 @@ describe("authenticating with a personal access token", () => {
 
   it("is refused where the route does not accept tokens, and the refusal names the token", async () => {
     const created = await issued(MEMBER);
-    const response = await withToken("/sessions", created.token);
+    const response = await withToken("/repos", created.token);
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
       code: "personal_access_token_not_accepted",

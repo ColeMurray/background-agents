@@ -1,0 +1,59 @@
+---
+title: MCP server
+description: Let Claude Code or another MCP client investigate sessions and automation runs, and optionally create and run automations or import skills, through a personal access token.
+audience: user
+owner: integrations
+status: published
+lastReviewed: "2026-10-30"
+relatedCode:
+  - packages/mcp-server/README.md
+  - packages/mcp-server/src/tools.ts
+  - packages/mcp-server/src/client.ts
+  - packages/control-plane/src/authorization/personal-access-token-policy.ts
+  - packages/control-plane/src/router.policy.test.ts
+---
+
+The OpenInspect MCP server lets an MCP client such as Claude Code read your sessions and automation runs, and optionally create and run automations or import skills, without opening the web UI. It runs on your machine and authenticates with a [personal access token](/integrations/personal-access-tokens).
+
+## Set it up
+
+1. Create a token under **Settings › Access tokens**. For investigation, select **Read-only**. Add write permissions only if you want the assistant to make changes; see the table below.
+2. Build the server from a checkout of the repository:
+
+   ```bash
+   npm run build -w @open-inspect/shared
+   npm run build -w @open-inspect/mcp-server
+   ```
+
+3. Register it with your client:
+
+   ```bash
+   claude mcp add open-inspect \
+     --env OPEN_INSPECT_CONTROL_PLANE_URL=https://<your-control-plane> \
+     --env OPEN_INSPECT_TOKEN=oi_pat_... \
+     -- node /absolute/path/to/packages/mcp-server/dist/index.js
+   ```
+
+The control plane URL must use `https://`; plain `http://` is accepted only for a loopback address such as `localhost`.
+
+## What it can do
+
+| Tool                                                                              | Needs the token to hold                                             |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `list_sessions`, `get_session_events`, `get_session_messages`, `get_session_diff` | **Read sessions**                                                   |
+| `list_automations`, `list_automation_runs`, `get_automation_run`                  | **Read automations**                                                |
+| `list_skills`                                                                     | **Read skills**                                                     |
+| `create_automation`                                                               | **Create automations**, **Create sessions**, and use of its targets |
+| `trigger_automation`                                                              | **Run your automations** or **Run any automation**                  |
+| `import_skill_from_git`, `update_skill_from_git`                                  | **Manage skills** (administrators)                                  |
+
+A token without a tool's permission gets an error naming the missing permission. The token never exceeds your own role, and nothing it does can delete or pause an automation, delete a skill, or reach secrets or workspace settings.
+
+## Keep the assistant in check
+
+Session transcripts and diffs are content the agent and your repositories produced, and they go straight into the assistant's context. Treat them as untrusted. Text in a session can try to persuade the assistant to call a write tool, and that call would act with your authority:
+
+- An automation runs its instructions later, in a sandbox, as you.
+- A skill assigned globally loads into every later session in the workspace.
+
+A read-only token cannot be talked into writing. Your MCP client asks before running a write tool; read what it is about to create before you approve it.

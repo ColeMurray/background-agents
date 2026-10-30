@@ -1,0 +1,29 @@
+{
+  "name": "@open-inspect/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server that lets an assistant work with Open-Inspect through a personal access token",
+  "type": "module",
+  "bin": {
+    "open-inspect-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=node --target=node24 --banner:js=\"#!/usr/bin/env node\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@open-inspect/shared": "file:../shared",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^4.1.12",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.12"
+  }
+}

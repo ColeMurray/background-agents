@@ -813,9 +813,24 @@ const SKILLS_READ = admit({
   ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("skills.read"),
 });
+/** Reading the catalog, which a personal access token granted `skills.read` may also do. */
+const SKILLS_READ_FOR_TOKENS = admit({
+  ...SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  authorization: requirePermission("skills.read"),
+  personalAccessTokens: "accept",
+});
 const SKILLS_MANAGE = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   authorization: requirePermission("skills.manage"),
+});
+/**
+ * Importing a skill from Git and re-importing it, which a personal access token granted
+ * `skills.manage` may also do. Bulk import, hand edits, enablement, and deletion stay human-only.
+ */
+const SKILLS_IMPORT = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("skills.manage"),
+  personalAccessTokens: "accept",
 });
 const PROFILES_MANAGE_OWN = admit({
   ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -831,24 +846,24 @@ export const skillRoutes = new Hono<ControlPlaneHonoEnv>();
 
 // Read routes register ahead of administration so `/skills/preview` and
 // `/skills/resolve-preview` take precedence over the parameterized paths.
-skillRoutes.get("/skills", SKILLS_READ, (c) => dispatch(c, handleListSkills));
+skillRoutes.get("/skills", SKILLS_READ_FOR_TOKENS, (c) => dispatch(c, handleListSkills));
 skillRoutes.post("/skills/preview", SKILLS_READ, (c) => dispatch(c, handlePreviewSkill));
 skillRoutes.post("/skills/resolve-preview", SKILLS_READ, (c) => dispatch(c, handleResolvePreview));
-skillRoutes.get("/skills/:id", SKILLS_READ, (c) => dispatch(c, handleGetSkill));
+skillRoutes.get("/skills/:id", SKILLS_READ_FOR_TOKENS, (c) => dispatch(c, handleGetSkill));
 
 skillRoutes.post("/skills", SKILLS_MANAGE, (c) => dispatch(c, handleCreateSkill));
 skillRoutes.post("/skills/import/bulk/preview", SKILLS_MANAGE, (c) =>
   dispatch(c, handlePreviewBulkSkillImport)
 );
 skillRoutes.post("/skills/import/bulk", SKILLS_MANAGE, (c) => dispatch(c, handleBulkSkillImport));
-skillRoutes.post("/skills/import/preview", SKILLS_MANAGE, (c) =>
+skillRoutes.post("/skills/import/preview", SKILLS_IMPORT, (c) =>
   dispatch(c, handlePreviewSkillImport)
 );
-skillRoutes.post("/skills/import", SKILLS_MANAGE, (c) => dispatch(c, handleImportSkill));
-skillRoutes.post("/skills/:id/reimport/preview", SKILLS_MANAGE, (c) =>
+skillRoutes.post("/skills/import", SKILLS_IMPORT, (c) => dispatch(c, handleImportSkill));
+skillRoutes.post("/skills/:id/reimport/preview", SKILLS_IMPORT, (c) =>
   dispatch(c, handlePreviewSkillReimport)
 );
-skillRoutes.post("/skills/:id/reimport", SKILLS_MANAGE, (c) => dispatch(c, handleReimportSkill));
+skillRoutes.post("/skills/:id/reimport", SKILLS_IMPORT, (c) => dispatch(c, handleReimportSkill));
 skillRoutes.patch("/skills/:id", SKILLS_MANAGE, (c) => dispatch(c, handleSetSkillEnabled));
 skillRoutes.put("/skills/:id", SKILLS_MANAGE, (c) =>
   dispatch(c, handleReplaceSkillContentAndAssignments)

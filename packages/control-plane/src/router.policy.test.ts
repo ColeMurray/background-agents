@@ -882,12 +882,54 @@ describe("route principal policy", () => {
 });
 
 describe("personal access token reach", () => {
-  it("admits tokens on no production route until one opts in", () => {
+  it("admits tokens on exactly the routes the MCP server's tools use", () => {
+    // Adding a route here widens what every personal access token can reach. Each one must be
+    // gated by permissions a grant can narrow, which admit() enforces when the app is built.
     expect(
       routes
         .filter((route) => route.personalAccessTokens === "accept")
         .map((route) => `${route.method} ${route.path}`)
-    ).toEqual([]);
+        .sort()
+    ).toEqual(
+      [
+        "GET /automations",
+        "GET /automations/:id",
+        "GET /automations/:id/invocations",
+        "GET /automations/:id/runs/:runId",
+        "GET /sessions",
+        "GET /sessions/:id/diff",
+        "GET /sessions/:id/diff/:revisionId/files/:fileId",
+        "GET /sessions/:id/events",
+        "GET /sessions/:id/messages",
+        "GET /skills",
+        "GET /skills/:id",
+        "POST /automations",
+        "POST /automations/:id/trigger",
+        "POST /skills/:id/reimport",
+        "POST /skills/:id/reimport/preview",
+        "POST /skills/import",
+        "POST /skills/import/preview",
+      ].sort()
+    );
+  });
+
+  it("keeps destructive and administrative neighbours of opted-in routes closed to tokens", () => {
+    for (const [method, path] of [
+      ["PUT", "/automations/auto-1"],
+      ["DELETE", "/automations/auto-1"],
+      ["POST", "/automations/auto-1/pause"],
+      ["POST", "/automations/auto-1/resume"],
+      ["POST", "/skills/import/bulk"],
+      ["DELETE", "/skills/skill-1"],
+      ["PUT", "/skills/skill-1"],
+      ["POST", "/skills/preview"],
+      ["POST", "/sessions"],
+      ["GET", "/sessions/session-1/tunnel-urls"],
+      ["GET", "/sessions/session-1/sandbox-access"],
+      ["GET", "/integration-settings/slack/watched-channels"],
+    ] as const) {
+      expect(routeFor(method, path)?.personalAccessTokens, `${method} ${path}`).toBeUndefined();
+    }
   });
 
   it("keeps token management human-only", () => {

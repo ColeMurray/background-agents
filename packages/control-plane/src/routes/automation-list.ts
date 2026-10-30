@@ -11,7 +11,7 @@ import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import { type RequestContext, json } from "./shared";
 import type { Env } from "../types";
 import { z } from "zod";
-import { AUTOMATIONS_READ_PERMISSION, automationResponseCapabilities } from "./automation-shared";
+import { AUTOMATIONS_LIST, automationResponseCapabilities } from "./automation-shared";
 import { resourceViewer } from "../authorization/resource-viewer";
 import { parseQuery } from "./query";
 import {
@@ -113,6 +113,6 @@ async function handleListAutomations(
 
 export const automationListRoutes = new Hono<ControlPlaneHonoEnv>();
 
-automationListRoutes.get("/automations", AUTOMATIONS_READ_PERMISSION, (c) =>
+automationListRoutes.get("/automations", AUTOMATIONS_LIST, (c) =>
   dispatch(c, handleListAutomations)
 );
