@@ -228,10 +228,25 @@ describe("AuditLogSettings", () => {
     ["team.binding_added", "Team channel binding added"],
     ["team.binding_removed", "Team channel binding removed"],
     ["automation.executor_changed", "Automation executor changed"],
+    ["personal_access_token.created", "Personal access token created"],
+    ["personal_access_token.revoked", "Personal access token revoked"],
   ])("labels %s as an operation in the workspace audit viewer", (action, label) => {
     const article = renderSingle(createEvent("applied", { action }));
     expect(article.getByText(label)).toBeInTheDocument();
     expect(article.getByText("Applied")).toBeInTheDocument();
+  });
+
+  it("attributes a token-authorized request to the token and its owner", () => {
+    const article = renderSingle({
+      ...createAuthorizationEvent("authorization.request_allowed", "applied", {
+        ...decisionMetadata(200),
+        personalAccessTokenId: "token-1",
+      }),
+      principalKind: "personal-access-token",
+    });
+    expect(
+      article.getByText("Personal access token / token-1 / User / actor-snapshot-id")
+    ).toBeInTheDocument();
   });
 
   it("labels private session break-glass reads as operations", () => {

@@ -25,6 +25,7 @@ import {
   SkillProfileValidationError,
 } from "../db/skill-profiles";
 import { SkillConflictError, SkillStore, SkillValidationError } from "../db/skills";
+import { canonicalUserIdOf } from "../auth/principal";
 import {
   evaluateEnvironmentAdmission,
   ownedResourceAdmissionResponse,
@@ -94,17 +95,11 @@ type SkillAuditEvent =
 function audit(ctx: RequestContext, event: SkillAuditEvent): void {
   log.info("managed_skills.audit", {
     event: "managed_skills.audit",
-    actor_user_id: canonicalUserId(ctx),
+    actor_user_id: canonicalUserIdOf(ctx.principal),
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
     ...event,
   });
-}
-
-function canonicalUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
-  if (ctx.principal?.kind === "service") return ctx.principal.actor?.canonicalUserId ?? null;
-  return null;
 }
 
 const skillListQuerySchema = z.object({
@@ -156,7 +151,7 @@ async function handleCreateSkill(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, createSkillInputSchema, "Invalid skill");
   if (parsed instanceof Response) return parsed;
@@ -331,7 +326,7 @@ async function handleImportSkill(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, importSkillInputSchema, "Invalid skill import");
   if (parsed instanceof Response) return parsed;
@@ -412,7 +407,7 @@ async function handleBulkSkillImport(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, bulkImportSkillsInputSchema, "Invalid bulk skill import");
   if (parsed instanceof Response) return parsed;
@@ -542,7 +537,7 @@ async function handleReimportSkill(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
@@ -601,7 +596,7 @@ async function handleSetSkillEnabled(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, setSkillEnabledInputSchema, "Invalid skill update");
   if (parsed instanceof Response) return parsed;
@@ -621,7 +616,7 @@ async function handleReplaceSkillContentAndAssignments(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
@@ -665,7 +660,7 @@ async function handleDeleteSkill(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "skill.deleted", skill_id: id });
@@ -678,7 +673,7 @@ async function handleListProfiles(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   return json({ profiles: await new SkillProfileStore(ctx.db).list(userId) });
 }
@@ -689,7 +684,7 @@ async function handleCreateProfile(
   _params: object,
   ctx: RequestContext
 ): Promise<Response> {
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, createSkillProfileInputSchema, "Invalid skill profile");
   if (parsed instanceof Response) return parsed;
@@ -714,7 +709,7 @@ async function handleUpdateProfile(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const parsed = await parseBody(request, updateSkillProfileInputSchema, "Invalid skill profile");
   if (parsed instanceof Response) return parsed;
@@ -734,7 +729,7 @@ async function handleDeleteProfile(
   ctx: RequestContext
 ): Promise<Response> {
   const { id } = params;
-  const userId = canonicalUserId(ctx);
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return error("Canonical user required", 403);
   const deleted = await new SkillProfileStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "profile.deleted", profile_id: id });
@@ -774,7 +769,7 @@ async function handleResolvePreview(
       ctx.db,
       { repositories, environmentId: parsed.environmentId ?? null },
       parsed.selection,
-      canonicalUserId(ctx)
+      canonicalUserIdOf(ctx.principal)
     );
     return json({
       skills: manifest.skills,

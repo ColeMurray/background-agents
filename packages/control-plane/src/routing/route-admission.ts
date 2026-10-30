@@ -6,10 +6,12 @@ import {
   type ActorProfileClaims,
 } from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
-import type { Principal } from "../auth/principal";
+import { canonicalUserIdOf, type Principal } from "../auth/principal";
 import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
 import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
 import { AdmissionPolicyStore } from "../db/admission-policy-store";
+import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
+import { restrictAuthorizationToGrant } from "../authorization/personal-access-token-policy";
 import {
   evaluateOwnedResourceAdmission,
   ownedResourceAdmissionResponse,
@@ -31,7 +33,6 @@ import { createLogger } from "../logger";
 import type {
   ActorlessServiceGrant,
   RouteAdmissionPolicy,
-  RouteAuthentication,
   RouteAuthorizationRequirement,
   RouteParams,
   ServiceActorClaimsResult,
@@ -206,12 +207,32 @@ async function verifySandboxAuthSafely(
   }
 }
 
-/** Reject verified principals whose kind the route's authentication policy excludes. */
+/**
+ * Reject verified principals whose kind the route's policy excludes. A personal access token is
+ * admitted only where the route declares it, whatever else the route accepts.
+ */
 export function enforceRoutePrincipal(
-  authentication: RouteAuthentication,
+  policy: Pick<RouteAdmissionPolicy, "authentication" | "personalAccessTokens">,
   principal: Principal,
   evidence: AuthorizationEvidence = emptyEvidence()
 ): AuthorizationFailure | null {
+  const authentication = policy.authentication;
+  if (principal.kind === "personal-access-token") {
+    if (policy.personalAccessTokens === "accept") return null;
+    return authorizationDenial(
+      json(
+        {
+          error: "This route does not accept personal access tokens",
+          code: "personal_access_token_not_accepted",
+        },
+        403
+      ),
+      evidence,
+      { kind: "principal-type" },
+      "personal_access_token_not_accepted",
+      "This route does not accept personal access tokens"
+    );
+  }
   if (
     authentication.kind === "web-service" &&
     (principal.kind !== "service" || principal.service !== "web")
@@ -267,17 +288,17 @@ async function enforceActiveUser(
     // actor here means enrollment was skipped, so never authorize it.
     return authorizationUnavailable();
   }
-  const userId =
-    ctx.principal?.kind === "user"
-      ? ctx.principal.userId
-      : ctx.principal?.kind === "service"
-        ? ctx.principal.actor?.canonicalUserId
-        : null;
+  const userId = canonicalUserIdOf(ctx.principal);
   if (!userId) return null;
   const requirement = { kind: "active-user" } as const;
   try {
     const authorization = await new AuthorizationService(ctx.db).getEffectiveAuthorization(userId);
-    ctx.authorization = authorization;
+    // A token acts as its owner within its grant. Narrowing here, where the subject's
+    // authorization is loaded, is what every later permission check reads.
+    ctx.authorization =
+      ctx.principal?.kind === "personal-access-token"
+        ? restrictAuthorizationToGrant(authorization, ctx.principal.grant)
+        : authorization;
     if (authorization.suspendedAt !== null) {
       return authorizationDenial(
         json({ error: "Forbidden", code: "active_user_required" }, 403),
@@ -553,11 +574,10 @@ function warnProfileClaimFailed(ctx: RequestContext, cause: unknown): void {
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
-  if (ctx.principal?.kind === "user") return ctx.principal.userId;
   if (ctx.principal?.kind === "service") {
     return ctx.principal.actor?.canonicalUserId ?? ctx.authorization?.userId ?? null;
   }
-  return null;
+  return canonicalUserIdOf(ctx.principal);
 }
 
 function actorlessGrantMatches(
@@ -828,7 +848,7 @@ async function enforceRouteAuthorization(
     return allowed(policy, "user", evidence);
   }
 
-  const principalFailure = enforceRoutePrincipal(policy.authentication, principal, evidence);
+  const principalFailure = enforceRoutePrincipal(policy, principal, evidence);
   if (principalFailure) return resultForFailure(principalFailure);
 
   if (
@@ -883,9 +903,18 @@ async function enforceRouteAuthorization(
     }
   }
 
-  const admission =
-    principal.kind === "service" ? "service" : principal.kind === "sandbox" ? "sandbox" : "user";
-  return allowed(policy, admission, evidence);
+  return allowed(policy, principal.kind, evidence);
+}
+
+/**
+ * Record that a token was presented, off the request's critical path. Here rather than in
+ * `authenticate()`, whose narrow port has no background tasks.
+ */
+function recordPersonalAccessTokenUse(ctx: RequestContext, tokenId: string): void {
+  ctx.executionCtx.submit(
+    () => new PersonalAccessTokenStore(ctx.db).touchLastUsed(tokenId, Date.now()),
+    { name: "personal-access-token.touch-last-used", context: { token_id: tokenId } }
+  );
 }
 
 export async function admitRoute(input: {
@@ -937,6 +966,9 @@ export async function admitRoute(input: {
         ctx.principal = authResult.principal;
         ctx.authentication = authResult.authentication;
         handlerRequest = authResult.request;
+        if (authResult.principal.kind === "personal-access-token") {
+          recordPersonalAccessTokenUse(ctx, authResult.principal.tokenId);
+        }
       }
     }
 

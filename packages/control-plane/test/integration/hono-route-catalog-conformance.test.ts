@@ -42,10 +42,12 @@ describe("Hono route catalog conformance", () => {
         supportedScmProviders: route.supportedScmProviders,
         cacheControl: route.cacheControl ?? null,
         hasServiceActorClaims: route.serviceActorClaims !== undefined,
+        // Only opted-in routes carry the field, so an opt-in is a one-line fixture change.
+        ...(route.personalAccessTokens ? { personalAccessTokens: route.personalAccessTokens } : {}),
       };
     });
 
-    expect(manifest).toHaveLength(250);
+    expect(manifest).toHaveLength(253);
     // One compact, reviewable line per frozen route keeps the fixture explicit
     // without thousands of snapshot-only formatting lines.
     expect(manifest.map((entry) => JSON.stringify(entry))).toMatchSnapshot();

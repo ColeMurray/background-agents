@@ -328,6 +328,25 @@ paused, or execution was denied before admission). A retry with the same `idempo
 the original firing's ID, even while it is still running. The status endpoint serves only
 invocations this webhook caused, and never exposes session content.
 
+### Personal Access Tokens
+
+| Endpoint                      | Method | Description                                              |
+| ----------------------------- | ------ | -------------------------------------------------------- |
+| `/personal-access-tokens`     | GET    | The caller's tokens, newest first, without their secrets |
+| `/personal-access-tokens`     | POST   | Issue a token → `201` with the plaintext `token`, once   |
+| `/personal-access-tokens/:id` | DELETE | Revoke one of the caller's tokens                        |
+
+These routes accept only a human browser session, so a token can never issue or revoke tokens. An
+issue request names the token, its grant (`permissions`, a list of RBAC permission IDs), and its
+lifetime (`expiresInDays`, 1–365; every token expires). Each granted permission must be one the
+caller currently holds (`403 permission_not_held`) and one tokens may hold at all
+(`400 permission_not_grantable`; see `PERSONAL_ACCESS_TOKEN_GRANTABILITY` in
+`@open-inspect/shared/types/personal-access-tokens`, which withholds workspace administration). A
+user holds at most 50 tokens (`409 personal_access_token_limit_reached`). Issue and revoke write
+`personal_access_token.created` and `personal_access_token.revoked` audit events in the same
+transaction. See [Personal access tokens](#personal-access-tokens) under the security model for how
+a token is admitted.
+
 ### Audit Events
 
 | Endpoint        | Method | Description                                                    |
@@ -484,6 +503,13 @@ Automations:
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
+
+Personal access tokens:
+
+- `personal_access_tokens`: one row per unrevoked token: owner, name, SHA-256 `token_hash` (unique),
+  cleartext `display_prefix`, `expires_at` (required), and minute-resolution `last_used_at`.
+  Deleting the owner deletes their tokens.
+- `personal_access_token_permissions`: a token's grant, one row per RBAC permission.
 
 ## Browser Authentication
 
@@ -645,6 +671,34 @@ The web proxy bounds raw request bytes before parsing and preserves upstream ret
 headers.
 
 The former `/operator/sessions/archive` and `/internal/operator-archive` proposal is not exposed.
+
+### Personal access tokens
+
+A personal access token (`oi_pat_` followed by 64 hex characters) is presented as
+`Authorization: Bearer <token>` on a request without a service signature. It resolves to a distinct
+`personal-access-token` principal for its owner. Only the token's SHA-256 hash is stored, and
+revoking a token deletes its row.
+
+Two independent checks bound what a token can do, and both must pass:
+
+- **The route accepts tokens.** A route admits tokens only when its policy declares
+  `personalAccessTokens: "accept"`. Everywhere else a token is refused with
+  `403 personal_access_token_not_accepted`, whatever other principals the route accepts. `admit()`
+  refuses to build an opted-in route unless it authorizes an active user and is gated by at least
+  one permission, every one of which a token may be granted. A grant can therefore always narrow
+  what an opted-in route allows.
+- **The token holds the permission.** Admission loads the owner's effective authorization as usual,
+  then narrows its permissions to the intersection with the token's grant. Every downstream
+  permission, scoped-permission, and resource check reads the narrowed set, so a token never exceeds
+  its grant or its owner, and loses a permission as soon as its owner does. A suspended owner's
+  tokens are refused.
+
+The owner's workspace role still decides visibility within a granted permission. For example, an
+administrator's token that holds `sessions.read` sees the sessions the administrator sees.
+Authorization audit rows written for a token request record
+`principal_kind = personal-access-token`, the owner as the actor, and
+`metadata.personalAccessTokenId`. Request logs carry `token_id`. `last_used_at` is updated in the
+background at most once a minute.
 
 ### GitHub App Token Flow
 

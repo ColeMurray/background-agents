@@ -266,6 +266,9 @@ exports[`route admission matrix > admits the workspace owner through every brows
   "POST /actors/me owner=204",
   "GET /settings/admission-policy owner=200",
   "PUT /settings/admission-policy owner=428",
+  "GET /personal-access-tokens owner=200",
+  "POST /personal-access-tokens owner=400",
+  "DELETE /personal-access-tokens/:id owner=404",
 ]
 `;
 
@@ -521,6 +524,9 @@ exports[`route admission matrix > rejects every credentialed route anonymously b
   "POST /actors/me anonymous=401",
   "GET /settings/admission-policy anonymous=401",
   "PUT /settings/admission-policy anonymous=401",
+  "GET /personal-access-tokens anonymous=401",
+  "POST /personal-access-tokens anonymous=401",
+  "DELETE /personal-access-tokens/:id anonymous=401",
 ]
 `;
 

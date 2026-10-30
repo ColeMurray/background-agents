@@ -65,6 +65,8 @@ export async function cleanD1Tables(): Promise<void> {
     DELETE FROM role_permissions WHERE role_id IN (SELECT id FROM roles WHERE is_system = 0);
     DELETE FROM roles WHERE is_system = 0;
     DELETE FROM user_identities;
+    DELETE FROM personal_access_token_permissions;
+    DELETE FROM personal_access_tokens;
     DELETE FROM users;
     DELETE FROM image_builds;
     DELETE FROM environment_secrets;

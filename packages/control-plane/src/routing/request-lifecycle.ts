@@ -57,6 +57,11 @@ export function logPrincipal(principal: Principal, ctx: RequestContext, path: st
     case "user":
       fields.user_id = principal.userId;
       break;
+    case "personal-access-token":
+      fields.auth_scheme = "personal-access-token";
+      fields.user_id = principal.userId;
+      fields.token_id = principal.tokenId;
+      break;
   }
   logger.info("auth.principal", {
     event: "auth.principal",
