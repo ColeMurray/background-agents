@@ -499,8 +499,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       { admitted_canonical_user_id: alice, mcp_eligible: 0 },
     ]);
 
-    // Once Bob has an eligible prompt here, the multiplayer fence refuses Alice's
-    // delegation in this session, and a child spawned now must not regain it.
+    // Shared sessions delegate per turn: Bob's earlier prompt here does not stop
+    // Alice's own turn from passing her delegation to a child it spawns.
     await runInSessionDO(stub, (_instance: SessionDO, state) => {
       state.storage.sql.exec(
         `INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at)
@@ -525,7 +525,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       body,
     });
     expect(await childAuthority(afterBob)).toEqual([
-      { admitted_canonical_user_id: alice, mcp_eligible: 0 },
+      { admitted_canonical_user_id: alice, mcp_eligible: 1 },
     ]);
   });
 

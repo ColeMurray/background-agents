@@ -735,8 +735,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     participantRepository,
     sessionCoreRepository,
     messenger,
-    messageService,
-    (canonicalUserId) => mcpContext.mayDelegateFor(canonicalUserId)
+    messageService
   );
   const memoryPromptContextHandler = new MemoryPromptContextHandler(
     messageRepository,

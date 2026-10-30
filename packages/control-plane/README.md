@@ -101,6 +101,10 @@ capability and omits managed personal connectors from native configuration; publ
 connectors remain available. Healthy bridge-process reconnects preserve personal delegation, but
 process replacement during a prepared turn remains fenced until a new sandbox allocation.
 
+In a session where several people prompt, each turn delegates as its own author. The proxy
+authenticates the shared sandbox, not the process inside it, so a process left running from one
+author's turn can make personal MCP calls during another author's turn. This is a known limitation.
+
 ### Actors
 
 | Endpoint     | Method | Description                                                       |

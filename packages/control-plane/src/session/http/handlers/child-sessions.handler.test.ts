@@ -87,15 +87,13 @@ function createHandler() {
     deduplicated: false,
   }));
   const messageService = { enqueuePrompt };
-  const mayDelegateFor = vi.fn((_canonicalUserId: string) => true);
 
   const handler = new ChildSessionsHandler(
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     { getSession } as unknown as SessionCoreRepository,
     messenger,
-    messageService,
-    mayDelegateFor
+    messageService
   );
 
   return {
@@ -104,7 +102,6 @@ function createHandler() {
     getSession,
     broadcast,
     enqueuePrompt,
-    mayDelegateFor,
   };
 }
 
@@ -127,22 +124,6 @@ describe("ChildSessionsHandler", () => {
     });
     expect(await handler.getActivePromptAuthor().json()).not.toHaveProperty("canonicalUserId");
     expect(await handler.getActivePromptAuthor().json()).not.toHaveProperty("mcpEligible");
-  });
-
-  it("withholds delegation the parent's multiplayer fence would refuse", async () => {
-    const { handler, repository, getSession, mayDelegateFor } = createHandler();
-    getSession.mockReturnValue(createSession());
-    repository.getProcessingMessageAuthority.mockReturnValue({
-      canonicalUserId: "alice",
-      mcpEligible: true,
-    });
-    mayDelegateFor.mockReturnValue(false);
-
-    const spawnContext = await handler.getSpawnContext().json<{ promptAuthor: object }>();
-    expect(spawnContext.promptAuthor).toMatchObject({ canonicalUserId: "alice" });
-    expect(spawnContext.promptAuthor).not.toHaveProperty("mcpEligible");
-    expect(await handler.getActivePromptAuthor().json()).not.toHaveProperty("mcpEligible");
-    expect(mayDelegateFor).toHaveBeenCalledWith("alice");
   });
 
   describe("parentPrompt", () => {
