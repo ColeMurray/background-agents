@@ -72,7 +72,15 @@ describe("SkillImport single mode", () => {
   it("asks for a fresh preview when the reviewed source moved", async () => {
     const moved =
       "The source moved to commit ffffffff since it was previewed. Preview the import again.";
-    importSkillMock.mockRejectedValueOnce(new Error(moved));
+    const refreshed: SkillImportPreviewResponse = {
+      ...preview,
+      source: { ...preview.source, commitSha: "d".repeat(40), sourceSha256: "e".repeat(64) },
+      revisionSha256: "f".repeat(64),
+    };
+    previewSkillImportMock.mockResolvedValueOnce(preview).mockResolvedValueOnce(refreshed);
+    importSkillMock
+      .mockRejectedValueOnce(new Error(moved))
+      .mockResolvedValueOnce({ id: "skill-1", name: "deploy" });
     const onImported = vi.fn();
     const user = userEvent.setup();
     render(<SkillImport onImported={onImported} onCancel={vi.fn()} />);
@@ -93,5 +101,15 @@ describe("SkillImport single mode", () => {
     await user.click(screen.getByRole("button", { name: "Refresh preview" }));
     expect(previewSkillImportMock).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("button", { name: "Import deploy" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Import deploy" }));
+    expect(importSkillMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expectedCommitSha: "d".repeat(40),
+        expectedSourceSha256: "e".repeat(64),
+        expectedRevisionSha256: "f".repeat(64),
+      })
+    );
+    expect(onImported).toHaveBeenCalledWith("skill-1");
   });
 });
