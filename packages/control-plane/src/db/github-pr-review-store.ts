@@ -23,7 +23,7 @@ export class GitHubPrReviewStore {
       this.db
         .prepare(
           `UPDATE github_pr_review_sessions
-           SET superseded_by = ?, updated_at = ?
+           SET superseded_by = ?, cancel_pending = 1, updated_at = ?
            WHERE repository_id = ? AND pull_number = ?
              AND superseded_by IS NULL
              AND session_id != ?
@@ -93,6 +93,37 @@ export class GitHubPrReviewStore {
         ),
     ]);
     return released.results.length === 1;
+  }
+
+  /**
+   * Session ids for this pull request whose cancel has not succeeded yet,
+   * including ones a crashed claim already marked superseded.
+   */
+  async listCancelPending(
+    repositoryId: number,
+    pullNumber: number,
+    exceptSessionId: string
+  ): Promise<string[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT session_id FROM github_pr_review_sessions
+         WHERE repository_id = ? AND pull_number = ? AND cancel_pending = 1 AND session_id != ?
+         ORDER BY session_id`
+      )
+      .bind(repositoryId, pullNumber, exceptSessionId)
+      .all<{ session_id: string }>();
+    return rows.results.map((row) => row.session_id);
+  }
+
+  async clearCancelPending(sessionId: string, updatedAt: number): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE github_pr_review_sessions
+         SET cancel_pending = 0, updated_at = ?
+         WHERE session_id = ? AND cancel_pending = 1`
+      )
+      .bind(updatedAt, sessionId)
+      .run();
   }
 
   /** True when a newer review has taken this session's pull request. */

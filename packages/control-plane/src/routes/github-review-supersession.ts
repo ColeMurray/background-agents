@@ -73,23 +73,38 @@ export async function handleGitHubReviewSupersession(
   if (body instanceof Response) return body;
 
   const store = new GitHubPrReviewStore(ctx.db);
+  const now = Date.now();
   const displacedSessionIds = await store.claim({
     sessionId: body.sessionId,
     repositoryId: body.repositoryId,
     pullNumber: body.pullNumber,
-    updatedAt: Date.now(),
+    updatedAt: now,
   });
+  // claim() marks the displaced row cancel_pending in the same transaction.
+  // Also retry ids a previous attempt marked and then died before cancelling.
+  const pendingSessionIds = await store.listCancelPending(
+    body.repositoryId,
+    body.pullNumber,
+    body.sessionId
+  );
+  const displaced = new Set(displacedSessionIds);
 
-  for (const displacedSessionId of displacedSessionIds) {
-    if (await cancelDisplacedSession(ctx, displacedSessionId)) continue;
-    // The displaced prompt may already be queued or running. Leaving it
-    // marked superseded would hide it from the next claim and would not
-    // stop that work, so give the review back and refuse this one.
-    const restored = await store.restoreAfterFailedCancel({
-      claimantSessionId: body.sessionId,
-      displacedSessionId,
-      updatedAt: Date.now(),
-    });
+  for (const displacedSessionId of pendingSessionIds) {
+    if (await cancelDisplacedSession(ctx, displacedSessionId)) {
+      await store.clearCancelPending(displacedSessionId, Date.now());
+      continue;
+    }
+    // This claim's own displacement is not superseded until cancel works:
+    // its prompt may already be queued or running. A pending id from an
+    // earlier claim stays marked, and the session id remains cancel_pending
+    // so the next review retries that id.
+    const restored = displaced.has(displacedSessionId)
+      ? await store.restoreAfterFailedCancel({
+          claimantSessionId: body.sessionId,
+          displacedSessionId,
+          updatedAt: Date.now(),
+        })
+      : false;
     logger.warn("review_supersession.cancel_not_superseded", {
       session_id: body.sessionId,
       displaced_session_id: displacedSessionId,
@@ -115,7 +130,7 @@ export async function handleGitHubReviewSupersession(
 export const githubReviewSupersessionRoutes = new Hono<ControlPlaneHonoEnv>();
 
 githubReviewSupersessionRoutes.post(
-  "/internal/github-reviews/supersede",
+  "/github-reviews/supersede",
   admit({
     ...GITHUB_SERVICE_ROUTE,
     authorization: serviceAuthorized("github-bot"),

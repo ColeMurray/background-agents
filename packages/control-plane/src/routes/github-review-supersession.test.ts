@@ -20,14 +20,14 @@ const migration = readFileSync(
 );
 
 function claimRequest(sessionId: string): Request {
-  return new Request("https://internal/internal/github-reviews/supersede", {
+  return new Request("https://internal/github-reviews/supersede", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, repositoryId: 99, pullNumber: 42 }),
   });
 }
 
-describe("POST /internal/github-reviews/supersede cancellation", () => {
+describe("POST /github-reviews/supersede cancellation", () => {
   let sqlite: DatabaseSync;
   let db: SqlDatabase;
   let cancelled: string[];
@@ -59,6 +59,13 @@ describe("POST /internal/github-reviews/supersede cancellation", () => {
     } as SessionRouteContext;
   }
 
+  function pendingFlag(sessionId: string): number {
+    const row = sqlite
+      .prepare(`SELECT cancel_pending FROM github_pr_review_sessions WHERE session_id = ?`)
+      .get(sessionId) as { cancel_pending: number };
+    return row.cancel_pending;
+  }
+
   it("does not supersede a review whose cancellation fails", async () => {
     cancelResult = (sessionId) =>
       sessionId === "review-old"
@@ -86,6 +93,7 @@ describe("POST /internal/github-reviews/supersede cancellation", () => {
     const store = new GitHubPrReviewStore(db);
     await expect(store.isSuperseded("review-old")).resolves.toBe(false);
     await expect(store.isSuperseded("review-new")).resolves.toBe(true);
+    expect(pendingFlag("review-old")).toBe(1);
     expect(
       sqlite
         .prepare(
@@ -107,6 +115,49 @@ describe("POST /internal/github-reviews/supersede cancellation", () => {
     expect(cancelled).toEqual(["review-old", "review-old"]);
     await expect(store.isSuperseded("review-old")).resolves.toBe(true);
     await expect(store.isSuperseded("review-retry")).resolves.toBe(false);
+    expect(pendingFlag("review-old")).toBe(0);
+  });
+
+  it("retries a persisted cancel after the claim that marked it no longer owns the row", async () => {
+    sqlite
+      .prepare(
+        `INSERT INTO github_pr_review_sessions (
+           session_id, repository_id, pull_number, superseded_by, cancel_pending, updated_at
+         ) VALUES ('review-old', 99, 42, 'crashed', 1, 1), ('crashed', 99, 42, NULL, 0, 2)`
+      )
+      .run();
+    cancelResult = (sessionId) =>
+      sessionId === "review-old"
+        ? new Response("unavailable", { status: 500 })
+        : Response.json({ status: "cancelled" });
+
+    const failed = await handleGitHubReviewSupersession(
+      claimRequest("review-next"),
+      {} as never,
+      {},
+      context()
+    );
+    expect(failed.status).toBe(503);
+    expect(cancelled).toEqual(["crashed", "review-old"]);
+    expect(
+      sqlite
+        .prepare(
+          `SELECT superseded_by, cancel_pending FROM github_pr_review_sessions WHERE session_id = 'review-old'`
+        )
+        .get()
+    ).toEqual({ superseded_by: "crashed", cancel_pending: 1 });
+
+    cancelResult = () => Response.json({ status: "cancelled" });
+    const retried = await handleGitHubReviewSupersession(
+      claimRequest("review-after"),
+      {} as never,
+      {},
+      context()
+    );
+    expect(retried.status).toBe(200);
+    expect(cancelled).toContain("review-old");
+    expect(pendingFlag("review-old")).toBe(0);
+    await expect(new GitHubPrReviewStore(db).isSuperseded("review-old")).resolves.toBe(true);
   });
 
   it.each([404, 409])("keeps the supersession when cancel returns %s", async (status) => {
@@ -123,5 +174,6 @@ describe("POST /internal/github-reviews/supersede cancellation", () => {
     const store = new GitHubPrReviewStore(db);
     await expect(store.isSuperseded("review-old")).resolves.toBe(true);
     await expect(store.isSuperseded("review-new")).resolves.toBe(false);
+    expect(pendingFlag("review-old")).toBe(0);
   });
 });

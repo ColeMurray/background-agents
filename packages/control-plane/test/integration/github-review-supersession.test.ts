@@ -7,7 +7,7 @@ import { cleanD1Tables } from "./cleanup";
 import { initSession, serviceFetch, sqlDatabase } from "./helpers";
 
 const BASE = "https://test.local";
-const URL = `${BASE}/internal/github-reviews/supersede`;
+const URL = `${BASE}/github-reviews/supersede`;
 const REPOSITORY_ID = 99;
 const PULL_NUMBER = 42;
 
@@ -19,7 +19,7 @@ function claim(sessionId: string, pullNumber = PULL_NUMBER, repositoryId = REPOS
   });
 }
 
-describe("POST /internal/github-reviews/supersede", () => {
+describe("POST /github-reviews/supersede", () => {
   beforeEach(() => cleanD1Tables());
 
   it("cancels the review it replaces and refuses that session's prompt", async () => {

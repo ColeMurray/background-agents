@@ -460,7 +460,7 @@ describe("route policy table", () => {
         ],
       }
     );
-    expect(routeFor("POST", "/internal/github-reviews/supersede")).toMatchObject({
+    expect(routeFor("POST", "/github-reviews/supersede")).toMatchObject({
       authentication: { kind: "service" },
       authorization: {
         kind: "service",

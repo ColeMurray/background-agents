@@ -2,6 +2,8 @@ import { z } from "zod";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";
 
+// Host `internal` is the service binding. The path matches the control-plane
+// route, the same way `/github/route` is called as `https://internal/github/route`.
 const REVIEW_SUPERSESSION_URL = "https://internal/github-reviews/supersede";
 
 const supersessionResponseSchema = z.object({
