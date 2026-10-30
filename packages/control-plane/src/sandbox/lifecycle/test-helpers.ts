@@ -109,6 +109,7 @@ export function createMockSandbox(
     ttyd_url: null,
     ttyd_token: null,
     active_socket_id: null,
+    active_socket_attached_at: null,
     boot_phase: null,
     boot_seq: null,
     fenced: 0,

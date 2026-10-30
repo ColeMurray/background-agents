@@ -468,7 +468,7 @@ describe("sandbox state retention", () => {
         const { manager, sandbox } = realLifecycleHarness(instance, durableState, provider, {
           socket: {} as WebSocket,
         });
-        sandbox.setActiveSocketId("live-bridge");
+        sandbox.setActiveSocketId("live-bridge", Date.now());
         const { modal_sandbox_id: sandboxId, created_at: createdAt } = sandbox.getSandbox()!;
         expect(
           await sandbox.commitProviderAccess(

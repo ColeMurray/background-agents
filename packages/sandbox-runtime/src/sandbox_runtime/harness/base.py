@@ -128,6 +128,16 @@ class AgentHarness(Protocol):
     @property
     def id(self) -> HarnessId: ...
 
+    # Whether a restarted bridge has contained whatever its predecessor left
+    # running. The supervisor's bridge domain reaps Claude and Codex vendor
+    # descendants before the replacement process starts. OpenCode's server
+    # outlives the bridge, so that harness stops the inherited turn and waits
+    # for the server's idle confirmation during resume. Only then may ``ready``
+    # name the prompt this process still owes: a report of none releases the
+    # control plane's queue, and the next prompt must not run beside a turn
+    # that is still going.
+    contains_inherited_execution: bool
+
     async def open(self) -> None:
         """Connect to the vendor. Raises ``HarnessStartError`` on a final failure."""
         ...
@@ -137,7 +147,12 @@ class AgentHarness(Protocol):
         ...
 
     async def resume_session(self, persisted_id: str) -> bool:
-        """Adopt ``persisted_id`` when the vendor still has it; ``False`` leaves ``session_id`` unset."""
+        """Adopt ``persisted_id`` when the vendor still has it; ``False`` leaves ``session_id`` unset.
+
+        Raises ``HarnessStartError`` when the session exists but cannot be
+        adopted safely, for example a vendor server that outlived an earlier
+        bridge and will not stop.
+        """
         ...
 
     async def create_session(self) -> None:

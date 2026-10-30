@@ -230,17 +230,18 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 
 #### Session Durable Object (`component: "session-do"`)
 
-| Event                        | Level       | Key Fields                                                                                                                          | Description                           |
-| ---------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                                 | One per DO internal route call        |
-| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                              | WebSocket lifecycle                   |
-| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`                      | Message queued                        |
-| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`, `model` | Message sent to sandbox, or deferred  |
-| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                                         | Prompt run finished                   |
-| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`               | Completion callback delivery result   |
-| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`                         | Linear start-callback delivery result |
-| `sandbox.boot_progress`      | info        | `sandbox_id`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                               | Boot phase reported by the runtime    |
-| `sandbox.ready`              | info        | `sandbox_id`, `generation_created_at_ms`, `generation_to_ready_ms`, `harness`                                                       | Accepted runtime readiness transition |
+| Event                        | Level       | Key Fields                                                                                                                          | Description                                                                |
+| ---------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                                 | One per DO internal route call                                             |
+| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                              | WebSocket lifecycle                                                        |
+| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`                      | Message queued                                                             |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`, `model` | Message sent to sandbox, or deferred                                       |
+| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                                         | Prompt run finished                                                        |
+| `prompt.orphaned`            | warn        | `message_id`, `reason`, `started_at_ms`, `socket_attached_at_ms`, `runtime_active_message_id`                                       | Processing prompt failed because a restarted bridge does not still hold it |
+| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`               | Completion callback delivery result                                        |
+| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`                         | Linear start-callback delivery result                                      |
+| `sandbox.boot_progress`      | info        | `sandbox_id`, `boot_seq`, `phase`, `phase_status`, `repo_owner`, `repo_name`, `elapsed_ms`, `warning`                               | Boot phase reported by the runtime                                         |
+| `sandbox.ready`              | info        | `sandbox_id`, `generation_created_at_ms`, `generation_to_ready_ms`, `harness`                                                       | Accepted runtime readiness transition                                      |
 
 `prompt.dispatch` with `outcome="deferred"` and `reason="sandbox_booting"` means a bridge is
 attached but its boot has not reached `ready`: nothing is spawned and nothing is sent, and the

@@ -9,6 +9,7 @@ from .base import (
     EventSink,
     HarnessId,
     HarnessPrompt,
+    HarnessStartError,
     PromptLimits,
     TurnOutcome,
 )
@@ -18,6 +19,15 @@ if TYPE_CHECKING:
     from ..attachment_processor import AttachmentProcessor
     from ..log_config import StructuredLogger
     from .opencode_client import OpenCodeClient
+
+# The server outlives a bridge process, so a resumed session may still be
+# executing what an earlier one dispatched. Each stop attempt waits this long;
+# attempts repeat until the budget is spent.
+INHERITED_EXECUTION_STOP_ATTEMPT_SECONDS = 15.0
+INHERITED_EXECUTION_STOP_BUDGET_SECONDS = 120.0
+# An attempt that fails at once (the abort request itself failed) is not
+# repeated at once.
+INHERITED_EXECUTION_STOP_RETRY_DELAY_SECONDS = 1.0
 
 
 class OpencodeHarness:
@@ -30,6 +40,9 @@ class OpencodeHarness:
     """
 
     id = HarnessId.OPENCODE
+    # ``resume_session`` stops what the server still runs for an earlier bridge
+    # and waits for its idle confirmation before the session is adopted.
+    contains_inherited_execution = True
 
     def __init__(
         self,
@@ -79,12 +92,50 @@ class OpencodeHarness:
             self.log.info("opencode.session.invalid", opencode_session_id=persisted_id)
             return False
         self.session_id = persisted_id
+        await self._stop_inherited_execution()
         self.log.info(
             "opencode.session.ensure",
             opencode_session_id=persisted_id,
             action="loaded",
         )
         return True
+
+    async def _stop_inherited_execution(self) -> None:
+        """Stop whatever the server still runs for an earlier bridge process.
+
+        Nothing in this process owns that work. A restarted bridge would
+        otherwise report no owner in ``ready`` and the control plane would
+        dispatch the next prompt into the same execution. A server mid-tool-call
+        may need a moment to honour the abort, so attempts repeat within the
+        budget; a confirmation that never comes refuses the resume.
+        """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        attempts = 0
+        while True:
+            attempts += 1
+            stopped = await self.stop_execution(INHERITED_EXECUTION_STOP_ATTEMPT_SECONDS)
+            elapsed = loop.time() - started
+            (self.log.info if stopped else self.log.warn)(
+                "opencode.session.inherited_execution_stop",
+                opencode_session_id=self.session_id,
+                outcome="stopped" if stopped else "busy",
+                attempts=attempts,
+                duration_ms=int(elapsed * 1000),
+            )
+            if stopped:
+                return
+            if elapsed >= INHERITED_EXECUTION_STOP_BUDGET_SECONDS:
+                raise HarnessStartError(
+                    f"resumed session {self.session_id} did not become idle within "
+                    f"{INHERITED_EXECUTION_STOP_BUDGET_SECONDS:g}s"
+                )
+            await asyncio.sleep(
+                min(
+                    INHERITED_EXECUTION_STOP_RETRY_DELAY_SECONDS,
+                    INHERITED_EXECUTION_STOP_BUDGET_SECONDS - elapsed,
+                )
+            )
 
     async def create_session(self) -> None:
         created = await self.client.create_session()

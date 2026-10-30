@@ -204,6 +204,12 @@ export const sandboxRowSchema = z.object({
    * `''` once revoked, NULL only on rows that predate persisted identities.
    */
   active_socket_id: z.string().nullable(),
+  /**
+   * When the current `active_socket_id` was accepted, by this control plane's
+   * clock. Null on rows written before the column, which prove nothing about
+   * which process a prompt was dispatched to.
+   */
+  active_socket_attached_at: z.number().nullable(),
   /** JSON `SandboxBootPhase` the runtime last reported while booting; NULL once ready. */
   boot_phase: z.string().nullable(),
   /** Sequence number of that report, so a resend after a reconnect is recognised. */

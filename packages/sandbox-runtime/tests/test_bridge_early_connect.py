@@ -233,6 +233,30 @@ class TestHarnessAttach:
         assert not bridge.boot_attach._boot_ready.is_set()
         assert _run_complete(bridge) == ("harness_start_failed", 1)
 
+    async def test_resume_that_cannot_contain_exits_before_ready(self, tmp_path, monkeypatch):
+        fatal_path = tmp_path / "fatal.txt"
+        monkeypatch.setattr("sandbox_runtime.bridge.BRIDGE_FATAL_ERROR_FILE_PATH", str(fatal_path))
+
+        class BusyHarness(OpeningHarness):
+            async def resume_session(self, persisted_id: str) -> bool:
+                self.calls.append(f"resume:{persisted_id}")
+                raise HarnessStartError(f"resumed session {persisted_id} did not become idle")
+
+        harness = BusyHarness([])
+        bridge = _bridge(tmp_path, monkeypatch, factory=lambda: harness)
+        bridge.session_id_file.write_text("oc-persisted")
+        bridge._send_event = AsyncMock()
+        _connect_quiet(bridge, monkeypatch)
+        _write_lines(HARNESS_COMPLETED)
+
+        with pytest.raises(HarnessStartError, match="did not become idle"):
+            await asyncio.wait_for(bridge.run(), timeout=2)
+
+        assert fatal_path.read_text() == "resumed session oc-persisted did not become idle"
+        assert not bridge.boot_attach._boot_ready.is_set()
+        assert bridge._send_event.await_args_list == []
+        assert _run_complete(bridge) == ("harness_start_failed", 1)
+
     async def test_attach_failure_during_an_in_flight_handshake_ends_the_run(
         self, tmp_path, monkeypatch
     ):

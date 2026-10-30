@@ -287,6 +287,25 @@ class AgentBridge:
         url = self.control_plane_url.replace("https://", "wss://").replace("http://", "ws://")
         return f"{url}/sessions/{self.session_id}/ws?type=sandbox"
 
+    def _owed_message_id(self) -> str | None:
+        """The prompt this process still owes the control plane a result for.
+
+        The one it is running; else the newest whose terminal event has not
+        been acknowledged, whether still queued for the forwarder, buffered
+        for the next connection, or in flight on a connection that may have
+        died. None when nothing is owed.
+        """
+        current = self.activity.current_prompt_message_id
+        if current is not None:
+            return current
+        # Oldest first: a terminal the supervisor has not yet handed over is
+        # newer than any the forwarder holds, which lists its own oldest first.
+        owed = [
+            *self.event_forwarder.unacknowledged_message_ids("execution_complete"),
+            *self.activity.undelivered_terminal_message_ids(),
+        ]
+        return owed[-1] if owed else None
+
     def _build_ready_event(self) -> dict[str, Any]:
         harness = self._require_harness()
         repositories = load_repo_manifest(self.repo_manifest_path)
@@ -300,6 +319,16 @@ class AgentBridge:
             "opencodeSessionId": harness.session_id,
             "harness": harness.id.value,
             "preservationProtocolVersion": 1,
+            # On a reconnect the control plane uses this to tell a process that
+            # still owes a prompt's result from a restarted one that lost it,
+            # and fails a lost prompt to release the queue. Without the field it
+            # keeps the prompt, which is all a harness that has not contained a
+            # predecessor's execution may ask for.
+            **(
+                {"activeMessageId": self._owed_message_id()}
+                if harness.contains_inherited_execution
+                else {}
+            ),
             **({"runtimeVersion": runtime_version} if runtime_version else {}),
             "repositories": [
                 {
@@ -1140,6 +1169,12 @@ class AgentBridge:
             return
         try:
             resumed = await harness.resume_session(persisted)
+        except HarnessStartError as error:
+            # A resume that cannot confirm the predecessor's turn has stopped
+            # must not reach ready: that report would release the queue into it.
+            self._record_fatal_error(str(error))
+            self.log.error("bridge.harness_resume_failed", exc=error, harness=harness.id.value)
+            raise
         except Exception as e:
             self.log.error("agent.session.load_error", exc=e)
             return

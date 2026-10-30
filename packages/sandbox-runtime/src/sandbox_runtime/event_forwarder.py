@@ -287,6 +287,31 @@ class BufferedEventForwarder:
             self._ws = None
         ws.transport.abort()
 
+    def unacknowledged_message_ids(self, event_type: str) -> list[str]:
+        """Message ids of ``event_type`` still owed to the control plane, oldest first.
+
+        Covers events buffered for the next connection, in flight on the
+        current one, and sent but not yet acknowledged. A message is listed
+        once, at its oldest outstanding copy.
+        """
+        seen: list[str] = []
+
+        def add(event: dict[str, Any]) -> None:
+            if event.get("type") != event_type:
+                return
+            message_id = event.get("messageId")
+            if isinstance(message_id, str) and message_id not in seen:
+                seen.append(message_id)
+
+        # Sent events are older than anything still waiting in the buffer.
+        for event in self._pending_acks.values():
+            add(event)
+        for event in self._in_flight_acks.values():
+            add(event)
+        for event in self._event_buffer:
+            add(event)
+        return seen
+
     def acknowledge(self, ack_id: str) -> bool:
         """Drop a pending critical event the control plane confirmed.
 

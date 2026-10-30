@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from .boot_events import BootPhaseError
+from .bridge_domain import CONTAINMENT_FAILURE_EXIT_CODE
 from .constants import (
     BOOT_COMPLETE_MARKER_ENV_VAR,
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -292,6 +293,17 @@ class SandboxSupervisor:
             self.log.error("bridge.deterministic_failure", exit_code=exit_code, cause=cause)
             # The bridge exits this way from its harness open, so the failure
             # belongs to the harness phase whether or not the boot is over.
+            await self._report_fatal_error(cause, BootPhaseError(cause, phase="harness"))
+            self.shutdown_event.set()
+            return restart_count
+        if exit_code < 0 or exit_code == CONTAINMENT_FAILURE_EXIT_CODE:
+            # The domain owner was signalled, or it could not reap the bridge's
+            # descendants. A negative status is the owner's own death: the
+            # bridge's signal death is encoded as 128+signal once the tree is
+            # gone. Starting another bridge here would share the worktree with
+            # whatever is still running.
+            cause = "The agent bridge exited without confirming its vendor processes stopped"
+            self.log.error("bridge.containment_unconfirmed", exit_code=exit_code, cause=cause)
             await self._report_fatal_error(cause, BootPhaseError(cause, phase="harness"))
             self.shutdown_event.set()
             return restart_count

@@ -534,6 +534,8 @@ class TestAgentBridgeProcessEarlyConnect:
         await process.start()
 
         assert all("--early-connect" in args for args in spawned)
+        assert all(args[1:3] == ("-m", "sandbox_runtime.bridge_domain") for args in spawned)
+        assert all("sandbox_runtime.bridge" in args for args in spawned)
         assert len(spawned) == 2
 
     async def test_without_the_flag_the_argument_is_absent(self, monkeypatch):

@@ -80,6 +80,11 @@ def _freeze_tree(parent: int, owned: dict[int, int]) -> None:
         pending.extend((pid, child) for child in _children(pid))
 
 
+def contain_descendants() -> bool:
+    """Freeze and reap this process's descendants. True when none remain."""
+    return _contain()
+
+
 def _contain() -> bool:
     deadline = time.monotonic() + CONTAINMENT_TIMEOUT_SECONDS
     while time.monotonic() < deadline:

@@ -167,7 +167,8 @@ class TestBridgeCrashRestart:
         supervisor._report_fatal_error.assert_called_once()
         assert "Bridge crashed" in supervisor._report_fatal_error.call_args[0][0]
 
-    async def test_bridge_killed_by_signal_restarts(self):
+    async def test_bridge_killed_by_signal_restarts_once_containment_is_confirmed(self):
+        """A signalled bridge is 128+signal after the domain owner reaps the tree."""
         supervisor = _make_supervisor()
         supervisor.harness_process._opencode_process = _fake_process(returncode=None)
         running_process = _fake_process(returncode=None)
@@ -176,13 +177,32 @@ class TestBridgeCrashRestart:
             supervisor.agent_bridge._process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.agent_bridge._process = _fake_process(returncode=-15)
+        supervisor.agent_bridge._process = _fake_process(returncode=143)
         supervisor.agent_bridge.start = AsyncMock(side_effect=restart_side_effect)
 
         with patch.object(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False)):
             await supervisor.monitor_processes()
 
         supervisor.agent_bridge.start.assert_called_once()
+
+    async def test_unconfirmed_containment_does_not_start_another_bridge(self):
+        supervisor = _make_supervisor()
+        supervisor.harness_process._opencode_process = _fake_process(returncode=None)
+        supervisor.agent_bridge.start = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        for exit_code in (-9, 88):
+            supervisor.shutdown_event.clear()
+            supervisor.agent_bridge.start.reset_mock()
+            supervisor._report_fatal_error.reset_mock()
+            supervisor.agent_bridge._process = _fake_process(returncode=exit_code)
+
+            with patch.object(supervisor, "_wait_for_shutdown", AsyncMock(return_value=False)):
+                await supervisor.monitor_processes()
+
+            supervisor.agent_bridge.start.assert_not_called()
+            supervisor._report_fatal_error.assert_awaited()
+            assert supervisor.shutdown_event.is_set()
 
 
 class TestBridgeBackoffTiming:

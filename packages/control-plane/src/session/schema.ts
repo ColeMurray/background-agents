@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS sandbox (
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
   active_socket_id TEXT,                            -- Bridge socket the session dispatches to (socket:<id> tag)
+  active_socket_attached_at INTEGER,                -- When that socket was accepted, by the control plane's clock
   boot_phase TEXT,                                  -- JSON SandboxBootPhase the runtime last reported; NULL once ready
   boot_seq INTEGER,                                 -- Sequence of that report, for de-duplicating resends
   fenced INTEGER NOT NULL DEFAULT 0,                -- 1 once the generation's credentials were revoked for good (boot budget)
@@ -775,6 +776,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 57,
     description: "Record each prompt author's account as it was when the prompt was queued",
     run: "ALTER TABLE messages ADD COLUMN author_canonical_user_id TEXT",
+  },
+  {
+    id: 58,
+    description: "Add active_socket_attached_at to sandbox",
+    run: "ALTER TABLE sandbox ADD COLUMN active_socket_attached_at INTEGER",
   },
 ];
 

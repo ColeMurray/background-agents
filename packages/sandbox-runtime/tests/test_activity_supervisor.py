@@ -21,6 +21,42 @@ def make_supervisor(events: list[dict]) -> ActivitySupervisor:
 
 
 @pytest.mark.asyncio
+async def test_selected_terminal_stays_owed_until_the_forwarder_accepts_it() -> None:
+    released = asyncio.Event()
+    events: list[dict] = []
+
+    async def send(event: dict) -> None:
+        await released.wait()
+        events.append(event)
+
+    supervisor = ActivitySupervisor(
+        send_event=send,
+        prompt_finished=lambda: None,
+        refresh_diff=lambda _message_id: None,
+        log=MagicMock(),
+    )
+
+    async def operation() -> dict:
+        return {"type": "execution_complete", "messageId": "m1", "success": True}
+
+    supervisor.start_prompt("m1", operation)
+    for _ in range(20):
+        if supervisor.current_prompt_message_id is None:
+            break
+        await asyncio.sleep(0.01)
+    assert supervisor.current_prompt_message_id is None
+    assert supervisor.undelivered_terminal_message_ids() == ["m1"]
+
+    released.set()
+    for _ in range(5):
+        if not supervisor.undelivered_terminal_message_ids():
+            break
+        await asyncio.sleep(0)
+    assert events == [{"type": "execution_complete", "messageId": "m1", "success": True}]
+    assert supervisor.undelivered_terminal_message_ids() == []
+
+
+@pytest.mark.asyncio
 async def test_shutdown_drains_all_overlapping_prompts() -> None:
     events: list[dict] = []
     entered = [asyncio.Event(), asyncio.Event()]

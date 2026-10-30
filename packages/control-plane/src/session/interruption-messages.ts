@@ -8,6 +8,8 @@ const INTERRUPTION_MESSAGES: Record<string, string> = {
   fatal_runtime_error: "The sandbox runtime failed.",
   inactivity_timeout: "The sandbox was stopped after a period of inactivity.",
   sandbox_lifetime_expiring: "The sandbox reached its maximum lifetime.",
+  // A processing prompt whose bridge restarted and does not still hold it.
+  runtime_restarted: "The sandbox runtime restarted while this prompt was running.",
 };
 
 /** What a prompt interrupted for `reason` reports to its author. */

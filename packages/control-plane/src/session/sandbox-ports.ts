@@ -9,7 +9,7 @@ export interface SandboxStateReader {
 
 /** Socket identity and liveness belong to transport, not lifecycle transitions. */
 export interface SandboxSocketStore extends SandboxStateReader {
-  setActiveSocketId(socketId: string): void;
+  setActiveSocketId(socketId: string, attachedAt: number): void;
   revokeActiveSocketId(): void;
 }
 
