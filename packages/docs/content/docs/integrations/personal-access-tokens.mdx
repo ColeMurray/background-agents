@@ -1,0 +1,49 @@
+---
+title: Personal access tokens
+description: Issue tokens that let tools such as the OpenInspect MCP server call the API as you, limited to the permissions you grant.
+audience: user
+owner: security
+status: published
+lastReviewed: "2026-10-30"
+relatedCode:
+  - packages/shared/src/types/personal-access-tokens.ts
+  - packages/control-plane/src/routes/personal-access-tokens.ts
+  - packages/control-plane/src/authorization/personal-access-token-policy.ts
+  - packages/control-plane/src/auth/personal-access-token.ts
+  - packages/web/src/components/settings/personal-access-tokens-settings.tsx
+  - packages/web/src/lib/personal-access-token-permissions.ts
+---
+
+A personal access token is a credential you issue to yourself so a tool on your machine, such as the OpenInspect MCP server or a script, can call the OpenInspect API as you. Each token carries the permissions you grant it and nothing more.
+
+## Create a token
+
+1. Open **Settings › Access tokens** and select **New token**.
+2. Name the token after the tool or machine that will use it, for example `Work laptop MCP server`.
+3. Choose when it expires: 7, 30, 90, or 180 days, or 1 year. Every token expires.
+4. Select its permissions. **Read-only** selects every read permission your role includes. Grant only what the tool needs.
+5. Select **Create token** and copy the token from the dialog.
+
+The token is shown once. OpenInspect stores only a hash of it, so nobody, including administrators, can show it to you again. If you lose it, revoke it and create another.
+
+Tools send the token as an `Authorization: Bearer <token>` header. Tokens start with `oi_pat_`, so a leaked one is recognizable.
+
+## What a token can do
+
+A token's permissions are always the overlap of the permissions you granted it and the permissions your role has **now**:
+
+- If your role loses a permission, every token you hold loses it at the same moment.
+- If your account is suspended, your tokens stop working.
+- The picker lists only permissions your role includes. Workspace administration permissions, such as managing members, roles, secrets, and integrations, can never be granted to a token.
+
+A token also reaches only the parts of the API that accept tokens. Everything else refuses it, whatever it was granted. A token can never create, list, or revoke tokens, so a leaked token cannot issue itself a replacement.
+
+Within a granted permission, your role still decides what you see. For example, an administrator's token with **Read sessions** can read the sessions that administrator can read.
+
+## Manage your tokens
+
+**Settings › Access tokens** lists each token's name, the first characters of its value, its permissions, when it was last used, and when it expires. Last use is recorded to the minute.
+
+Select **Revoke** to stop a token immediately. Revoking deletes the token; anything still using it gets `401 Unauthorized`.
+
+Creating and revoking tokens is recorded in the [audit log](/administration/audit-log). Requests made with a token are attributed to you and to the token that made them.

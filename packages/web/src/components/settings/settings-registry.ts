@@ -83,6 +83,19 @@ export const SETTINGS_GROUPS = [
         ),
       },
       {
+        id: "access-tokens",
+        label: "Access tokens",
+        description: "Tokens for tools that call the API as you",
+        keywords: "personal access token api mcp pat credentials",
+        icon: KeyIcon,
+        visibility: publicSettings,
+        panel: lazyPanel(() =>
+          import("./personal-access-tokens-settings").then(
+            ({ PersonalAccessTokensSettings }) => PersonalAccessTokensSettings
+          )
+        ),
+      },
+      {
         id: "keyboard-shortcuts",
         label: "Keyboard",
         description: "Customize keyboard shortcuts",

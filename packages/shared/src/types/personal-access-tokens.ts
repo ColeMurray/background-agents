@@ -99,13 +99,24 @@ export const PERSONAL_ACCESS_TOKEN_GRANTABILITY = {
   "workspace.transfer_ownership": "withheld",
 } as const satisfies Record<PermissionId, "grantable" | "withheld">;
 
+/** A permission a personal access token may be granted. */
+export type PersonalAccessTokenGrantablePermission = {
+  [
+    Permission in PermissionId
+  ]: (typeof PERSONAL_ACCESS_TOKEN_GRANTABILITY)[Permission] extends "grantable"
+    ? Permission
+    : never;
+}[PermissionId];
+
 /** Whether a permission may appear in a personal access token's grant. */
-export function isPersonalAccessTokenGrantable(permission: PermissionId): boolean {
+export function isPersonalAccessTokenGrantable(
+  permission: PermissionId
+): permission is PersonalAccessTokenGrantablePermission {
   return PERSONAL_ACCESS_TOKEN_GRANTABILITY[permission] === "grantable";
 }
 
 /** Every permission a token may be granted, in registry order. */
-export const PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS: readonly PermissionId[] =
+export const PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS: readonly PersonalAccessTokenGrantablePermission[] =
   PERMISSION_IDS.filter(isPersonalAccessTokenGrantable);
 
 export const PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH = 100;
