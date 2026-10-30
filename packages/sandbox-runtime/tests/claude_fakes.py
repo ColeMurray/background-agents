@@ -52,6 +52,16 @@ def _text_delta(text: str) -> StreamEvent:
 
 
 @dataclass
+class NativeMcpState:
+    """MCP state that outlives one Claude process, as the config directory and upstreams do."""
+
+    disabled: set[str] = field(default_factory=set)
+    # Connectors from the native user/project configuration, beside the SDK's own.
+    native: tuple[str, ...] = ()
+    failing: set[str] = field(default_factory=set)
+
+
+@dataclass
 class FakeSdkClient:
     """Replays scripted turns; records what the harness asked of it."""
 
@@ -68,6 +78,8 @@ class FakeSdkClient:
     fail_disconnect: bool = False
     fail_connect: bool = False
     stderr_on_connect: str | None = None
+    mcp: NativeMcpState = field(default_factory=NativeMcpState)
+    mcp_toggles: list[tuple[str, bool]] = field(default_factory=list)
 
     async def connect(self) -> None:
         if self.stderr_on_connect:
@@ -90,15 +102,24 @@ class FakeSdkClient:
         self.queries.append(messages)
 
     async def get_mcp_status(self):
-        return {
-            "mcpServers": [
-                {"name": name, "status": "connected"}
-                for name in self.options.get("mcp_servers", {})
-            ]
-        }
+        names = [*self.options.get("mcp_servers", {}), *self.mcp.native]
+        return {"mcpServers": [{"name": name, "status": self._mcp_status(name)} for name in names]}
+
+    def _mcp_status(self, name: str) -> str:
+        if name in self.mcp.disabled:
+            return "disabled"
+        return "failed" if name in self.mcp.failing else "connected"
 
     async def toggle_mcp_server(self, server_name, enabled):
-        return None
+        # Like the CLI: the choice is persisted first, then enabling dials and
+        # answers a failed connection with a control error.
+        self.mcp_toggles.append((server_name, enabled))
+        if not enabled:
+            self.mcp.disabled.add(server_name)
+            return
+        self.mcp.disabled.discard(server_name)
+        if server_name in self.mcp.failing:
+            raise Exception("Error POSTing to endpoint")
 
     async def interrupt(self) -> None:
         self.interrupts += 1
@@ -136,6 +157,7 @@ class Harness:
     def __init__(self, tmp_path: Path, *, turns: list[list[Any]] | None = None, **overrides: Any):
         self.clients: list[FakeSdkClient] = []
         self.turns = turns or []
+        self.mcp = NativeMcpState()
         self.client_kwargs: dict[str, Any] = overrides.pop("client_kwargs", {})
         oauth_managed = overrides.pop("oauth_managed", False)
         credential_client = overrides.pop("credential_client", None)
@@ -154,7 +176,9 @@ class Harness:
         binary.write_text("#!/bin/sh\n")
 
         def client_factory(options: Any) -> FakeSdkClient:
-            client = FakeSdkClient(options=options, turns=self.turns, **self.client_kwargs)
+            client = FakeSdkClient(
+                options=options, turns=self.turns, mcp=self.mcp, **self.client_kwargs
+            )
             self.clients.append(client)
             return client
 

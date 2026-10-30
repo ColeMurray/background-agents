@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -81,6 +82,15 @@ async def check_managed_mcp(
     if not allowed:
         return
     deadline = asyncio.get_running_loop().time() + MANAGED_MCP_STATUS_TIMEOUT_SECONDS
+    # Claude persists a disable in its config directory, which outlives this
+    # process; without this, one failed turn would keep the server off for good.
+    status = await client.get_mcp_status()
+    for server in status.get("mcpServers", []):
+        if server["name"] in allowed and server.get("status") == "disabled":
+            # Enabling dials the server and raises if it cannot connect; the
+            # readiness check below reports that like any other failure.
+            with contextlib.suppress(Exception):
+                await client.toggle_mcp_server(server["name"], True)
     while True:
         status = await client.get_mcp_status()
         states = {server["name"]: server.get("status") for server in status.get("mcpServers", [])}

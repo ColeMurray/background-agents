@@ -11,7 +11,7 @@ from sandbox_runtime.harness.claude_mcp import (
     check_managed_mcp,
     mcp_server_options,
 )
-from tests.claude_fakes import Harness, _result, _run
+from tests.claude_fakes import FakeSdkClient, Harness, NativeMcpState, _result, _run
 
 SERVER = {
     "name": "example",
@@ -72,6 +72,37 @@ async def test_turns_without_personal_mcp_keep_the_running_process(tmp_path):
     await f.harness.close_managed_mcp()
 
 
+async def test_connector_disabled_by_a_failed_turn_reconnects_in_the_next_process(tmp_path):
+    f = Harness(tmp_path, turns=[[_result(0.25)], [_result(0.40)]], mcp_servers=(SERVER,))
+    f.mcp.native = ("native",)
+    f.mcp.disabled.add("native")
+    f.mcp.failing.add("example")
+    await f.harness.open()
+    await f.harness.create_session()
+    await f.harness.prepare_managed_mcp({"example"})
+    events, outcome = await _run(f.harness)
+    failed = f.client
+    assert outcome.success
+    assert [event["scope"] for event in events if event["type"] == "warning"] == ["mcp"]
+    assert failed.mcp_toggles == [("example", False)]
+    assert f.mcp.disabled == {"example", "native"}
+    await f.harness.close_managed_mcp()
+
+    f.mcp.failing.clear()
+    await f.harness.prepare_managed_mcp({"example"})
+    events, outcome = await _run(f.harness)
+    assert f.client is not failed
+    assert outcome.success
+    assert not [event for event in events if event["type"] == "warning"]
+    assert f.client.mcp_toggles == [("example", True)]
+    status = await f.client.get_mcp_status()
+    assert {server["name"]: server["status"] for server in status["mcpServers"]} == {
+        "example": "connected",
+        "native": "disabled",
+    }
+    await f.harness.close_managed_mcp()
+
+
 def test_managed_config_preserves_headers_and_omits_unavailable_personal_servers():
     assert mcp_server_options((SERVER,), set()) == {}
     assert mcp_server_options((SERVER,), {"example"}) == {
@@ -111,6 +142,16 @@ async def test_readiness_disables_and_warns_only_for_unavailable_servers(status)
         warning = emit.await_args.args[0]
         assert warning["messageId"] == "m"
         assert warning["scope"] == "mcp"
+
+
+async def test_reenabling_a_server_that_still_cannot_connect_warns_and_disables_it_again():
+    mcp = NativeMcpState(disabled={"example"}, failing={"example"})
+    client = FakeSdkClient(options={"mcp_servers": {"example": {}}}, turns=[], mcp=mcp)
+    emit = AsyncMock()
+    await check_managed_mcp(client, {"example"}, HarnessPrompt("m", "test"), emit)
+    assert client.mcp_toggles == [("example", True), ("example", False)]
+    assert mcp.disabled == {"example"}
+    assert emit.await_args.args[0]["scope"] == "mcp"
 
 
 async def test_no_personal_servers_skips_native_status_requests():

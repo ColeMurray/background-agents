@@ -40,7 +40,10 @@ server or an API key:
 It uses production MCP formatting/policy helpers and the exact SDK pin to prove that unavailable
 managed names cannot initialize same-name user/project connectors, available names use the explicit
 managed HTTP entry, and unrelated user/project stdio connectors remain usable. It checks an
-unavailable → available → unavailable sequence using isolated temporary configuration.
+unavailable → available → unavailable sequence using isolated temporary configuration. It also runs
+the production readiness check across two SDK processes that share one configuration directory: a
+connector disabled by a failed turn reconnects on the next healthy turn, and a connector the user
+disabled stays off.
 
 The OpenCode cancellation regression also needs only the Python environment and pinned binary:
 
