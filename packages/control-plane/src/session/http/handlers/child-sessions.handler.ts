@@ -33,7 +33,8 @@ const childSessionUpdateBodySchema = z.object({
 
 function resolvePromptAuthorParticipant(
   messageRepository: MessageRepository,
-  participantRepository: ParticipantRepository
+  participantRepository: ParticipantRepository,
+  mayDelegateFor: (canonicalUserId: string) => boolean
 ): (ParticipantRow & { mcpEligible?: boolean }) | Response {
   const processingMessage = messageRepository.getProcessingMessageAuthor();
   if (!processingMessage) {
@@ -45,10 +46,14 @@ function resolvePromptAuthorParticipant(
   const participant = participantRepository.getParticipantById(processingMessage.author_id);
   if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
   const authority = messageRepository.getProcessingMessageAuthority();
+  const canonicalUserId = authority?.canonicalUserId ?? null;
   return {
     ...participant,
-    canonical_user_id: authority?.canonicalUserId ?? null,
-    mcpEligible: authority?.mcpEligible === true,
+    canonical_user_id: canonicalUserId,
+    mcpEligible:
+      authority?.mcpEligible === true &&
+      canonicalUserId !== null &&
+      mayDelegateFor(canonicalUserId),
   };
 }
 
@@ -78,7 +83,9 @@ export class ChildSessionsHandler {
     private readonly participantRepository: ParticipantRepository,
     private readonly sessionCoreRepository: SessionCoreRepository,
     private readonly messenger: SessionMessenger,
-    private readonly messageService: Pick<MessageService, "enqueuePrompt">
+    private readonly messageService: Pick<MessageService, "enqueuePrompt">,
+    /** The parent's multiplayer fence, which a child's delegation must also pass. */
+    private readonly mayDelegateFor: (canonicalUserId: string) => boolean
   ) {}
 
   getSpawnContext(): Response {
@@ -89,7 +96,8 @@ export class ChildSessionsHandler {
 
     const promptAuthor = resolvePromptAuthorParticipant(
       this.messageRepository,
-      this.participantRepository
+      this.participantRepository,
+      this.mayDelegateFor
     );
     if (promptAuthor instanceof Response) return promptAuthor;
     let sandboxTimeoutMs: number | undefined;
@@ -134,7 +142,8 @@ export class ChildSessionsHandler {
     }
     const author = resolvePromptAuthorParticipant(
       this.messageRepository,
-      this.participantRepository
+      this.participantRepository,
+      this.mayDelegateFor
     );
     return author instanceof Response
       ? author

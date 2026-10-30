@@ -51,16 +51,28 @@ export async function assertMcpUserAccess(
 
 export type McpDestinationPolicy = (value: string, expectedOrigin?: string) => URL;
 
+/**
+ * Compared as URL origins, so `https://MCP.example.com/` matches like its normalized form.
+ * Terraform validates the list; a Node host reads the raw environment.
+ */
+function allowedUpstreamOrigins(env: Pick<Env, "MCP_ALLOWED_UPSTREAM_ORIGINS">): string[] {
+  return (env.MCP_ALLOWED_UPSTREAM_ORIGINS ?? "").split(",").flatMap((entry) => {
+    try {
+      const url = new URL(entry.trim());
+      return url.protocol === "https:" ? [url.origin] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /** Read current configuration at use, including after credential I/O. */
 export function createMcpDestinationPolicy(
   env: Pick<Env, "MCP_ALLOWED_UPSTREAM_ORIGINS">
 ): McpDestinationPolicy {
   return (value, expectedOrigin) => {
     const url = mcpDestination(value, expectedOrigin);
-    const allowed = (env.MCP_ALLOWED_UPSTREAM_ORIGINS ?? "")
-      .split(",")
-      .map((origin) => origin.trim());
-    if (!allowed.includes(url.origin)) throw new McpError("mcp_unsupported");
+    if (!allowedUpstreamOrigins(env).includes(url.origin)) throw new McpError("mcp_unsupported");
     return url;
   };
 }

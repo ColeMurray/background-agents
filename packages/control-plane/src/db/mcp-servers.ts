@@ -532,6 +532,13 @@ export class McpServerStore {
     }
   }
 
+  /**
+   * Servers applicable to a session's member repositories: unscoped servers
+   * always apply; scoped servers apply when ANY member matches a scope.
+   * Pass an empty list for repo-less sessions (unscoped servers only).
+   * Servers the control plane proxies (managed routing while it is enabled,
+   * and every personal OAuth server) come without their stored credentials.
+   */
   async getForLaunch(
     repositories: Array<{ repoOwner: string; repoName: string }>,
     routingEnabled = true
@@ -580,29 +587,5 @@ export class McpServerStore {
         );
       throw error;
     }
-  }
-
-  /**
-   * Servers applicable to a session's member repositories: unscoped servers
-   * always apply; scoped servers apply when ANY member matches a scope.
-   * Pass an empty list for repo-less sessions (unscoped servers only).
-   */
-  async getDecryptedForSession(
-    repositories: Array<{ repoOwner: string; repoName: string }>
-  ): Promise<McpServerConfig[]> {
-    const repoFullNames = new Set(
-      repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
-    );
-    const { results } = await this.db
-      .prepare("SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY name")
-      .all<McpServerRow>();
-
-    const filtered = results.filter((row) => {
-      const scopes = parseRepoScopes(row.repo_scope);
-      if (!scopes) return true;
-      return scopes.some((s) => repoFullNames.has(s.toLowerCase()));
-    });
-
-    return Promise.all(filtered.map((r) => this.decryptRow(r)));
   }
 }

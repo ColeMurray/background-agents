@@ -468,9 +468,10 @@ describe("managed MCP actual sandbox route + session authority", () => {
     await env.DB.prepare("UPDATE mcp_oauth_transactions SET expires_at = 0 WHERE owner_id = ?")
       .bind(alice)
       .run();
+    // Abandoning a reconnect keeps the grant Alice already had.
     const listed = await serviceFetch("https://test.local/mcp-connections");
     expect(await listed.json()).toMatchObject({
-      connections: [{ serverId: f.server.id, status: "reconnect_required" }],
+      connections: [{ serverId: f.server.id, status: "connected" }],
     });
     await expect(f.registry.delete(f.server.id)).rejects.toThrow("disconnect");
     const disconnected = await serviceFetch(`https://test.local/mcp-connections/${f.server.id}`, {

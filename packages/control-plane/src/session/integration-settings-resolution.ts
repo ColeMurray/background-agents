@@ -140,7 +140,7 @@ export interface SessionScopedSettings {
  *   (`resolveAgentSlackNotifyEnabled`) — the same rule on a different call path.
  * - **MCP servers resolve as the UNION across members** (injecting a server
  *   scoped to any member is additive and side-effect-free) — resolved
- *   separately in `McpServerStore.getDecryptedForSession`.
+ *   separately in `McpServerStore.getForLaunch`.
  * - **Environment-level overrides are the TOP layer** (design §13.5): when the
  *   session launches from a saved environment, that environment's sandbox and
  *   code-server/VNC overrides win over the primary member's; unset keys keep

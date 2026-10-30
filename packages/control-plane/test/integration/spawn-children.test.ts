@@ -498,6 +498,35 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(await childAuthority(fromCollaborator)).toEqual([
       { admitted_canonical_user_id: alice, mcp_eligible: 0 },
     ]);
+
+    // Once Bob has an eligible prompt here, the multiplayer fence refuses Alice's
+    // delegation in this session, and a child spawned now must not regain it.
+    await runInSessionDO(stub, (_instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at)
+         VALUES ('participant-bob', 'user-bob', ?, 'member', ?)`,
+        bob,
+        Date.now()
+      );
+    });
+    await seedMessage(stub, {
+      id: `bob-${parentName}`,
+      authorId: "participant-bob",
+      admittedCanonicalUserId: bob,
+      content: "Bob's earlier prompt",
+      source: "web",
+      status: "completed",
+      createdAt: Date.now() - 1_000,
+    });
+    await queryDO(stub, "UPDATE messages SET mcp_eligible = 1 WHERE id = ?", `bob-${parentName}`);
+    const afterBob = await SELF.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body,
+    });
+    expect(await childAuthority(afterBob)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 0 },
+    ]);
   });
 
   it("inherits automation lineage from the parent", async () => {

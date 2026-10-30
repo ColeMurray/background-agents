@@ -169,16 +169,17 @@ export class McpConnectionStore {
     expiresAt: number
   ): Promise<void> {
     await this.pruneTransactions(ownerId);
-    // Reserve canonical ownership before encryption/transaction publication can
-    // yield. Disconnected would let identity writers bypass the database guards
-    // in that gap, and hide the owner's cancellation action after abandoned consent.
+    // Reserve canonical ownership before encryption can yield, so identity writers
+    // meet the database guards in that gap. A connected grant already holds the
+    // reservation and is left usable: cancelling the new consent must not cost it.
     const row = await this.db
       .prepare(
         `INSERT INTO mcp_connections (id, owner_id, server_id, auth_revision, issuer, resource, client_id, token_endpoint, status, updated_at)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'reconnect_required', ? WHERE EXISTS (SELECT 1 FROM mcp_servers WHERE id = ? AND auth_revision = ? AND enabled = 1)
-      ON CONFLICT(owner_id, server_id) DO UPDATE SET auth_revision = excluded.auth_revision, issuer = excluded.issuer, resource = excluded.resource,
-      client_id = excluded.client_id, token_endpoint = excluded.token_endpoint, status = 'reconnect_required', grant_revision = mcp_connections.grant_revision + 1,
-      encrypted_payload = NULL, expires_at = NULL, exchange_owner = NULL, exchange_started_at = NULL, updated_at = excluded.updated_at RETURNING *`
+      ON CONFLICT(owner_id, server_id) DO UPDATE SET
+        status = CASE WHEN mcp_connections.status = 'connected' THEN 'connected' ELSE 'reconnect_required' END,
+        updated_at = CASE WHEN mcp_connections.status = 'connected' THEN mcp_connections.updated_at ELSE excluded.updated_at END
+      RETURNING *`
       )
       .bind(
         crypto.randomUUID(),
@@ -195,43 +196,83 @@ export class McpConnectionStore {
       )
       .first<McpConnectionRow>();
     if (!row) throw new McpError("mcp_context_changed", 409);
+    // Each start supersedes earlier attempts; publication below fails if a later
+    // start published first, so a delayed publisher never replaces a newer attempt.
+    await this.db
+      .prepare("DELETE FROM mcp_oauth_transactions WHERE connection_id = ?")
+      .bind(row.id)
+      .run();
+    const sameClient =
+      row.auth_revision === client.auth_revision &&
+      row.issuer === client.issuer &&
+      row.resource === client.resource &&
+      row.client_id === client.client_id &&
+      row.token_endpoint === client.token_endpoint;
+    const keep = row.status === "connected" && sameClient;
+    // Anything else unusable is replaced, but only together with publication.
+    const reset =
+      !keep && (!sameClient || row.encrypted_payload !== null || row.exchange_owner !== null);
+    const grantRevision = reset ? row.grant_revision + 1 : row.grant_revision;
     const transaction = {
       state_digest: stateDigest,
       owner_id: ownerId,
       browser_session_id: browserSessionId,
       connection_id: row.id,
-      grant_revision: row.grant_revision,
-      auth_revision: row.auth_revision,
+      grant_revision: grantRevision,
+      auth_revision: client.auth_revision,
       redirect_uri: client.redirect_uri,
       expires_at: expiresAt,
     };
     const encrypted = await encryptMcp(verifier, this.encryptionKey, transactionAad(transaction));
+    const noOtherAttempt =
+      "NOT EXISTS (SELECT 1 FROM mcp_oauth_transactions WHERE connection_id = ?)";
     const results = await this.db.batch([
-      this.db
-        .prepare(
-          "DELETE FROM mcp_oauth_transactions WHERE connection_id = ? AND grant_revision <= ?"
-        )
-        .bind(row.id, row.grant_revision),
+      ...(reset
+        ? [
+            this.db
+              .prepare(
+                `UPDATE mcp_connections SET auth_revision = ?, issuer = ?, resource = ?, client_id = ?, token_endpoint = ?,
+              status = 'reconnect_required', grant_revision = ?, encrypted_payload = NULL, expires_at = NULL,
+              exchange_owner = NULL, exchange_started_at = NULL, updated_at = ?
+              WHERE id = ? AND grant_revision = ? AND ${noOtherAttempt}`
+              )
+              .bind(
+                client.auth_revision,
+                client.issuer,
+                client.resource,
+                client.client_id,
+                client.token_endpoint,
+                grantRevision,
+                Date.now(),
+                row.id,
+                row.grant_revision,
+                row.id
+              ),
+          ]
+        : []),
       this.db
         .prepare(
           `INSERT INTO mcp_oauth_transactions (state_digest, owner_id, browser_session_id, connection_id, grant_revision, auth_revision, redirect_uri, encrypted_verifier, expires_at)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND grant_revision = ?)`
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND grant_revision = ?)
+        AND ${noOtherAttempt}`
         )
         .bind(
           stateDigest,
           ownerId,
           browserSessionId,
           row.id,
-          row.grant_revision,
-          row.auth_revision,
+          grantRevision,
+          client.auth_revision,
           client.redirect_uri,
           encrypted,
           expiresAt,
           row.id,
-          row.grant_revision
+          grantRevision,
+          row.id
         ),
     ]);
-    if (results[1].meta.changes !== 1) throw new McpError("mcp_context_changed", 409);
+    if (results[results.length - 1].meta.changes !== 1)
+      throw new McpError("mcp_context_changed", 409);
   }
   /** Lazy cleanup also reclaims history written before consent became single-attempt. */
   async pruneTransactions(ownerId: string, now = Date.now()): Promise<void> {
@@ -286,17 +327,22 @@ export class McpConnectionStore {
     connection: McpConnectionRow,
     credential: McpCredential
   ): Promise<void> {
-    const encrypted = await encryptMcp(credential, this.encryptionKey, aad(connection));
+    // A completed consent is a new grant, even when it replaces a working one:
+    // turns bound to the old grant stop instead of switching accounts mid-turn.
+    const granted = { ...connection, grant_revision: connection.grant_revision + 1 };
+    const encrypted = await encryptMcp(credential, this.encryptionKey, aad(granted));
     const results = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE mcp_connections SET status = 'connected', encrypted_payload = ?, expires_at = ?, credential_version = credential_version + 1, updated_at = ?
+          `UPDATE mcp_connections SET status = 'connected', grant_revision = ?, encrypted_payload = ?, expires_at = ?,
+        credential_version = credential_version + 1, exchange_owner = NULL, exchange_started_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND grant_revision = ? AND auth_revision = ?
         AND EXISTS (SELECT 1 FROM mcp_oauth_transactions t WHERE t.state_digest = ? AND t.status = 'claimed' AND t.claim_owner = ? AND t.expires_at > ?
           AND EXISTS (SELECT 1 FROM auth_sessions a JOIN users u ON u.id = a.userId WHERE a.id = t.browser_session_id AND a.userId = t.owner_id AND a.expiresAt > ? AND u.suspended_at IS NULL))
         AND EXISTS (SELECT 1 FROM mcp_servers s WHERE s.id = server_id AND s.auth_revision = mcp_connections.auth_revision AND s.enabled = 1)`
         )
         .bind(
+          granted.grant_revision,
           encrypted,
           credential.expiresAt,
           Date.now(),

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { relayMcpRequest, readMcpBody, MCP_MAX_BODY_BYTES, MCP_STREAM_TIMEOUT_MS } from "./relay";
+import {
+  relayMcpRequest,
+  readMcpBody,
+  MCP_MAX_BODY_BYTES,
+  MCP_STREAM_REVALIDATE_INTERVAL_MS,
+  MCP_STREAM_TIMEOUT_MS,
+} from "./relay";
 import { McpError } from "./errors";
 const target = "https://mcp.fixture.test/mcp";
 const req = (body = "{}", headers = {}) =>
@@ -220,6 +226,72 @@ describe("managed MCP transparent, single-attempt relay", () => {
       const request = new Request(target, {
         method: "POST",
         body: new ReadableStream(),
+        duplex: "half",
+      } as RequestInit);
+      const pending = expect(readMcpBody(request)).rejects.toMatchObject({ status: 408 });
+      await vi.advanceTimersByTimeAsync(15_001);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("stops an open stream once its authority ends, without rechecking every chunk", async () => {
+    vi.useFakeTimers();
+    const complete = vi.fn();
+    let upstreamSignal: AbortSignal | undefined;
+    let push: ((chunk: string) => void) | undefined;
+    const revalidate = vi.fn(async () => {});
+    try {
+      const response = await relayMcpRequest(req(), {
+        ...options(),
+        revalidate,
+        onComplete: complete,
+        fetcher: async (request) => {
+          upstreamSignal = request.signal;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                push = (chunk) => controller.enqueue(new TextEncoder().encode(chunk));
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } }
+          );
+        },
+      });
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      expect(revalidate).toHaveBeenCalledOnce(); // Before the upstream request.
+
+      push!("data: first\n\n");
+      expect(decoder.decode((await reader.read()).value)).toBe("data: first\n\n");
+      push!("data: second\n\n");
+      expect(decoder.decode((await reader.read()).value)).toBe("data: second\n\n");
+      expect(revalidate).toHaveBeenCalledOnce();
+
+      // The turn closes; the next chunk arrives after the interval.
+      revalidate.mockRejectedValue(new McpError("mcp_execution_inactive"));
+      await vi.advanceTimersByTimeAsync(MCP_STREAM_REVALIDATE_INTERVAL_MS);
+      push!("data: after close\n\n");
+      await expect(reader.read()).rejects.toThrow("MCP stream authority ended");
+      expect(revalidate).toHaveBeenCalledTimes(2);
+      expect(upstreamSignal?.aborted).toBe(true);
+      expect(complete).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("rejects a body its deadline cut off even while the clock lags the timer", async () => {
+    // Only the timer is fake, so the wall clock has not reached the deadline when
+    // cancellation resolves the pending read as done.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const request = new Request(target, {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"partial":'));
+          },
+        }),
         duplex: "half",
       } as RequestInit);
       const pending = expect(readMcpBody(request)).rejects.toMatchObject({ status: 408 });

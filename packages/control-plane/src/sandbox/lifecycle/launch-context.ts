@@ -30,7 +30,7 @@ export interface SandboxLaunchContextReader {
 
 export interface McpServerLookup {
   /** A scoped server applies when any member matches; empty for repo-less sessions. */
-  getDecryptedForSession(
+  getForLaunch(
     repositories: Array<{ repoOwner: string; repoName: string }>
   ): Promise<McpServerConfig[]>;
 }
@@ -215,7 +215,7 @@ export class SandboxLaunchContext {
   ): Promise<McpServerConfig[] | undefined> {
     try {
       if (!this.config.mcpServerLookup) return undefined;
-      const servers = await this.config.mcpServerLookup.getDecryptedForSession(
+      const servers = await this.config.mcpServerLookup.getForLaunch(
         repositories.map(({ repoOwner, repoName }) => ({ repoOwner, repoName }))
       );
       this.getLogger().info("MCP servers loaded", {

@@ -246,6 +246,59 @@ export function managedMcpConformance(factory: Factory) {
         ]);
         expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
       }));
+    it("reconnect keeps the working grant until the new consent settles", () =>
+      factory(async (db) => {
+        const f = await fixture(db);
+        const first = await f.connect();
+        const token = await f.service.credential(first);
+        // The user leaves the provider page without finishing.
+        await f.authorize();
+        expect(await f.store.get("alice", f.server.id)).toMatchObject({
+          status: "connected",
+          grant_revision: first.grantRevision,
+        });
+        expect(await f.service.credential(first)).toBe(token);
+        const second = await f.connect("alice", "operator");
+        expect(second.grantRevision).toBeGreaterThan(first.grantRevision);
+        await expect(f.service.credential(first)).rejects.toMatchObject({
+          code: "mcp_context_changed",
+        });
+        expect(f.gateway.access.get(await f.service.credential(second))).toBe("operator");
+      }));
+    it("a consent that fails to publish leaves the existing grant untouched", () =>
+      factory(async (db) => {
+        const f = await fixture(db);
+        const binding = await f.connect();
+        const failing: SqlDatabase = {
+          prepare: (query) => db.prepare(query),
+          batch: async () => {
+            throw new Error("publication failed");
+          },
+        };
+        const start = () =>
+          new McpOAuthService(new McpConnectionStore(failing, f.key), f.destination, (request) =>
+            f.gateway.fetch(request)
+          ).start(
+            "alice",
+            "browser-alice",
+            f.server,
+            "https://app.fixture.test/api/mcp-connections/oauth/callback"
+          );
+        const connected = await f.store.get("alice", f.server.id);
+        await expect(start()).rejects.toThrow("publication failed");
+        expect(await f.store.get("alice", f.server.id)).toEqual(connected);
+        await f.service.credential(binding);
+        // A grant the new client cannot use is replaced only together with publication.
+        await db
+          .prepare(
+            "UPDATE mcp_connections SET client_id = 'retired-client' WHERE owner_id = 'alice'"
+          )
+          .run();
+        const stale = await f.store.get("alice", f.server.id);
+        await expect(start()).rejects.toThrow("publication failed");
+        expect(await f.store.get("alice", f.server.id)).toEqual(stale);
+        expect(await db.prepare("SELECT * FROM mcp_oauth_transactions").first()).toBeNull();
+      }));
     it("disconnect prevents callback settlement after code consumption", () =>
       factory(async (db) => {
         const f = await fixture(db);

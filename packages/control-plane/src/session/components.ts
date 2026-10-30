@@ -735,7 +735,8 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     participantRepository,
     sessionCoreRepository,
     messenger,
-    messageService
+    messageService,
+    (canonicalUserId) => mcpContext.mayDelegateFor(canonicalUserId)
   );
   const memoryPromptContextHandler = new MemoryPromptContextHandler(
     messageRepository,
@@ -1162,7 +1163,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
 
   const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
   const mcpServerLookup: McpServerLookup = {
-    getDecryptedForSession: (repositories) =>
+    getForLaunch: (repositories) =>
       mcpStore.getForLaunch(repositories, env.MANAGED_MCP_ROUTING_ENABLED === "true"),
   };
 

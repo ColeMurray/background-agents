@@ -280,7 +280,7 @@ describe("McpServerStore", () => {
       const { db } = createFakeD1({ allResults: [malformedEnvRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
 
-      const [result] = await store.getDecryptedForSession([]);
+      const [result] = await store.getForLaunch([]);
 
       expect(result.env).toEqual({});
     });
@@ -290,7 +290,7 @@ describe("McpServerStore", () => {
       const { db } = createFakeD1({ allResults: [mixedEnvRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
 
-      const [result] = await store.getDecryptedForSession([]);
+      const [result] = await store.getForLaunch([]);
 
       expect(result.env).toEqual({ TOKEN: "valid" });
     });
@@ -549,11 +549,11 @@ describe("McpServerStore", () => {
     });
   });
 
-  describe("getDecryptedForSession()", () => {
+  describe("getForLaunch()", () => {
     it("returns global and matching repo-scoped servers", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([
+      const results = await store.getForLaunch([
         { repoOwner: "carboncopyinc", repoName: "habakkuk" },
       ]);
       expect(results).toHaveLength(2); // global + matching scoped
@@ -562,9 +562,7 @@ describe("McpServerStore", () => {
     it("excludes servers scoped to different repos", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([
-        { repoOwner: "bencered", repoName: "dom" },
-      ]);
+      const results = await store.getForLaunch([{ repoOwner: "bencered", repoName: "dom" }]);
       expect(results).toHaveLength(1); // only the global server
       expect(results[0].name).toBe("playwright");
     });
@@ -572,7 +570,7 @@ describe("McpServerStore", () => {
     it("matches scoped servers through any member of a multi-repo session", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([
+      const results = await store.getForLaunch([
         { repoOwner: "bencered", repoName: "dom" },
         { repoOwner: "carboncopyinc", repoName: "habakkuk" },
       ]);
@@ -582,7 +580,7 @@ describe("McpServerStore", () => {
     it("returns only unscoped servers for repo-less sessions", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow, remoteRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([]);
+      const results = await store.getForLaunch([]);
       expect(results).toHaveLength(1);
       expect(results[0].name).toBe("playwright");
     });
@@ -590,7 +588,7 @@ describe("McpServerStore", () => {
     it("returns headers (not env) for remote servers", async () => {
       const { db } = createFakeD1({ allResults: [remoteRowWithHeaders] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([
+      const results = await store.getForLaunch([
         { repoOwner: "carboncopyinc", repoName: "habakkuk" },
       ]);
       expect(results).toHaveLength(1);
@@ -606,7 +604,7 @@ describe("McpServerStore", () => {
     it("returns env (not headers) for local servers", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+      const results = await store.getForLaunch([{ repoOwner: "any", repoName: "repo" }]);
       expect(results).toHaveLength(1);
       const local = results[0];
       expect(local.type).toBe("local");
@@ -620,7 +618,7 @@ describe("McpServerStore", () => {
       const { db } = createFakeD1({ allResults: [emptyEnvRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
 
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+      const results = await store.getForLaunch([{ repoOwner: "any", repoName: "repo" }]);
 
       expect(results).toHaveLength(1);
       expect(results[0].env ?? {}).toEqual({});
@@ -638,7 +636,7 @@ describe("McpServerStore", () => {
       const { db } = createFakeD1({ allResults: [nullEnvRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
 
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+      const results = await store.getForLaunch([{ repoOwner: "any", repoName: "repo" }]);
 
       expect(results).toHaveLength(1);
       expect(results[0].env ?? {}).toEqual({});
@@ -708,11 +706,11 @@ describe("McpServerStore", () => {
     });
   });
 
-  describe("encryption / decryption (via getDecryptedForSession)", () => {
+  describe("encryption / decryption (via getForLaunch)", () => {
     it("falls back to plaintext when decryption fails (pre-encryption row)", async () => {
       const { db } = createFakeD1({ allResults: [sampleRow] });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+      const results = await store.getForLaunch([{ repoOwner: "any", repoName: "repo" }]);
       expect(results[0].env).toEqual({ DEBUG: "1" });
     });
 
@@ -721,7 +719,7 @@ describe("McpServerStore", () => {
         allResults: [{ ...sampleRow, env: "notjson_notcipher" }],
       });
       const store = new McpServerStore(db, TEST_ENCRYPTION_KEY);
-      const results = await store.getDecryptedForSession([{ repoOwner: "any", repoName: "repo" }]);
+      const results = await store.getForLaunch([{ repoOwner: "any", repoName: "repo" }]);
       expect(results[0].env).toEqual({});
     });
   });

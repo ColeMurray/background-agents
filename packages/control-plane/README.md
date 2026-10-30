@@ -85,13 +85,15 @@ in force. The endpoint uses the same signed web-service plus browser-session aut
 human settings operations; a bare service credential cannot invoke it.
 
 Consent is ephemeral: each connection retains at most its current pending/claimed attempt after
-publication. Settlement, failure, supersession, and disconnect delete verifier material. Expired,
-logged-out, obsolete, and pre-existing terminal history is lazily pruned when that owner lists,
-starts, or redeems connections; idle expired rows need no periodic job to bound repeated attempts.
-Changing authentication configuration invalidates grants, but metadata-only saves and reordered
-credential maps or equivalent repository scopes do not. OAuth services require an explicit current
-origin policy for discovery, cached clients, callbacks, and access-token/refresh use. Removing an
-origin blocks pending callbacks before token exchange as well as new consent.
+publication. Settlement, failure, supersession, and disconnect delete verifier material.
+Reconnecting keeps a working grant usable until the new consent settles, which replaces it with a
+new grant revision; an abandoned or failed attempt leaves it in place. Expired, logged-out,
+obsolete, and pre-existing terminal history is lazily pruned when that owner lists, starts, or
+redeems connections; idle expired rows need no periodic job to bound repeated attempts. Changing
+authentication configuration invalidates grants, but metadata-only saves and reordered credential
+maps or equivalent repository scopes do not. OAuth services require an explicit current origin
+policy for discovery, cached clients, callbacks, and access-token/refresh use. Removing an origin
+blocks pending callbacks before token exchange as well as new consent.
 
 Personal delegation is supported by the OpenCode and Claude harnesses. Codex reports no personal MCP
 capability and omits managed personal connectors from native configuration; public and service

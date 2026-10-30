@@ -112,6 +112,20 @@ export class SessionMcpContext {
       bridgeInstanceId ?? null
     );
   }
+  /**
+   * The multiplayer fence: unless multiplayer delegation is on, a session in which
+   * another person has an eligible prompt delegates for nobody. A child spawned
+   * here inherits the same answer, so spawning cannot step around the fence.
+   */
+  mayDelegateFor(canonicalUserId: string): boolean {
+    if (this.env.MCP_MULTIPLAYER_ENABLED === "true") return true;
+    return !this.sql
+      .exec(
+        "SELECT id FROM messages WHERE mcp_eligible = 1 AND admitted_canonical_user_id IS NOT NULL AND admitted_canonical_user_id != ? LIMIT 1",
+        canonicalUserId
+      )
+      .toArray().length;
+  }
   private launch(): LaunchBinding[] {
     const row = this.sql.exec("SELECT mcp_servers FROM sandbox LIMIT 1").toArray()[0] as
       { mcp_servers: string | null } | undefined;
@@ -166,15 +180,8 @@ export class SessionMcpContext {
           !message.admitted_canonical_user_id
         )
           throw new McpError("mcp_execution_inactive");
-        if (this.env.MCP_MULTIPLAYER_ENABLED !== "true") {
-          const other = this.sql
-            .exec(
-              "SELECT id FROM messages WHERE mcp_eligible = 1 AND admitted_canonical_user_id IS NOT NULL AND admitted_canonical_user_id != ? LIMIT 1",
-              message.admitted_canonical_user_id
-            )
-            .toArray();
-          if (other.length) throw new McpError("mcp_unsupported");
-        }
+        if (!this.mayDelegateFor(message.admitted_canonical_user_id))
+          throw new McpError("mcp_unsupported");
         userAccess ??= assertMcpUserAccess(
           this.db,
           this.env,

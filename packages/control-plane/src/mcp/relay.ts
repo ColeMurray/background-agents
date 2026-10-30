@@ -5,6 +5,8 @@ import type { McpFetch } from "./oauth";
 export const MCP_MAX_BODY_BYTES = 1024 * 1024;
 export const MCP_UPSTREAM_HEADERS_TIMEOUT_MS = 5 * 60_000;
 export const MCP_STREAM_TIMEOUT_MS = 30 * 60_000;
+/** How stale a stream's authority may be when it forwards the next chunk. */
+export const MCP_STREAM_REVALIDATE_INTERVAL_MS = 10_000;
 export const MCP_REQUEST_BODY_TIMEOUT_MS = 15_000;
 const REQUEST_HEADERS = [
   "accept",
@@ -25,16 +27,19 @@ export async function readMcpBody(
     throw new McpError("mcp_request_too_large", 413);
   if (!request.body) return undefined;
   const reader = request.body.getReader();
+  // The cancelled read resolves as done, so only this flag tells a cut-off body
+  // from a complete one; a second clock reading can lag the timer.
+  let timedOut = false;
   const timeout = setTimeout(() => {
+    timedOut = true;
     void reader.cancel(new Error("MCP body deadline exceeded")).catch(() => {});
   }, MCP_REQUEST_BODY_TIMEOUT_MS);
-  const deadline = Date.now() + MCP_REQUEST_BODY_TIMEOUT_MS;
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (Date.now() >= deadline) throw new McpError("mcp_unavailable", 408);
+      if (timedOut) throw new McpError("mcp_unavailable", 408);
       if (done) break;
       size += value.length;
       if (size > limit) throw new McpError("mcp_request_too_large", 413);
@@ -175,18 +180,39 @@ export async function relayMcpRequest(
   }
   timer = setTimeout(onAbort, MCP_STREAM_TIMEOUT_MS);
   const reader = upstream.body.getReader();
+  let validatedAt = Date.now();
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      let value: Uint8Array;
       try {
-        const { done, value } = await reader.read();
-        if (done) {
+        const read = await reader.read();
+        if (read.done) {
           cleanup();
           controller.close();
-        } else controller.enqueue(value);
+          return;
+        }
+        value = read.value;
       } catch {
         cleanup();
         controller.error(new Error("MCP stream interrupted; operation outcome may be unknown"));
+        return;
       }
+      // Authority can end while a stream stays open: the turn closes, the grant is
+      // revoked, access is removed. Recheck before forwarding a chunk that arrives
+      // after the interval, including one that arrives after a long blocked read.
+      if (Date.now() - validatedAt >= MCP_STREAM_REVALIDATE_INTERVAL_MS) {
+        try {
+          await options.revalidate();
+          validatedAt = Date.now();
+        } catch {
+          abort.abort();
+          cleanup();
+          await reader.cancel().catch(() => {});
+          controller.error(new Error("MCP stream authority ended"));
+          return;
+        }
+      }
+      controller.enqueue(value);
     },
     async cancel() {
       abort.abort();
