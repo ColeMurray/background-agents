@@ -81,11 +81,22 @@ function refusalHint(status: number, body: string): string | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { code, permission } = parsed as { code?: unknown; permission?: unknown };
+  const { code, permission, reason_code } = parsed as {
+    code?: unknown;
+    permission?: unknown;
+    reason_code?: unknown;
+  };
   if (code === "permission_required" && typeof permission === "string") {
     return (
       `This token was not granted ${permission}, or its owner no longer holds it. ` +
       "Issue a token that includes it under Settings > Access tokens."
+    );
+  }
+  if (reason_code === "missing_permission") {
+    // Resource routes refuse without naming the permission; the tool description names it.
+    return (
+      "This token lacks a permission this action needs, or its owner no longer holds it. " +
+      "The tool's description says which; issue a token that includes it under Settings > Access tokens."
     );
   }
   if (code === "personal_access_token_not_accepted") {

@@ -213,6 +213,20 @@ describe("ControlPlaneClient", () => {
     await expect(client.get("/sessions")).rejects.toThrow(/mistyped, revoked, or expired/);
   });
 
+  it("points at the tool's grant when a resource route refuses for a missing permission", async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
+        { error: "Forbidden", code: "automation_action_denied", reason_code: "missing_permission" },
+        403
+      )
+    );
+    const client = new ControlPlaneClient({ baseUrl: BASE_URL, token: TOKEN });
+
+    await expect(client.post("/automations/a1/trigger", {})).rejects.toThrow(
+      /lacks a permission this action needs/
+    );
+  });
+
   it("names the permission a token was not granted", async () => {
     fetchMock.mockImplementation(async () =>
       jsonResponse(
