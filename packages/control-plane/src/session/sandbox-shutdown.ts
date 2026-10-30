@@ -23,7 +23,7 @@ import type {
 import { ShutdownRecoveryRejectedError } from "../sandbox/lifecycle/ports";
 import type { ShutdownLifecyclePolicy } from "../sandbox/lifecycle/shutdown-policy";
 import { DEFAULT_HEARTBEAT_CONFIG, isDeadSandboxStatus } from "../sandbox/lifecycle/decisions";
-import { interruptionMessage } from "./interruption-messages";
+import { interruptionMessage, SANDBOX_REPLACED_ERROR } from "./interruption-messages";
 import { legacyShutdownRecord } from "./legacy-shutdown-record";
 import type { SandboxShutdownStorage } from "./sandbox-ports";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -153,7 +153,12 @@ export class SandboxShutdownCoordinator {
     this.broadcast({ type: "sandbox_preservation", preservation: this.project(state) });
   }
 
-  /** Atomically reserves the sandbox row and shutdown ownership before provider work. */
+  /**
+   * Atomically reserves the sandbox row and shutdown ownership before provider
+   * work. A reservation under a new sandbox ID (a spawn or snapshot restore)
+   * revokes the runtime a processing prompt was dispatched to, so it fails
+   * that prompt in the same transaction; an in-place resume keeps both.
+   */
   reserveStartup(
     createdAt: number,
     lifecyclePolicy: ShutdownLifecyclePolicy,
@@ -165,7 +170,8 @@ export class SandboxShutdownCoordinator {
       (previous.phase === "saved" ||
         (previous.phase === "restoring" && previous.restoreInvoked !== true));
     let next!: ShutdownRecord;
-    this.deps.session.transaction(() => {
+    const failure = this.deps.session.transaction(() => {
+      const replacedSandboxId = this.deps.sandbox.getSandbox()?.modal_sandbox_id;
       persistSandboxRow();
       const row = this.deps.sandbox.getSandbox();
       if (!row?.modal_sandbox_id || row.created_at !== createdAt)
@@ -186,9 +192,21 @@ export class SandboxShutdownCoordinator {
         restoreInvoked: restoring ? false : undefined,
       };
       this.deps.store.write(next);
+      if (row.modal_sandbox_id === replacedSandboxId) return null;
+      const message = this.deps.messages.getProcessingMessage();
+      return message
+        ? this.deps.failures.record(message.id, SANDBOX_REPLACED_ERROR, this.now(), "processing")
+        : null;
     });
     this.activeRestoreGeneration = restoring ? next.generation : null;
     this.announce(next);
+    if (failure) {
+      this.deps.failures.deliver(failure);
+      this.broadcast({ type: "processing_status", isProcessing: false });
+      this.deps.background.submit(() => this.deps.reconcileStatusFromMessages(), {
+        name: "sandbox.replaced_prompt_status",
+      });
+    }
     if (next.lifecyclePolicy === "legacy") {
       this.deps.log?.warn("Restoring existing sandbox under legacy lifecycle policy", {
         event: "sandbox.preservation_legacy_lifecycle",

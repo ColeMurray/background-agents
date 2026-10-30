@@ -360,13 +360,6 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
   recordWarning?: (message: string, eventId: string) => void;
   /** Pump the message queue once a deferred connect-timeout re-drive may proceed. */
   resumeQueuedWork?: () => Promise<void>;
-  /**
-   * A spawn or snapshot restore reserved a new sandbox instance. The
-   * reservation revoked the previous instance's credentials and socket, so a
-   * prompt it was running can never report a result. An in-place resume keeps
-   * its bridge and does not call this.
-   */
-  onInstanceReplaced?: () => Promise<void>;
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
@@ -746,15 +739,6 @@ export class SandboxLifecycleManager
     const authTokenHash = await hashToken(sandboxAuthToken);
     if (!this.storage.updateSandboxAuthTokenHash(expectedSandboxId, authTokenHash)) {
       throw new SpawnSupersededError();
-    }
-    // The launch goes ahead regardless: the reservation is already committed.
-    try {
-      await this.config.onInstanceReplaced?.();
-    } catch (error) {
-      this.log.error("Failed to settle work of the replaced sandbox instance", {
-        event: "sandbox.instance_replaced_settle_failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
     return { sandboxAuthToken, expectedSandboxId };
   }

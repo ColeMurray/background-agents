@@ -5,6 +5,7 @@ import { COMPATIBLE_RUNTIME_VERSION } from "../../src/image-builds/test-helpers"
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
 import type { SandboxProvider } from "../../src/sandbox/provider";
 import { SANDBOX_REPLACED_ERROR } from "../../src/session/interruption-messages";
+import { MessageFailureService } from "../../src/session/message-failure-service";
 import { cleanD1Tables } from "./cleanup";
 import {
   closeWebSocket,
@@ -295,6 +296,36 @@ describe("a sandbox replaced while a prompt is processing", () => {
     } finally {
       await closeWebSocket(ws);
     }
+  });
+
+  it("does not revoke the sandbox when its processing prompt cannot be settled", async () => {
+    const name = `replacement-unsettled-${Date.now()}`;
+    const stub = await seedInterruptedTurn(name, { status: "stale", heartbeatAgeMs: 120_000 });
+    const identity = () =>
+      queryDO(
+        stub,
+        `SELECT modal_sandbox_id, created_at, status, auth_token_hash, active_socket_id
+         FROM sandbox`
+      );
+    const before = await identity();
+    const launches = await runInSessionDO(stub, async (instance: SessionDO) => {
+      const { sandboxProvider, lifecycleManager } = componentsOf(instance);
+      vi.spyOn(MessageFailureService.prototype, "record").mockImplementationOnce(() => {
+        throw new Error("storage unavailable");
+      });
+      const launches = stubProviderLaunches(sandboxProvider);
+      await lifecycleManager.spawnSandbox();
+      return launches;
+    });
+
+    // The reservation rolled back: the old identity and credentials stand.
+    expect(launches).toEqual([]);
+    expect(before).toEqual([expect.objectContaining({ modal_sandbox_id: OLD_SANDBOX_ID })]);
+    expect(await identity()).toEqual(before);
+    expect(await messageStates(stub)).toEqual([
+      { id: "msg-running", status: "processing", error_message: null },
+      { id: "msg-queued", status: "pending", error_message: null },
+    ]);
   });
 
   it("leaves the processing prompt to the bridge an in-place resume keeps", async () => {
