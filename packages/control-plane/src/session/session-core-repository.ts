@@ -186,6 +186,24 @@ export class SessionCoreRepository {
     );
   }
 
+  cancelSession(sessionId: string, updatedAt: number): void {
+    this.sql.exec(
+      `UPDATE session
+       SET status = 'cancelled', cancelled_at = ?, updated_at = ?, status_revision = status_revision + 1
+       WHERE id = ?`,
+      updatedAt,
+      updatedAt,
+      sessionId
+    );
+  }
+
+  hasBeenCancelled(): boolean {
+    const result = this.sql.exec(
+      `SELECT 1 AS present FROM session WHERE cancelled_at IS NOT NULL LIMIT 1`
+    );
+    return result.toArray().length > 0;
+  }
+
   addSessionCost(cost: number, updatedAt: number): number {
     const row = this.sql
       .exec(

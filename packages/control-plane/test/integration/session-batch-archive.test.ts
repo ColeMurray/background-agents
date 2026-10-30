@@ -92,7 +92,7 @@ describe("session batch archive", () => {
     expect(sessionBatchArchiveResponseSchema.parse(await response.json())).toEqual({
       results: [
         { sessionId: ready.sessionName, outcome: "archived" },
-        { sessionId: cancelled.sessionName, outcome: "skipped_cancelled" },
+        { sessionId: cancelled.sessionName, outcome: "archived" },
         { sessionId: queued.sessionName, outcome: "skipped_queued_work" },
       ],
       skipped: [{ sessionId: "missing", reason: "not_found" }],

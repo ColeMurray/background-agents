@@ -385,6 +385,32 @@ describe("applyMigrations", () => {
     }
   });
 
+  it("adds session.cancelled_at for fresh and migrated DOs and backfills cancelled sessions", () => {
+    expect(SCHEMA_SQL).toContain("cancelled_at INTEGER");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 58);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE session (id TEXT PRIMARY KEY, status TEXT, updated_at INTEGER)");
+      db.exec(
+        "INSERT INTO session VALUES ('cancelled', 'cancelled', 1000), ('done', 'completed', 2000)"
+      );
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("SELECT id, cancelled_at FROM session ORDER BY id").all()).toEqual([
+        { id: "cancelled", cancelled_at: 1000 },
+        { id: "done", cancelled_at: null },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("removes persisted hook output tails without touching malformed event data", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 53);
     expect(typeof migration?.run).toBe("function");

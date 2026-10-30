@@ -17,7 +17,6 @@ export type SessionBatchArchiveRequest = z.infer<typeof sessionBatchArchiveReque
 export const sessionArchiveOutcomeSchema = z.enum([
   "archived",
   "already_archived",
-  "skipped_cancelled",
   "skipped_queued_work",
 ]);
 
@@ -26,7 +25,6 @@ export type SessionArchiveOutcome = z.infer<typeof sessionArchiveOutcomeSchema>;
 export const SESSION_ARCHIVE_HTTP_STATUS = {
   archived: 200,
   already_archived: 200,
-  skipped_cancelled: 409,
   skipped_queued_work: 409,
 } as const satisfies Record<SessionArchiveOutcome, number>;
 
