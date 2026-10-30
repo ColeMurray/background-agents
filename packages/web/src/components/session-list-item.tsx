@@ -463,7 +463,7 @@ export function ChildSessionListItem({
             <button
               type="button"
               aria-label="Session actions"
-              className={`absolute right-0 top-0 h-10 w-10 items-center justify-center text-muted-foreground ${
+              className={`absolute inset-y-0 right-0 my-auto h-10 w-10 items-center justify-center text-muted-foreground ${
                 isMobile
                   ? "flex"
                   : "invisible flex opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 data-[state=open]:visible data-[state=open]:opacity-100"
