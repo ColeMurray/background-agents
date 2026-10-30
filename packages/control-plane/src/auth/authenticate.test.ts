@@ -20,6 +20,7 @@ const SECRETS = {
   SERVICE_AUTH_SECRET_LINEAR_BOT: "linear-secret",
   SERVICE_AUTH_SECRET_EXPORT: "export-secret",
   SERVICE_AUTH_EXPORT_ACTOR: "github:42",
+  SERVICE_AUTH_EXPORT_USER_ID: "user-42",
 };
 
 const SERVICE_SECRET: Record<ServiceName, string> = {
@@ -291,33 +292,64 @@ describe("authenticate — service credentials", () => {
     }
   });
 
-  it("lets the export service act only as its pinned actor", async () => {
+  describe("export service", () => {
     const unauthorized = { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
-    const pinned = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
-    const ctx = createCtx(EXPORT_ACTOR_IDENTITY);
-    expect(isAuthError(await authenticate(pinned, createEnv(), ctx))).toBe(false);
 
-    for (const actor of ["github:43", undefined]) {
-      const request = await signedRequest({ service: "export", method: "GET", actor });
+    it("acts as its pinned actor and that actor's user", async () => {
+      const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
       const result = await authenticate(request, createEnv(), createCtx(EXPORT_ACTOR_IDENTITY));
-      expect(result, `export asserting ${actor}`).toEqual(unauthorized);
-    }
-  });
+      if (isAuthError(result)) throw new Error(`unexpected ${result.status}`);
+      expect(result.principal).toEqual({
+        kind: "service",
+        service: "export",
+        actor: {
+          provider: "github",
+          providerUserId: "42",
+          canonicalUserId: "user-42",
+          participantUserId: "github:42",
+        },
+      });
+    });
 
-  it("refuses the export service when its pinned actor has no stored identity", async () => {
-    const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
-    const result = await authenticate(request, createEnv(), createCtx(null));
-    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
-  });
+    it("refuses any other actor, or none", async () => {
+      for (const actor of ["github:43", "slack:U42", undefined]) {
+        const request = await signedRequest({ service: "export", method: "GET", actor });
+        const result = await authenticate(request, createEnv(), createCtx(EXPORT_ACTOR_IDENTITY));
+        expect(result, `export asserting ${actor}`).toEqual(unauthorized);
+      }
+    });
 
-  it("refuses the export service when no actor is pinned", async () => {
-    const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
-    const result = await authenticate(
-      request,
-      createEnv({ SERVICE_AUTH_EXPORT_ACTOR: undefined }),
-      createCtx(EXPORT_ACTOR_IDENTITY)
-    );
-    expect(result).toEqual({ reason: "Unauthorized", status: 401, failedScheme: "per-service" });
+    it("refuses a pinned actor with no stored identity", async () => {
+      const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
+      const result = await authenticate(request, createEnv(), createCtx(null));
+      expect(result).toEqual(unauthorized);
+    });
+
+    it("refuses a pinned actor whose identity now belongs to another user", async () => {
+      // A user merge re-points the loser's identities to the survivor.
+      const request = await signedRequest({ service: "export", method: "GET", actor: "github:42" });
+      const merged = { ...EXPORT_ACTOR_IDENTITY, user_id: "survivor" };
+      const result = await authenticate(request, createEnv(), createCtx(merged));
+      expect(result).toEqual(unauthorized);
+    });
+
+    it("treats a partly configured service as disabled: 401, not 500", async () => {
+      for (const unset of [
+        "SERVICE_AUTH_SECRET_EXPORT",
+        "SERVICE_AUTH_EXPORT_ACTOR",
+        "SERVICE_AUTH_EXPORT_USER_ID",
+      ] as const) {
+        const request = await signedRequest({
+          service: "export",
+          method: "GET",
+          actor: "github:42",
+        });
+        const ctx = createCtx(EXPORT_ACTOR_IDENTITY);
+        const result = await authenticate(request, createEnv({ [unset]: undefined }), ctx);
+        expect(result, unset).toEqual(unauthorized);
+        expect(ctx.db.prepare, unset).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("denies actor assertions outside the service's namespace", async () => {

@@ -6,7 +6,7 @@
  * with its own.
  */
 
-import { serviceAuthSecret, type ServiceKeyEnv } from "./config";
+import { serviceCredential, type ServiceKeyEnv } from "./config";
 
 /** The bots the CP delivers callbacks to — also the only services that may attach a `callbackContext`. */
 export const CALLBACK_DESTINATIONS = ["slack-bot", "linear-bot"] as const;
@@ -18,5 +18,5 @@ export function callbackSigningSecret(
   env: CallbackSigningEnv,
   destination: CallbackDestination
 ): string | undefined {
-  return serviceAuthSecret(env, destination);
+  return serviceCredential(env, destination)?.secret;
 }
