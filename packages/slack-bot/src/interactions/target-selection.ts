@@ -8,6 +8,7 @@ import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
+import { armSoloThread } from "../solo-threads";
 import { createLogger } from "../logger";
 import { resolveChannelBinding } from "../channel-bindings";
 import { lookupThreadSession, THREAD_CLOSED_MESSAGE } from "../sessions/thread-session-store";
@@ -318,10 +319,16 @@ export async function handleTargetSelection(
   }
   await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
+    const soloThreadHint = await armSoloThread(
+      env,
+      { channel, threadTs: threadKey, ownerUserId: userId },
+      traceId
+    );
     const launched = buildWorkingMessage({
       sessionId: sessionResult.sessionId,
       webAppUrl: env.WEB_APP_URL,
       sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+      soloThreadHint,
     });
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
       blocks: launched.blocks,

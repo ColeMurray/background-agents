@@ -7,6 +7,9 @@ import type { BackgroundTaskScheduler, Env } from "../types";
 
 const WORKING_MESSAGE_TEXT = "Starting work...";
 
+const SOLO_THREAD_HINT =
+  "You can reply without mentioning me while you are the only person in this thread.";
+
 export function scheduleStartingStatus(
   scheduleBackground: BackgroundTaskScheduler,
   env: Env,
@@ -83,8 +86,18 @@ export interface WorkingMessage {
  * blocks say has to be said there too.
  */
 export function buildWorkingMessage(
-  options: { sessionId?: string; webAppUrl?: string; sessionDefaultsNotice?: string } = {}
+  options: {
+    sessionId?: string;
+    webAppUrl?: string;
+    sessionDefaultsNotice?: string;
+    /** The thread is armed as a solo thread, so its owner may reply without a mention. */
+    soloThreadHint?: boolean;
+  } = {}
 ): WorkingMessage {
+  const contextLines = [
+    options.sessionDefaultsNotice,
+    options.soloThreadHint ? SOLO_THREAD_HINT : undefined,
+  ].filter((line) => line !== undefined);
   const blocks: Array<Record<string, unknown>> = [
     {
       type: "section",
@@ -94,13 +107,10 @@ export function buildWorkingMessage(
       },
     },
   ];
-  // A context line on the acknowledgement that is already in the thread, so a
-  // non-default session is visible without adding a message of its own.
-  if (options.sessionDefaultsNotice) {
-    blocks.push({
-      type: "context",
-      elements: [{ type: "mrkdwn", text: options.sessionDefaultsNotice }],
-    });
+  // Context lines on the acknowledgement that is already in the thread, so a
+  // non-default session or a solo thread is visible without a message of its own.
+  for (const line of contextLines) {
+    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: line }] });
   }
   if (options.sessionId && options.webAppUrl) {
     blocks.push({
@@ -115,8 +125,5 @@ export function buildWorkingMessage(
       ],
     });
   }
-  const text = options.sessionDefaultsNotice
-    ? `${WORKING_MESSAGE_TEXT}\n${options.sessionDefaultsNotice}`
-    : WORKING_MESSAGE_TEXT;
-  return { text, blocks };
+  return { text: [WORKING_MESSAGE_TEXT, ...contextLines].join("\n"), blocks };
 }

@@ -21,7 +21,7 @@ import {
   type SlackMessageFile,
   type SlackThreadMessage,
 } from "@open-inspect/shared/slack";
-import { mentionsUser, startsWithUserMention } from "./dm-utils";
+import { isDirectMessageChannel, mentionsUser, startsWithUserMention } from "./dm-utils";
 import { createLogger } from "./logger";
 import { formatSoloThreadEndedNotice } from "./messages/blocks";
 import { storeSoloThread, type SoloThreadRecord } from "./sessions/solo-thread-store";
@@ -84,6 +84,39 @@ export async function readThreadParticipation(
     });
   }
   return participation;
+}
+
+/**
+ * Arm a channel thread for the person whose mention just launched its session,
+ * when the thread's history shows they are its only person. Even a thread the
+ * mention started is read: another person can reply while the session starts,
+ * and their reply found no record to block. Best effort: any failure leaves the
+ * thread unarmed. Returns whether it armed, and the caller shows the solo hint
+ * exactly then, so no thread is armed without its owner being told.
+ */
+export async function armSoloThread(
+  env: Env,
+  launch: { channel: string; threadTs: string; ownerUserId: string },
+  traceId?: string
+): Promise<boolean> {
+  const { channel, threadTs, ownerUserId } = launch;
+  if (isDirectMessageChannel(channel)) return false;
+  try {
+    if ((await readThreadParticipation(env, channel, threadTs, ownerUserId, traceId)) !== "solo") {
+      return false;
+    }
+    await storeSoloThread(env, channel, threadTs, { kind: "owned", ownerUserId });
+    log.info("solo_thread.armed", { trace_id: traceId, channel, thread_ts: threadTs });
+    return true;
+  } catch (error) {
+    log.error("solo_thread.arm_failed", {
+      trace_id: traceId,
+      channel,
+      thread_ts: threadTs,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return false;
+  }
 }
 
 /**

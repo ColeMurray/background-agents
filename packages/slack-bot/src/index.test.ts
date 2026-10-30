@@ -4679,12 +4679,168 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
     return env.SLACK_KV.get(SOLO_KEY, "json");
   }
 
+  function launchedAcks(slackFetch: ReturnType<typeof mockSlackFetch>) {
+    return slackApiBodies(slackFetch, "chat.update").map((body) => body.text);
+  }
+
   /** handleChannelTrigger looks up watched channels once a message passes its own filters. */
   function automationLookups(env: ReturnType<typeof makeEnv>) {
     return env.CONTROL_PLANE.fetch.mock.calls.filter(([input]) =>
       String(input).includes("/watched-channels")
     );
   }
+
+  describe("arming at launch", () => {
+    it.each(["<@UBOT> fix the auth tests", "hey team, can <@UBOT> fix the auth tests?"])(
+      "arms a top-level mention once the thread shows only its author: %j",
+      async (text) => {
+        const { env, slackFetch } = setup({ threadMessages: [{ ...rootMessage, text }, botReply] });
+        await send(env, mention({ text }));
+        expect(await soloRecord(env)).toEqual(OWNED);
+        expect(threadReads(slackFetch)).toBe(1);
+        expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([
+          expect.objectContaining({ text: "Starting work..." }),
+        ]);
+        expect(launchedAcks(slackFetch)).toEqual([`Starting work...\n${HINT}`]);
+      }
+    );
+
+    it("does not arm a top-level mention when another person replied before launch", async () => {
+      const { env, slackFetch } = setup({ threadMessages: [rootMessage, thirdReply] });
+      await send(env, mention());
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toBeNull();
+      expect(launchedAcks(slackFetch)).toEqual(["Starting work..."]);
+    });
+
+    it("arms a reply mention whose thread has only its owner, then takes an untagged reply", async () => {
+      const { env } = setup({
+        threadMessages: [
+          { ts: ROOT_TS, user: OWNER, text: "the auth tests are flaky" },
+          ownerReply,
+        ],
+      });
+      await send(env, mention({ text: "<@UBOT> look into it", ts: "222.333", thread_ts: ROOT_TS }));
+      expect(await soloRecord(env)).toEqual(OWNED);
+      expect(launchedAcks(current.slackFetch)).toEqual([`Starting work...\n${HINT}`]);
+
+      await send(env, threadReply());
+      const prompts = promptFetchBodies(env.CONTROL_PLANE.fetch);
+      expect(prompts).toHaveLength(2);
+      expect(String(prompts[1].content)).toContain("[U123]: also cover the login page");
+    });
+
+    it.each([
+      [
+        "another person posted before the mention",
+        {
+          threadMessages: [
+            { ts: ROOT_TS, user: THIRD, text: "anyone know why CI is red?" },
+            { ts: "222.333", user: OWNER, text: "<@UBOT> look into it" },
+          ],
+        },
+      ],
+      ["the history cannot be read", { threadRepliesError: "ratelimited" }],
+    ])("does not arm a reply mention when %s", async (_label, slackOptions) => {
+      const { env, slackFetch } = setup(slackOptions);
+      await send(env, mention({ text: "<@UBOT> look into it", ts: "222.333", thread_ts: ROOT_TS }));
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toBeNull();
+      expect(launchedAcks(slackFetch)).toEqual(["Starting work..."]);
+
+      await send(env, threadReply());
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toHaveLength(1);
+      expect(automationLookups(env)).toHaveLength(1);
+    });
+
+    it("does not arm a direct message", async () => {
+      const { env, slackFetch } = setup({
+        threadMessages: [{ ts: "444.555", user: OWNER, text: "fix the auth tests" }],
+      });
+      await send(env, {
+        type: "message",
+        text: "fix the auth tests",
+        user: OWNER,
+        channel: "D123",
+        ts: "444.555",
+        channel_type: "im",
+      });
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(kvPut(env).mock.calls.filter(([key]) => key.startsWith("solo-thread:"))).toEqual([]);
+      expect(threadReads(slackFetch)).toBe(0);
+      expect(launchedAcks(slackFetch)).toEqual(["Starting work..."]);
+    });
+
+    it("shows no hint when the thread cannot be armed", async () => {
+      const { env, slackFetch } = setup({ threadMessages: [rootMessage] });
+      failSoloThreadStores(env);
+      await send(env, mention());
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toBeNull();
+      expect(launchedAcks(slackFetch)).toEqual(["Starting work..."]);
+    });
+
+    it("does not arm when the acknowledgement could not be posted", async () => {
+      const { env, slackFetch } = setup({ threadMessages: [rootMessage] });
+      const respond = slackFetch.getMockImplementation()!;
+      slackFetch.mockImplementation(async (input, init) =>
+        String(input).includes("chat.postMessage")
+          ? Response.json({ ok: false, error: "not_in_channel" })
+          : respond(input, init)
+      );
+      await send(env, mention());
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(threadReads(slackFetch)).toBe(0);
+      expect(await soloRecord(env)).toBeNull();
+    });
+
+    async function chooseTarget(env: ReturnType<typeof makeEnv>) {
+      await env.SLACK_KV.put(
+        `pending:C123:${ROOT_TS}`,
+        JSON.stringify({ message: "fix the auth tests", userId: OWNER, messageTs: ROOT_TS })
+      );
+      const ctx = makeCtx();
+      const response = await app.fetch(
+        slackInteractionRequest({
+          type: "block_actions",
+          user: { id: OWNER },
+          channel: { id: "C123" },
+          message: { ts: "111.300", thread_ts: ROOT_TS },
+          actions: [{ action_id: "select_repo", selected_option: { value: "acme/app" } }],
+        }),
+        env,
+        ctx
+      );
+      expect(response.status).toBe(200);
+      await flushAll(ctx);
+    }
+
+    it("arms after target clarification once the history shows only the owner", async () => {
+      const { env, slackFetch } = setup({ threadMessages: [rootMessage, botReply] });
+      await chooseTarget(env);
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(threadReads(slackFetch)).toBe(1);
+      expect(await soloRecord(env)).toEqual(OWNED);
+      expect(launchedAcks(slackFetch)).toEqual(["Using *acme/app*", `Starting work...\n${HINT}`]);
+    });
+
+    it("does not arm after target clarification once another person has replied", async () => {
+      const { env, slackFetch } = setup({ threadMessages: [rootMessage, botReply, thirdReply] });
+      await chooseTarget(env);
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toBeNull();
+      expect(launchedAcks(slackFetch)).toEqual(["Using *acme/app*", "Starting work..."]);
+    });
+
+    it("does not arm a mention that follows up on the thread's session", async () => {
+      const { env } = setup({ threadMessages: [rootMessage, ownerReply] });
+      await seedThread(env, null);
+      await send(env, mention({ text: "<@UBOT> look into it", ts: "222.333", thread_ts: ROOT_TS }));
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toBeNull();
+    });
+  });
 
   describe("ending a solo thread", () => {
     it("blocks the thread and says so when another person replies", async () => {

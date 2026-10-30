@@ -75,6 +75,7 @@ import {
 } from "../inline-flags";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
+  armSoloThread,
   blockSoloThread,
   decideSoloThreadReply,
   readThreadParticipation,
@@ -596,10 +597,16 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   if (!sessionResult) return;
   if (ackTs) {
+    const soloThreadHint = await armSoloThread(
+      env,
+      { channel, threadTs: threadKey, ownerUserId: user },
+      traceId
+    );
     const launched = buildWorkingMessage({
       sessionId: sessionResult.sessionId,
       webAppUrl: env.WEB_APP_URL,
       sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
+      soloThreadHint,
     });
     await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
       blocks: launched.blocks,
