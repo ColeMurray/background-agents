@@ -115,9 +115,14 @@ async function handleSentryWebhook(
   }
   const event = normalization.event;
 
-  // 4. Process the event.
-  const result = await createScheduler(ctx.db, env, ctx.executionCtx).event(event);
-  return json({ ok: true, ...result });
+  // 4. Process the event off the request path. Sentry abandons a webhook that has not answered
+  // within about a second, which cancels the request mid-way through starting the session and
+  // leaves the run stuck in "starting". Answer first; the trigger key dedupes Sentry's retries.
+  ctx.executionCtx.submit(() => createScheduler(ctx.db, env, ctx.executionCtx).event(event), {
+    name: "sentry_webhook.event",
+    context: { automation_id: automationId, trigger_key: event.triggerKey },
+  });
+  return json({ ok: true, accepted: true });
 }
 
 export const sentryWebhookRoutes = new Hono<ControlPlaneHonoEnv>();
