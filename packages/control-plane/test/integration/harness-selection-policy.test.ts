@@ -104,6 +104,7 @@ describe("harness policy with real D1 and Durable Object storage", () => {
   it("stores the admitted native model and effort unchanged at the internal boundary", async () => {
     const providerAuth = await resolveSessionProviderAuth(env.DB, {
       harness: "codex",
+      model: "openai/gpt-5.6-sol",
       unattended: false,
       explicit: { openai: { mode: "api_key" } },
     });
@@ -122,6 +123,7 @@ describe("harness policy with real D1 and Durable Object storage", () => {
     await setEnabledModels([DEFAULT_MODEL, "openai/gpt-5.6-sol"]);
     const providerAuth = await resolveSessionProviderAuth(env.DB, {
       harness: "codex",
+      model: "openai/gpt-5.6-sol",
       unattended: false,
       explicit: { openai: { mode: "api_key" } },
     });
@@ -188,6 +190,7 @@ describe("harness policy with real D1 and Durable Object storage", () => {
       });
       const providerAuth = await resolveSessionProviderAuth(env.DB, {
         harness: "codex",
+        model: "openai/gpt-5.6-sol",
         unattended: false,
         explicit: { openai: { mode: "api_key" } },
       });

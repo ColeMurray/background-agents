@@ -88,7 +88,7 @@ function stores(
 describe("Codex connected-account scope", () => {
   it("falls back to the API key with no selection or default, never legacy OAuth", async () => {
     const fallback = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: false },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: false },
       stores()
     );
     expect(fallback.find((item) => item.provider === "openai")).toEqual({
@@ -97,7 +97,12 @@ describe("Codex connected-account scope", () => {
       selectionSource: "api_key_fallback",
     });
     const resolved = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: false, explicit: { openai: { mode: "api_key" } } },
+      {
+        harness: "codex",
+        model: "openai/gpt-5.6-sol",
+        unattended: false,
+        explicit: { openai: { mode: "api_key" } },
+      },
       stores()
     );
     expect(resolved[0]).toEqual({
@@ -111,6 +116,7 @@ describe("Codex connected-account scope", () => {
     const resolved = await resolveProviderAccountSelections(
       {
         harness: "codex",
+        model: "openai/gpt-5.6-sol",
         unattended: false,
         explicit: {
           openai: { mode: "api_key" },
@@ -133,7 +139,7 @@ describe("Codex connected-account scope", () => {
       accounts: [account(OPENAI_ACCOUNT_ID, "openai")],
     });
     const interactive = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: false },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: false },
       deps
     );
     expect(interactive[0]).toMatchObject({
@@ -141,7 +147,7 @@ describe("Codex connected-account scope", () => {
       providerAccountId: OPENAI_ACCOUNT_ID,
     });
     const unattended = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: true },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: true },
       deps
     );
     expect(unattended[0]).toEqual({
@@ -165,7 +171,7 @@ describe("random provider account pools", () => {
   it("draws one eligible account for Codex and skips providers that harness cannot use", async () => {
     const random = vi.fn(() => 0.99);
     const resolved = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: false, randomEnabled: true },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: false, randomEnabled: true },
       stores({
         routing: [
           pool([OPENAI_ACCOUNT_ID, XAI_ACCOUNT_ID]),
@@ -195,7 +201,7 @@ describe("random provider account pools", () => {
 
   it("keeps the fixed default when random allocation is disabled and a pool is not configured", async () => {
     const resolved = await resolveProviderAccountSelections(
-      { harness: "opencode", unattended: false, randomEnabled: false },
+      { harness: "opencode", model: "openai/gpt-5.6-sol", unattended: false, randomEnabled: false },
       stores({
         routing: [
           {
@@ -222,14 +228,19 @@ describe("random provider account pools", () => {
     });
     await expect(
       resolveProviderAccountSelections(
-        { harness: "opencode", unattended: false, randomEnabled: false },
+        {
+          harness: "opencode",
+          model: "openai/gpt-5.6-sol",
+          unattended: false,
+          randomEnabled: false,
+        },
         disabled
       )
     ).rejects.toBeInstanceOf(ProviderAccountSelectionPolicyError);
 
     const inactive = account(OPENAI_ACCOUNT_ID, "openai", { status: "disabled" });
     const resolved = await resolveProviderAccountSelections(
-      { harness: "opencode", unattended: false, randomEnabled: true },
+      { harness: "opencode", model: "openai/gpt-5.6-sol", unattended: false, randomEnabled: true },
       stores({
         routing: [pool([OPENAI_ACCOUNT_ID, XAI_ACCOUNT_ID])],
         accounts: [inactive, account(XAI_ACCOUNT_ID, "openai")],
@@ -239,10 +250,35 @@ describe("random provider account pools", () => {
     expect(resolved[0]).toMatchObject({ providerAccountId: XAI_ACCOUNT_ID });
   });
 
+  it("does not fail an unrelated provider when its random pool is disabled", async () => {
+    const resolved = await resolveProviderAccountSelections(
+      {
+        harness: "opencode",
+        model: "anthropic/claude-haiku-4-5",
+        unattended: false,
+        randomEnabled: false,
+      },
+      stores({
+        routing: [pool([OPENAI_ACCOUNT_ID, XAI_ACCOUNT_ID])],
+        accounts: [account(OPENAI_ACCOUNT_ID, "openai"), account(XAI_ACCOUNT_ID, "openai")],
+      })
+    );
+    expect(resolved.find((item) => item.provider === "openai")).toEqual({
+      provider: "openai",
+      authMode: "legacy_scoped_oauth",
+      selectionSource: "legacy_fallback",
+    });
+    expect(resolved.find((item) => item.provider === "anthropic")).toEqual({
+      provider: "anthropic",
+      authMode: "api_key",
+      selectionSource: "api_key_fallback",
+    });
+  });
+
   it("uses API key for unattended runs without drawing", async () => {
     const random = vi.fn(() => 0);
     const resolved = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: true, randomEnabled: true },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: true, randomEnabled: true },
       stores({
         routing: [pool([OPENAI_ACCOUNT_ID], "api_key")],
         accounts: [account(OPENAI_ACCOUNT_ID, "openai")],

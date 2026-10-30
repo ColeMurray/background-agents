@@ -42,6 +42,7 @@ describe("session provider auth persistence", () => {
     const providerAuth = await resolveSessionProviderAuth(env.DB, {
       unattended: false,
       harness: "opencode",
+      model: "anthropic/claude-haiku-4-5",
     });
     const sessionId = `provider-auth-${Date.now()}`;
     await initializeSession(

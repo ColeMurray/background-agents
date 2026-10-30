@@ -674,8 +674,8 @@ export function ProviderAccountsSettings() {
               </p>
               {randomEnabled && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Random assignment gives each new session one account from the pool. A retry of
-                  that session keeps the same account, and child sessions inherit it.
+                  Random assignment gives each new session one account from the pool. Child sessions
+                  inherit that account.
                 </p>
               )}
             </div>

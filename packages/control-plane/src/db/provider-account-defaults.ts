@@ -67,6 +67,11 @@ export class ProviderDefaultConstraintError extends Error {}
 export class ProviderDefaultStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /**
+   * Store a fixed default and drop that provider's pool members in one batch.
+   * The delete uses the same active-account predicate as the upsert, so a
+   * rejected write leaves an existing random pool in place.
+   */
   async set(
     provider: ModelProviderId,
     providerAccountId: string,
@@ -76,9 +81,10 @@ export class ProviderDefaultStore {
   ): Promise<void> {
     assertModelProviderId(provider);
     assertValidDefaultWrite(actorId, now);
-    const result = await this.db
-      .prepare(
-        `INSERT INTO model_provider_account_defaults (
+    const [result] = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO model_provider_account_defaults (
            provider, provider_account_id, unattended_mode, selection_mode, write_token,
            created_by, updated_by, created_at, updated_at
          )
@@ -91,13 +97,26 @@ export class ProviderDefaultStore {
            write_token = NULL,
            updated_by = excluded.updated_by,
            updated_at = excluded.updated_at`
-      )
-      .bind(provider, unattendedMode, actorId, actorId, now, now, providerAccountId, provider)
-      .run();
+        )
+        .bind(provider, unattendedMode, actorId, actorId, now, now, providerAccountId, provider),
+      this.db
+        .prepare(
+          `DELETE FROM model_provider_account_pool_members
+           WHERE provider = ?
+             AND EXISTS (
+               SELECT 1 FROM model_provider_account_defaults
+               WHERE provider = ? AND selection_mode = 'fixed'
+             )
+             AND EXISTS (
+               SELECT 1 FROM model_provider_accounts
+               WHERE id = ? AND provider = ? AND status = 'active' AND archived_at IS NULL
+             )`
+        )
+        .bind(provider, provider, providerAccountId, provider),
+    ]);
     if (result.meta.changes === 0) {
       throw new ProviderDefaultConstraintError(`Default requires an active ${provider} account`);
     }
-    await this.clearPool(provider);
   }
 
   bindSetForFirstActiveAccount(
@@ -307,13 +326,6 @@ export class ProviderDefaultStore {
       );
     }
     return this.getRouting(provider);
-  }
-
-  private async clearPool(provider: ModelProviderId): Promise<void> {
-    await this.db
-      .prepare("DELETE FROM model_provider_account_pool_members WHERE provider = ?")
-      .bind(provider)
-      .run();
   }
 }
 

@@ -288,6 +288,7 @@ export async function handleCreateSession(
       explicit: body.providerSelections,
       unattended: spawnSource !== undefined && spawnSource !== "user",
       harness,
+      model,
       randomEnabled: providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED),
     });
   } catch (e) {

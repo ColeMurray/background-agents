@@ -128,6 +128,7 @@ export async function validateHarnessAutomationAuth(
   if (getHarnessCapabilities(harness).selectionPolicy === "legacy_fallback") return;
   const resolved = await resolveSessionProviderAuth(db, {
     harness,
+    model,
     unattended: true,
     explicit,
     randomEnabled,

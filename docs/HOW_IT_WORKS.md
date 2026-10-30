@@ -745,8 +745,8 @@ display, status, and optional external identity separately from credentials encr
 `PROVIDER_ACCOUNTS_ENCRYPTION_KEY`. Each provider has an optional fixed default account, or, when
 `PROVIDER_ACCOUNT_RANDOM_ENABLED` is true, a pool that new sessions draw from at random. An
 unattended mode chooses that account (or a draw from the pool) or API-key mode for Slack, GitHub,
-Linear, and unpinned automation runs. A retried create reuses the session's stored account, and
-child sessions inherit it.
+Linear, and unpinned automation runs. Child sessions inherit the parent's account. A disabled random
+pool rejects session creation only when that pool's provider is the one selected by the model.
 
 The web groups OpenAI and xAI accounts from shared static provider IDs and display metadata; there
 is no provider-catalog endpoint. The control-plane adapter registry remains authoritative when an

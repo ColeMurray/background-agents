@@ -176,7 +176,7 @@ describe("provider account pools", () => {
       adapters: modelProviderAccountAdapterRegistry,
     };
     const drawn = await resolveProviderAccountSelections(
-      { harness: "codex", unattended: false, randomEnabled: true },
+      { harness: "codex", model: "openai/gpt-5.6-sol", unattended: false, randomEnabled: true },
       stores
     );
     expect(drawn.find((item) => item.provider === "openai")).toMatchObject({
@@ -216,6 +216,7 @@ describe("provider account pools", () => {
     const retried = await resolveSessionProviderAuth(env.DB, {
       sessionId,
       harness: "codex",
+      model: "openai/gpt-5.6-sol",
       unattended: false,
       randomEnabled: true,
     });

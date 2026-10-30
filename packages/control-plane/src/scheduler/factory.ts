@@ -130,12 +130,13 @@ export function createScheduler(
     resolveTarget: (automation, run) =>
       resolveAutomationSessionTarget(env, run, createRequestContext(automation, run), log),
     grants: new TeamRepositoryGrantStore(db),
-    resolveProviderAuth: (automationId, harness) =>
+    resolveProviderAuth: (automationId, harness, model) =>
       resolveAutomationProviderAuth(
         db,
         automationId,
         harness,
-        providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED)
+        providerAccountRandomEnabled(env.PROVIDER_ACCOUNT_RANDOM_ENABLED),
+        model
       ),
     validateHarness: (input, modes) => validateHarnessExecution(db, input, modes),
   });

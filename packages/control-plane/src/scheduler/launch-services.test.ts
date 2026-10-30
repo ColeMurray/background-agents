@@ -481,7 +481,7 @@ describe("AutomationLaunchAdmissionService", () => {
     deps.validateHarness.mockRejectedValue(error);
 
     expect(await service.resolveProviderAuth(automation)).toEqual({ error });
-    expect(deps.resolveProviderAuth).toHaveBeenCalledWith(automation.id, "codex");
+    expect(deps.resolveProviderAuth).toHaveBeenCalledWith(automation.id, "codex", automation.model);
     expect(deps.validateHarness).toHaveBeenCalledWith(
       { harness: "codex", model: automation.model, reasoningEffort: null },
       { openai: "api_key" }

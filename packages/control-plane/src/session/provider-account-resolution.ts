@@ -1,3 +1,4 @@
+import { extractProviderAndModel } from "@open-inspect/shared/models";
 import {
   SUBSCRIPTION_PROVIDER_IDS,
   type ModelProviderSelections,
@@ -50,12 +51,15 @@ const LEGACY_SCOPED_OAUTH_PROVIDERS: ReadonlySet<SubscriptionProviderId> = new S
 
 export interface ProviderAccountResolutionInput {
   /**
-   * When this session already has a provider-auth snapshot, that snapshot is
-   * reused so a retried create does not draw a different pool account.
+   * When a row for this id already exists, its stored provider auth is returned
+   * unchanged. Creating a session allocates a new id, so this does not make an
+   * HTTP retry of `POST /sessions` draw the same account.
    */
   sessionId?: string;
   /** From `PROVIDER_ACCOUNT_RANDOM_ENABLED`. Random pools are refused while this is false. */
   randomEnabled?: boolean;
+  /** Catalog model being started. Scopes a disabled random pool to its provider. */
+  model: string;
   explicit?: ModelProviderSelections;
   unattended: boolean;
   /**
@@ -65,6 +69,14 @@ export interface ProviderAccountResolutionInput {
    * account the harness cannot use.
    */
   harness: HarnessId;
+}
+
+/** Subscription provider that bills `model`, or null when the model is not one of those providers. */
+function subscriptionProviderForModel(model: string): SubscriptionProviderId | null {
+  const { provider } = extractProviderAndModel(model);
+  return (SUBSCRIPTION_PROVIDER_IDS as readonly string[]).includes(provider)
+    ? (provider as SubscriptionProviderId)
+    : null;
 }
 
 function apiKey(
@@ -128,6 +140,11 @@ async function resolveProvider(
   };
 }
 
+/**
+ * Apply a configured fixed default or random pool. A disabled random pool
+ * fails only the provider that bills the selected model. Every other provider
+ * keeps the no-selection fallback so the three-provider snapshot still closes.
+ */
 async function resolveInstallationRouting(
   provider: SubscriptionProviderId,
   routing: ProviderAccountRouting,
@@ -141,13 +158,18 @@ async function resolveInstallationRouting(
   if (input.unattended && routing.unattendedMode === "api_key") {
     return apiKey(provider, "unattended_policy");
   }
-  if (routing.selection.mode === "random") {
-    if (!input.randomEnabled) {
+  if (routing.selection.mode === "random" && !input.randomEnabled) {
+    if (subscriptionProviderForModel(input.model) === provider) {
       throw new ProviderAccountSelectionPolicyError(
         "Random provider allocation is temporarily unavailable",
         409
       );
     }
+    const capabilities = getHarnessCapabilities(input.harness);
+    if (capabilities.selectionPolicy === "strict") return apiKey(provider, "api_key_fallback");
+    return noSelectionFallback(provider);
+  }
+  if (routing.selection.mode === "random") {
     const candidates = (
       await Promise.all(
         routing.selection.accountIds.map(async (id) => {
@@ -205,6 +227,7 @@ function assertStableRetryIntent(
   }
 }
 
+/** Resolve one auth row per subscription provider, in catalog order. */
 export async function resolveProviderAccountSelections(
   input: ProviderAccountResolutionInput,
   stores: ProviderAccountResolutionStores
@@ -215,6 +238,11 @@ export async function resolveProviderAccountSelections(
   );
 }
 
+/**
+ * Resolve the complete provider-auth snapshot for a new session. A session row
+ * that already exists is returned as stored, so a second resolve for that id
+ * does not draw again.
+ */
 export async function resolveSessionProviderAuth(
   db: SqlDatabase,
   input: ProviderAccountResolutionInput

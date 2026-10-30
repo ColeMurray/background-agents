@@ -24,7 +24,8 @@ export interface AutomationLaunchAdmissionServiceDeps {
   grants: Pick<TeamRepositoryGrantStore, "covers">;
   resolveProviderAuth(
     automationId: string,
-    harness: HarnessId
+    harness: HarnessId,
+    model: string
   ): Promise<SessionModelProviderAuthInput[]>;
   validateHarness(
     input: Parameters<typeof validateHarnessExecution>[1],
@@ -61,7 +62,11 @@ export class AutomationLaunchAdmissionService implements LaunchAdmissionOperatio
   async resolveProviderAuth(automation: AutomationRow): Promise<ProviderAuthSnapshot> {
     try {
       const harness = getValidHarnessOrDefault(automation.harness);
-      const providerAuth = await this.deps.resolveProviderAuth(automation.id, harness);
+      const providerAuth = await this.deps.resolveProviderAuth(
+        automation.id,
+        harness,
+        automation.model
+      );
       await this.deps.validateHarness(
         { harness, model: automation.model, reasoningEffort: automation.reasoning_effort },
         Object.fromEntries(providerAuth.map((auth) => [auth.provider, auth.authMode]))
