@@ -774,6 +774,47 @@ describe("ProviderAccountsSettings", () => {
     });
   });
 
+  it("lets an admin clear a stored random pool after random assignment is turned off", async () => {
+    const user = userEvent.setup();
+    accountsResult = [account];
+    routingResult = {
+      randomEnabled: false,
+      routing: [
+        {
+          provider: "openai",
+          unattendedMode: "provider_account",
+          selection: { mode: "random", accountIds: [account.id] },
+        },
+        {
+          provider: "xai",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+        {
+          provider: "anthropic",
+          unattendedMode: "provider_account",
+          selection: { mode: "unconfigured" },
+        },
+      ],
+    };
+    render(<ProviderAccountsSettings />);
+
+    expect(screen.getAllByLabelText("New session assignment")).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: "Team ChatGPT" })).toBeDisabled();
+    await user.click(screen.getByLabelText("New session assignment"));
+    expect(
+      await screen.findByRole("option", { name: "Random account from a pool" })
+    ).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("option", { name: "One default account" }));
+
+    await waitFor(() => {
+      expect(setRouting).toHaveBeenCalledWith("openai", {
+        unattendedMode: "provider_account",
+        selection: { mode: "unconfigured" },
+      });
+    });
+  });
+
   it("reports when legacy credential inventory cannot be loaded", () => {
     legacyCredentialsResult = {
       loading: false,

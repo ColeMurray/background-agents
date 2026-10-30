@@ -275,6 +275,61 @@ describe("random provider account pools", () => {
     });
   });
 
+  it("rejects an empty pool only for the selected model provider", async () => {
+    await expect(
+      resolveProviderAccountSelections(
+        {
+          harness: "opencode",
+          model: "openai/gpt-5.6-sol",
+          unattended: false,
+          randomEnabled: true,
+        },
+        stores({
+          routing: [pool([OPENAI_ACCOUNT_ID])],
+          accounts: [],
+          random: () => 0,
+        })
+      )
+    ).rejects.toThrow("No eligible accounts in the configured provider pool");
+
+    const unrelated = await resolveProviderAccountSelections(
+      {
+        harness: "opencode",
+        model: "anthropic/claude-haiku-4-5",
+        unattended: false,
+        randomEnabled: true,
+      },
+      stores({
+        routing: [pool([OPENAI_ACCOUNT_ID])],
+        accounts: [],
+      })
+    );
+    expect(unrelated.find((item) => item.provider === "openai")).toEqual({
+      provider: "openai",
+      authMode: "legacy_scoped_oauth",
+      selectionSource: "legacy_fallback",
+    });
+
+    const strict = await resolveProviderAccountSelections(
+      {
+        harness: "codex",
+        model: "anthropic/claude-haiku-4-5",
+        unattended: false,
+        randomEnabled: true,
+      },
+      stores({
+        routing: [pool([OPENAI_ACCOUNT_ID])],
+        accounts: [account(OPENAI_ACCOUNT_ID, "openai", { status: "disabled" })],
+        random: () => 0,
+      })
+    );
+    expect(strict.find((item) => item.provider === "openai")).toEqual({
+      provider: "openai",
+      authMode: "api_key",
+      selectionSource: "api_key_fallback",
+    });
+  });
+
   it("uses API key for unattended runs without drawing", async () => {
     const random = vi.fn(() => 0);
     const resolved = await resolveProviderAccountSelections(

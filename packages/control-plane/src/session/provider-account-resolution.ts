@@ -141,9 +141,9 @@ async function resolveProvider(
 }
 
 /**
- * Apply a configured fixed default or random pool. A disabled random pool
- * fails only the provider that bills the selected model. Every other provider
- * keeps the no-selection fallback so the three-provider snapshot still closes.
+ * Apply a configured fixed default or random pool. A disabled flag or an empty
+ * pool fails only the provider that bills the selected model. Every other
+ * provider keeps its harness fallback so the three-provider snapshot still closes.
  */
 async function resolveInstallationRouting(
   provider: SubscriptionProviderId,
@@ -183,10 +183,15 @@ async function resolveInstallationRouting(
       )
     ).filter((account) => account !== null);
     if (!candidates.length) {
-      throw new ProviderAccountSelectionPolicyError(
-        "No eligible accounts in the configured provider pool",
-        409
-      );
+      if (subscriptionProviderForModel(input.model) === provider) {
+        throw new ProviderAccountSelectionPolicyError(
+          "No eligible accounts in the configured provider pool",
+          409
+        );
+      }
+      const capabilities = getHarnessCapabilities(input.harness);
+      if (capabilities.selectionPolicy === "strict") return apiKey(provider, "api_key_fallback");
+      return noSelectionFallback(provider);
     }
     const draw = (stores.random ?? Math.random)();
     if (!(draw >= 0 && draw < 1)) throw new Error("Invalid provider allocation random value");

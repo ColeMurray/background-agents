@@ -686,12 +686,13 @@ export function ProviderAccountsSettings() {
                 );
                 const policy = routing.find((item) => item.provider === provider.provider);
                 const randomPool =
-                  randomEnabled && policy?.selection.mode === "random"
+                  policy?.selection.mode === "random"
                     ? {
                         unattendedMode: policy.unattendedMode,
                         accountIds: policy.selection.accountIds,
                       }
                     : null;
+                const showAssignment = randomEnabled || randomPool !== null;
                 const defaultAccount = accounts.find(
                   (account) => account.id === providerDefault?.providerAccountId
                 );
@@ -711,7 +712,7 @@ export function ProviderAccountsSettings() {
                       {provider.subscriptionName}
                     </div>
                     <div className="space-y-3">
-                      {randomEnabled && (
+                      {showAssignment && (
                         <div>
                           <Label htmlFor={`assignment-${provider.provider}`}>
                             New session assignment
@@ -722,6 +723,7 @@ export function ProviderAccountsSettings() {
                             onValueChange={(value: "fixed" | "random") => {
                               if (operationInFlightRef.current) return;
                               if (value === "random") {
+                                if (!randomEnabled) return;
                                 if (activeAccounts.length === 0) {
                                   toast.error("Connect an active account before using a pool");
                                   return;
@@ -761,7 +763,9 @@ export function ProviderAccountsSettings() {
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="fixed">One default account</SelectItem>
-                              <SelectItem value="random">Random account from a pool</SelectItem>
+                              <SelectItem value="random" disabled={!randomEnabled}>
+                                Random account from a pool
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -772,7 +776,7 @@ export function ProviderAccountsSettings() {
                           accountIds={randomPool.accountIds}
                           accounts={activeAccounts}
                           unattendedMode={randomPool.unattendedMode}
-                          disabled={!canManage || saving}
+                          disabled={!randomEnabled || !canManage || saving}
                           onUnattendedMode={(unattendedMode) => {
                             if (!operationInFlightRef.current)
                               void run(
