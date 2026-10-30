@@ -18,6 +18,7 @@ import { useCurrentUserAuthorization } from "@/hooks/use-current-user-authorizat
 import {
   PERSONAL_ACCESS_TOKEN_PERMISSION_COPY,
   PERSONAL_ACCESS_TOKEN_PERMISSION_GROUPS,
+  PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER,
   personalAccessTokenPermissionLabel,
 } from "@/lib/personal-access-token-permissions";
 import { formatFutureRelativeTime, formatRelativeTime } from "@/lib/time";
@@ -207,6 +208,7 @@ function TokenForm({
     else permissions.delete(permission);
     onChange({ ...draft, permissions });
   };
+  const held = new Set(holdable);
   const readOnly = holdable.filter(
     (permission) => PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission].readOnly
   );
@@ -276,8 +278,10 @@ function TokenForm({
         </p>
         <div className="mt-3 space-y-4">
           {PERSONAL_ACCESS_TOKEN_PERMISSION_GROUPS.map((group) => {
-            const permissions = holdable.filter(
-              (permission) => PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission].group === group.id
+            const permissions = PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER.filter(
+              (permission) =>
+                held.has(permission) &&
+                PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission].group === group.id
             );
             if (permissions.length === 0) return null;
             return (
@@ -332,8 +336,8 @@ function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: (
   const expired = token.expiresAt <= Date.now();
   return (
     <li className="rounded-md border border-border bg-card px-4 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">{token.name}</span>
             <code className="font-mono text-xs text-muted-foreground">{token.displayPrefix}…</code>
@@ -363,6 +367,7 @@ function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: (
           type="button"
           variant="outline"
           size="sm"
+          className="shrink-0"
           onClick={onRevoke}
           aria-label={`Revoke ${token.name}`}
         >

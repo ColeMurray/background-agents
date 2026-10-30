@@ -197,6 +197,11 @@ export const PERSONAL_ACCESS_TOKEN_PERMISSION_COPY = {
   },
 } as const satisfies Record<PersonalAccessTokenGrantablePermission, PermissionCopy>;
 
+/** Grantable permissions in display order: within each group, reads before writes. */
+export const PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER = Object.keys(
+  PERSONAL_ACCESS_TOKEN_PERMISSION_COPY
+) as PersonalAccessTokenGrantablePermission[];
+
 /** Picker sections, in display order. */
 export const PERSONAL_ACCESS_TOKEN_PERMISSION_GROUPS: readonly {
   id: PermissionGroup;
