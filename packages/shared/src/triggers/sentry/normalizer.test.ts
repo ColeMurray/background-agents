@@ -149,6 +149,20 @@ describe("normalizeSentryEvent", () => {
     expect(event.contextBlock).toContain("Alert rule: Very Important Alert!");
   });
 
+  it("takes a documented-shape alert's level from its level tag when event.level is absent", () => {
+    const { level: _level, ...eventWithoutLevel } = documentedEventAlertPayload.data.event;
+    const payload = {
+      ...documentedEventAlertPayload,
+      data: {
+        ...documentedEventAlertPayload.data,
+        event: { ...eventWithoutLevel, tags: [["level", "fatal"]] },
+      },
+    };
+    const event = expectNormalized(normalizeSentryEvent(payload, undefined, "event_alert"));
+    expect(event.sentryLevel).toBe("fatal");
+    expect(event.contextBlock).toContain("Level: fatal");
+  });
+
   it("skips a documented-shape alert whose event url has no project slug", () => {
     const payload = structuredClone(documentedEventAlertPayload);
     payload.data.event.url = "https://sentry.io/api/0/issues/1117540176/";

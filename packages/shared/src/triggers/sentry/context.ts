@@ -63,7 +63,8 @@ export function buildSentryContextBlock(payload: SentryIssueAlertPayload): strin
 
 export function buildSentryEventAlertContextBlock(
   payload: SentryEventAlertPayload,
-  projectSlug: string
+  projectSlug: string,
+  level: string
 ): string {
   const { event, triggered_rule } = payload.data;
   const metadata = event.metadata;
@@ -75,7 +76,7 @@ export function buildSentryEventAlertContextBlock(
     "",
     `Error: ${title ?? "(no title)"}`,
     `Project: ${projectSlug}`,
-    `Level: ${event.level ?? "unknown"}`,
+    `Level: ${level}`,
     `Issue ID: ${event.issue_id}`,
     `Alert rule: ${triggered_rule}`,
   ];

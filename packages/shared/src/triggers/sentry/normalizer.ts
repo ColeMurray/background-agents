@@ -124,7 +124,11 @@ export function normalizeSentryEvent(
             sentryProject: projectSlug,
             sentryLevel: level,
             culpritFile: event.metadata?.filename,
-            contextBlock: buildSentryEventAlertContextBlock(eventAlertResult.data, projectSlug),
+            contextBlock: buildSentryEventAlertContextBlock(
+              eventAlertResult.data,
+              projectSlug,
+              level
+            ),
             meta: {
               issueId: event.issue_id,
               issueUrl: event.web_url,
