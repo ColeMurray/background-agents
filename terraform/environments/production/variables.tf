@@ -821,8 +821,12 @@ variable "image_build_min_rebuild_interval_ms" {
   default     = 0
 
   validation {
-    condition     = var.image_build_min_rebuild_interval_ms >= 0
-    error_message = "image_build_min_rebuild_interval_ms must be 0 or more."
+    condition = (
+      var.image_build_min_rebuild_interval_ms >= 0 &&
+      var.image_build_min_rebuild_interval_ms <= 9007199254740991 &&
+      floor(var.image_build_min_rebuild_interval_ms) == var.image_build_min_rebuild_interval_ms
+    )
+    error_message = "image_build_min_rebuild_interval_ms must be a whole number between 0 and 9007199254740991 ms (0 disables the interval), matching the control plane's safe-integer range."
   }
 }
 
