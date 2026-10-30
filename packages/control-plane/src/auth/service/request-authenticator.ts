@@ -187,6 +187,17 @@ export async function authenticateServiceRequest(
       parsed.provider,
       parsed.providerUserId
     );
+    // Route admission would otherwise create a user for an unknown actor.
+    if (service === "export" && !identity) {
+      logger.warn("Actor assertion denied: export actor has no stored identity", {
+        event: "auth.assertion_denied",
+        service,
+        actor,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+    }
     resolvedActor = {
       provider: parsed.provider,
       providerUserId: parsed.providerUserId,

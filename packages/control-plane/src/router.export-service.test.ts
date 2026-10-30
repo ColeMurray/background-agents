@@ -5,7 +5,7 @@ import type * as AuthenticateModule from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
 import type { SqlDatabase, SqlStatement } from "./db/sql-database";
 import { serviceAllowsPermission } from "./authorization/service-permissions";
-import { json, requirePermission } from "./routes/shared";
+import { GITHUB_SERVICE_ROUTE, json, requirePermission, serviceAuthorized } from "./routes/shared";
 import { admit } from "./routing/admit";
 import type { ControlPlaneHonoEnv } from "./routing/hono-env";
 import {
@@ -48,6 +48,11 @@ TEST_ROUTES.post(
     authorization: requirePermission("workspace.members.manage"),
     allowExportService: true,
   }),
+  () => json({ handled: true })
+);
+TEST_ROUTES.get(
+  "/export-test/service-route-not-opted-in",
+  admit({ ...GITHUB_SERVICE_ROUTE, authorization: serviceAuthorized("export") }),
   () => json({ handled: true })
 );
 
@@ -128,6 +133,13 @@ describe("export service", () => {
   it("is refused on routes that do not opt in, even within its ceiling", async () => {
     authenticateAs({ kind: "service", service: "export", actor: ACTOR });
     const response = await get("/export-test/not-opted-in");
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: "service_capability_required" });
+  });
+
+  it("is refused on a service route that names it but does not opt in", async () => {
+    authenticateAs({ kind: "service", service: "export", actor: ACTOR });
+    const response = await get("/export-test/service-route-not-opted-in");
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: "service_capability_required" });
   });
