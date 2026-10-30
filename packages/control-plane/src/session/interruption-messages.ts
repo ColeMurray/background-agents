@@ -14,3 +14,7 @@ const INTERRUPTION_MESSAGES: Record<string, string> = {
 export function interruptionMessage(reason: string): string {
   return INTERRUPTION_MESSAGES[reason] ?? "The sandbox was stopped.";
 }
+
+/** What a prompt still running when a spawn or restore replaced its sandbox reports. */
+export const SANDBOX_REPLACED_ERROR =
+  "The sandbox was replaced while this prompt was running, so it was stopped. Send it again to continue.";

@@ -81,6 +81,7 @@ import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
 import { UsageRepository } from "./usage-repository";
 import { recordSessionWarning } from "./session-warnings";
+import { SANDBOX_REPLACED_ERROR } from "./interruption-messages";
 import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
@@ -516,6 +517,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     recordWarning: (message, eventId) =>
       recordSessionWarning(eventRepository, messenger, message, eventId),
     resumeQueuedWork: () => messageQueue.processMessageQueue(),
+    onInstanceReplaced: () => messageQueue.failStuckProcessingMessage(SANDBOX_REPLACED_ERROR),
   });
   const executionStop: ExecutionStopCoordinator = new ExecutionStopCoordinator(
     log,
@@ -1105,6 +1107,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
 interface LifecycleManagerDeps {
   recordWarning: (message: string, eventId: string) => void;
   resumeQueuedWork: () => Promise<void>;
+  onInstanceReplaced: () => Promise<void>;
   shutdown: SandboxShutdownLifecycle;
   access: SandboxAccess;
   provider: SandboxProvider;
@@ -1190,6 +1193,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
     slackAgentNotifyLookup,
     recordWarning: deps.recordWarning,
     resumeQueuedWork: deps.resumeQueuedWork,
+    onInstanceReplaced: deps.onInstanceReplaced,
   };
 
   // The image lookup exists only for providers that support prebuilt images,
