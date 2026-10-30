@@ -22,10 +22,10 @@ import subprocess
 import sys
 import time
 
-from .harness.codex.process import (
+from .process_containment import (
     CONTAINMENT_FAILURE_EXIT_CODE as CONTAINMENT_FAILURE_EXIT_CODE,
 )
-from .harness.codex.process import contain_descendants
+from .process_containment import contain_descendants
 
 # Shorter than ``AgentBridgeProcess``'s stop wait, so a graceful bridge exit
 # and the reap that follows both finish before the supervisor SIGKILLs us.

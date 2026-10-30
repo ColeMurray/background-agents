@@ -82,12 +82,17 @@ class OpencodeHarness:
         await self.client.aclose()
 
     async def resume_session(self, persisted_id: str) -> bool:
-        # A probe failure counts as "not there", as it always has: the first
-        # prompt then starts a fresh conversation instead of the bridge dying.
+        # Only a confirmed 404 means the session is gone. Any other probe
+        # result must fail the resume, so inherited work is stopped before
+        # ``ready`` and a failed lookup cannot be treated as a fresh session.
         try:
             exists = await self.client.session_exists(persisted_id)
-        except Exception:
-            exists = False
+        except HarnessStartError:
+            raise
+        except Exception as error:
+            raise HarnessStartError(
+                f"OpenCode session {persisted_id} could not be checked before resume: {error}"
+            ) from error
         if not exists:
             self.log.info("opencode.session.invalid", opencode_session_id=persisted_id)
             return False

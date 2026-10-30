@@ -12,7 +12,6 @@ from urllib.parse import quote
 import httpx
 
 from .boot_events import BootPhaseError
-from .bridge_domain import CONTAINMENT_FAILURE_EXIT_CODE
 from .constants import (
     BOOT_COMPLETE_MARKER_ENV_VAR,
     BRIDGE_FATAL_ERROR_FILE_PATH,
@@ -21,6 +20,7 @@ from .constants import (
 from .docker_control import DockerControl
 from .harness.base import DETERMINISTIC_FAILURE_EXIT_CODE, HarnessId
 from .model_catalog import ensure_model_catalog
+from .process_containment import CONTAINMENT_FAILURE_EXIT_CODE
 from .repo_image_callback import RepoImageBuildCallback
 from .runtime_config import BootMode, RuntimeConfig
 

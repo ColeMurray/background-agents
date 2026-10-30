@@ -46,6 +46,18 @@ async def test_resume_stops_the_inherited_execution_before_adopting():
     client.wait_until_idle.assert_awaited_once()
 
 
+async def test_an_unconfirmed_probe_refuses_resume_without_reporting_the_session_gone():
+    client = make_client()
+    client.session_exists = AsyncMock(side_effect=RuntimeError("lookup timed out"))
+    harness = make_harness(client)
+
+    with pytest.raises(HarnessStartError, match=SESSION_ID):
+        await harness.resume_session(SESSION_ID)
+
+    assert harness.session_id is None
+    client.request_stop.assert_not_awaited()
+
+
 async def test_a_missing_session_is_not_stopped():
     client = make_client(exists=False)
     harness = make_harness(client)

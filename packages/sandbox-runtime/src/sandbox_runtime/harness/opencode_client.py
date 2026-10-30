@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from .base import HarnessStartError
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -88,12 +90,27 @@ class OpenCodeClient:
         return session_id
 
     async def session_exists(self, opencode_session_id: str) -> bool:
-        """Whether OpenCode still knows the session (a 200 from its lookup)."""
-        response = await self._client().get(
-            f"{self._base_url}/session/{opencode_session_id}",
-            timeout=self._request_timeout_seconds,
+        """Whether OpenCode still has the session.
+
+        ``False`` only for a confirmed 404. Any other status, or a probe that
+        cannot be completed, is not proof the session is gone.
+        """
+        try:
+            response = await self._client().get(
+                f"{self._base_url}/session/{opencode_session_id}",
+                timeout=self._request_timeout_seconds,
+            )
+        except Exception as error:
+            raise HarnessStartError(
+                f"OpenCode session {opencode_session_id} could not be checked: {error}"
+            ) from error
+        if response.status_code == 404:
+            return False
+        if response.status_code == 200:
+            return True
+        raise HarnessStartError(
+            f"OpenCode session {opencode_session_id} lookup returned status {response.status_code}"
         )
-        return response.status_code == 200
 
     @asynccontextmanager
     async def events(
