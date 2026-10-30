@@ -2800,5 +2800,29 @@ describe("SessionMessageQueue", () => {
         []
       );
     });
+
+    it("stores an admitted identity in the same transaction as the insert", async () => {
+      const h = buildQueue();
+      let inTransaction = false;
+      h.repository.transaction.mockImplementation((operation: () => unknown) => {
+        inTransaction = true;
+        try {
+          return operation();
+        } finally {
+          inTransaction = false;
+        }
+      });
+      const writesInTransaction: Record<string, boolean> = {};
+      const record = (write: string) => () => {
+        writesInTransaction[write] = inTransaction;
+      };
+      h.repository.updateParticipantCoalesce.mockImplementation(record("canonical"));
+      h.repository.updateParticipantIdentity.mockImplementation(record("scm"));
+      h.repository.createMessageWithAttachments.mockImplementation(record("message"));
+
+      await h.queue.enqueuePromptFromApi({ ...staleRetry, clientRequestId: undefined });
+
+      expect(writesInTransaction).toEqual({ canonical: true, scm: true, message: true });
+    });
   });
 });

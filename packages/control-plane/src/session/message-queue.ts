@@ -901,29 +901,32 @@ export class SessionMessageQueue {
       this.log,
       getValidHarnessOrDefault(this.repository.getSession()?.harness)
     );
-    const participant = this.storeAdmittedIdentity(data);
     try {
-      this.messageRepository.createMessageWithAttachments(
-        {
-          id: messageId,
-          authorId: participant.id,
-          authorCanonicalUserId:
-            data.promptAccountUserId !== undefined
-              ? data.promptAccountUserId
-              : (participant.canonical_user_id ?? null),
-          content: data.content,
-          source: data.source,
-          model: messageModel,
-          reasoningEffort: messageReasoningEffort,
-          attachments: attachments ? JSON.stringify(attachments) : null,
-          callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
-          clientRequestId: data.clientRequestId ?? null,
-          requestFingerprint: requestFingerprint ?? null,
-          status: "pending",
-          createdAt: now,
-        },
-        resolvedAttachments?.attachmentIds ?? []
-      );
+      // A failed insert rejects the prompt, so it must not keep the identity either.
+      this.repository.transaction(() => {
+        const participant = this.storeAdmittedIdentity(data);
+        this.messageRepository.createMessageWithAttachments(
+          {
+            id: messageId,
+            authorId: participant.id,
+            authorCanonicalUserId:
+              data.promptAccountUserId !== undefined
+                ? data.promptAccountUserId
+                : (participant.canonical_user_id ?? null),
+            content: data.content,
+            source: data.source,
+            model: messageModel,
+            reasoningEffort: messageReasoningEffort,
+            attachments: attachments ? JSON.stringify(attachments) : null,
+            callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+            clientRequestId: data.clientRequestId ?? null,
+            requestFingerprint: requestFingerprint ?? null,
+            status: "pending",
+            createdAt: now,
+          },
+          resolvedAttachments?.attachmentIds ?? []
+        );
+      });
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {
         throw new SessionAttachmentError(
@@ -960,7 +963,7 @@ export class SessionMessageQueue {
 
   /**
    * Store an admitted prompt's identity snapshot on its author and return the stored row.
-   * Called synchronously with the insert, after the request's last await: a deduplicated
+   * Called in the insert's transaction, after the request's last await: a deduplicated
    * or conflicting retry may carry an older snapshot than a later request already stored.
    */
   private storeAdmittedIdentity(data: EnqueuePromptCoreData): ParticipantRow {
