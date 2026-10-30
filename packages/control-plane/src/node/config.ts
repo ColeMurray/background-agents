@@ -24,10 +24,6 @@ export type ConfigSource = Record<string, string | undefined>;
 
 /** Every `EnvConfig` field. `satisfies` fails if the table and the type ever disagree. */
 const ENV_CONFIG_KEYS = {
-  MANAGED_MCP_ROUTING_ENABLED: true,
-  MCP_USER_DELEGATION_ENABLED: true,
-  MCP_MULTIPLAYER_ENABLED: true,
-  MCP_ALLOWED_UPSTREAM_ORIGINS: true,
   GITHUB_CLIENT_ID: true,
   GITHUB_CLIENT_SECRET: true,
   GOOGLE_CLIENT_ID: true,

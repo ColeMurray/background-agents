@@ -104,10 +104,6 @@ module "control_plane_worker" {
       SANDBOX_UNATTENDED_INACTIVITY_TIMEOUT_MS = { value = tostring(var.sandbox_unattended_inactivity_timeout_ms) }
       SANDBOX_BOOT_TIMEOUT_MS                  = { value = tostring(var.sandbox_boot_timeout_ms) }
       TEAMS_ENFORCEMENT                        = { value = var.teams_enforcement }
-      MANAGED_MCP_ROUTING_ENABLED              = { value = tostring(var.managed_mcp_routing_enabled) }
-      MCP_USER_DELEGATION_ENABLED              = { value = tostring(var.mcp_user_delegation_enabled) }
-      MCP_MULTIPLAYER_ENABLED                  = { value = tostring(var.mcp_multiplayer_enabled) }
-      MCP_ALLOWED_UPSTREAM_ORIGINS             = { value = join(",", compact([for o in split(",", var.mcp_allowed_upstream_origins) : trimspace(o)])) }
     },
     var.session_do_location_hint != "" ? {
       SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }

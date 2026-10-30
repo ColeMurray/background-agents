@@ -8,7 +8,6 @@ import { cleanD1Tables } from "./cleanup";
 import { McpServerStore } from "../../src/db/mcp-servers";
 import { McpConnectionStore, connectionBinding } from "../../src/db/mcp-connections";
 import { McpOAuthService } from "../../src/mcp/oauth";
-import { createMcpDestinationPolicy } from "../../src/mcp/authorization";
 import { SessionInternalPaths } from "../../src/session/contracts";
 const alice = "11111111111111111111111111111111";
 const bob = "22222222222222222222222222222222";
@@ -37,7 +36,7 @@ async function fixture(mode: "none" | "service_credentials" | "user_oauth" = "us
     ])
   );
   const store = new McpConnectionStore(env.DB, env.TOKEN_ENCRYPTION_KEY!);
-  const oauth = new McpOAuthService(store, createMcpDestinationPolicy(env));
+  const oauth = new McpOAuthService(store);
   let binding;
   if (mode === "user_oauth") {
     const url = await oauth.start(

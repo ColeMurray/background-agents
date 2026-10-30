@@ -7,7 +7,7 @@ import {
   type McpGrantBinding,
 } from "../db/mcp-connections";
 import type { McpServerMetadata } from "@open-inspect/shared/types/integrations";
-import type { McpDestinationPolicy } from "./authorization";
+import { mcpDestination } from "./destination";
 import { McpError } from "./errors";
 
 export const MCP_CREDENTIAL_TIMEOUT_MS = 20_000;
@@ -60,11 +60,10 @@ async function boundedJson(response: Response): Promise<unknown> {
 }
 async function oauthRequest(
   fetcher: McpFetch,
-  destination: McpDestinationPolicy,
   url: string,
   init: RequestInit = {}
 ): Promise<unknown> {
-  destination(url);
+  mcpDestination(url);
   return boundedJson(
     await fetcher(
       new Request(url, {
@@ -77,12 +76,11 @@ async function oauthRequest(
 }
 async function exchange(
   fetcher: McpFetch,
-  destination: McpDestinationPolicy,
   endpoint: string,
   form: URLSearchParams
 ): Promise<McpCredential> {
   const data = tokenSchema.parse(
-    await oauthRequest(fetcher, destination, endpoint, {
+    await oauthRequest(fetcher, endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: form.toString(),
@@ -100,14 +98,13 @@ async function exchange(
 export class McpOAuthService {
   constructor(
     private readonly store: McpConnectionStore,
-    private readonly destination: McpDestinationPolicy,
     private readonly fetcher: McpFetch = (request) => fetch(request)
   ) {}
 
   private assertProfile(profile: { issuer: string; resource: string; token_endpoint: string }) {
-    const issuer = this.destination(profile.issuer);
-    this.destination(profile.resource);
-    this.destination(profile.token_endpoint, issuer.origin);
+    const issuer = mcpDestination(profile.issuer);
+    mcpDestination(profile.resource);
+    mcpDestination(profile.token_endpoint, issuer.origin);
   }
 
   async client(server: McpServerMetadata, redirectUri: string): Promise<McpOAuthClient> {
@@ -118,9 +115,9 @@ export class McpOAuthService {
       !server.managedRouting
     )
       throw new McpError("mcp_denied");
-    const resource = this.destination(server.oauth.resource);
-    const target = this.destination(server.url!);
-    const issuer = this.destination(server.oauth.issuer);
+    const resource = mcpDestination(server.oauth.resource);
+    const target = mcpDestination(server.url!);
+    const issuer = mcpDestination(server.oauth.issuer);
     if (resource.href !== target.href) throw new McpError("mcp_unsupported");
     const current = await this.store.getClient(server.id);
     if (
@@ -129,12 +126,11 @@ export class McpOAuthService {
       current.redirect_uri === redirectUri
     ) {
       this.assertProfile(current);
-      this.destination(current.authorization_endpoint, issuer.origin);
+      mcpDestination(current.authorization_endpoint, issuer.origin);
       return current;
     }
     const protectedMetadata = await oauthRequest(
       this.fetcher,
-      this.destination,
       `${resource.origin}/.well-known/oauth-protected-resource${resource.pathname === "/" ? "" : resource.pathname}`
     );
     const protectedProfile = z
@@ -148,7 +144,6 @@ export class McpOAuthService {
     const metadata = metadataSchema.parse(
       await oauthRequest(
         this.fetcher,
-        this.destination,
         `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`
       )
     );
@@ -162,7 +157,7 @@ export class McpOAuthService {
       metadata.token_endpoint,
       metadata.registration_endpoint,
     ])
-      this.destination(endpoint, issuer.origin);
+      mcpDestination(endpoint, issuer.origin);
     const registration = z
       .object({
         client_id: z.string().min(1),
@@ -170,7 +165,7 @@ export class McpOAuthService {
         redirect_uris: z.array(z.string()),
       })
       .parse(
-        await oauthRequest(this.fetcher, this.destination, metadata.registration_endpoint, {
+        await oauthRequest(this.fetcher, metadata.registration_endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -252,7 +247,6 @@ export class McpOAuthService {
         throw new McpError("mcp_denied");
       const credential = await exchange(
         this.fetcher,
-        this.destination,
         connection.token_endpoint,
         new URLSearchParams({
           grant_type: "authorization_code",
@@ -263,7 +257,6 @@ export class McpOAuthService {
           code_verifier: verifier,
         })
       );
-      this.assertProfile(connection);
       await this.store.settle(transaction, connection, credential);
     } catch (error) {
       await this.store.failTransaction(transaction).catch(() => {});
@@ -296,17 +289,14 @@ export class McpOAuthService {
       if (
         credential.expiresAt === null ||
         credential.expiresAt > Date.now() + MCP_TOKEN_HEADROOM_MS
-      ) {
-        this.assertProfile(row);
+      )
         return credential.accessToken;
-      }
       const claim = crypto.randomUUID();
       if (!(await this.store.claimRefresh(row, claim, Date.now()))) continue;
       try {
         if (!credential.refreshToken) throw new McpError("mcp_reconnect_required");
         const rotated = await exchange(
           this.fetcher,
-          this.destination,
           row.token_endpoint,
           new URLSearchParams({
             grant_type: "refresh_token",
@@ -315,7 +305,6 @@ export class McpOAuthService {
             refresh_token: credential.refreshToken,
           })
         );
-        this.assertProfile(row);
         rotated.refreshToken ??= credential.refreshToken;
         if (!(await this.store.publishRefresh(row, claim, rotated)))
           throw new McpError("mcp_context_changed", 409);

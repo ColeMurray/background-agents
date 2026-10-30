@@ -10,7 +10,6 @@ import {
   connectionBinding,
 } from "../../packages/control-plane/src/db/mcp-connections";
 import { McpOAuthService } from "../../packages/control-plane/src/mcp/oauth";
-import { createMcpDestinationPolicy } from "../../packages/control-plane/src/mcp/authorization";
 import { generateEncryptionKey } from "../../packages/control-plane/src/auth/crypto";
 import { relayMcpRequest } from "../../packages/control-plane/src/mcp/relay";
 import { McpError, mcpErrorResponse } from "../../packages/control-plane/src/mcp/errors";
@@ -32,11 +31,7 @@ const definition = await registry.create({
   oauth: { issuer: gateway.origin, resource: `${gateway.origin}/mcp` },
 });
 const store = new McpConnectionStore(db, key);
-const oauth = new McpOAuthService(
-  store,
-  createMcpDestinationPolicy({ MCP_ALLOWED_UPSTREAM_ORIGINS: gateway.origin }),
-  (request) => gateway.fetch(request)
-);
+const oauth = new McpOAuthService(store, (request) => gateway.fetch(request));
 for (const owner of ["reader", "operator"]) {
   const now = Date.now();
   await db

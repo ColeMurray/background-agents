@@ -536,12 +536,11 @@ export class McpServerStore {
    * Servers applicable to a session's member repositories: unscoped servers
    * always apply; scoped servers apply when ANY member matches a scope.
    * Pass an empty list for repo-less sessions (unscoped servers only).
-   * Servers the control plane proxies (managed routing while it is enabled,
-   * and every personal OAuth server) come without their stored credentials.
+   * Servers the control plane proxies (managed routing, which every personal
+   * OAuth server uses) come without their stored credentials.
    */
   async getForLaunch(
-    repositories: Array<{ repoOwner: string; repoName: string }>,
-    routingEnabled = true
+    repositories: Array<{ repoOwner: string; repoName: string }>
   ): Promise<McpServerConfig[]> {
     const names = new Set(repositories.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
     const { results } = await this.db
@@ -553,8 +552,7 @@ export class McpServerStore {
     });
     return Promise.all(
       rows.map((row) =>
-        row.type === "remote" &&
-        ((routingEnabled && row.managed_routing === 1) || row.auth_mode === "user_oauth")
+        row.type === "remote" && (row.managed_routing === 1 || row.auth_mode === "user_oauth")
           ? rowToConfig(row, {})
           : this.decryptRow(row)
       )

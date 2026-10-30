@@ -365,7 +365,6 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
-  managedMcpRoutingEnabled?: boolean;
   recordMcpServers?: (servers: RuntimeMcpServerConfig[]) => void;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
@@ -837,7 +836,6 @@ export class SandboxLifecycleManager
             controlPlaneUrl: this.config.controlPlaneUrl,
             sessionId: session.session_name || session.id,
             sandboxToken: sandboxAuthToken,
-            routingEnabled: this.config.managedMcpRoutingEnabled === true,
           })
         : undefined;
       this.config.recordMcpServers?.(mcpServers ?? []);
@@ -925,7 +923,6 @@ export class SandboxLifecycleManager
                 controlPlaneUrl: this.config.controlPlaneUrl,
                 sessionId,
                 sandboxToken: sandboxAuthToken,
-                routingEnabled: this.config.managedMcpRoutingEnabled === true,
               })
             : undefined,
           prebuiltImageId: null,
@@ -1189,7 +1186,6 @@ export class SandboxLifecycleManager
             controlPlaneUrl: this.config.controlPlaneUrl,
             sessionId: session.session_name || session.id,
             sandboxToken: sandboxAuthToken,
-            routingEnabled: this.config.managedMcpRoutingEnabled === true,
           })
         : undefined;
       this.config.recordMcpServers?.(mcpServers ?? []);

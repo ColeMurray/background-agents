@@ -17,7 +17,6 @@ import {
   type McpOAuthTransaction,
 } from "../../src/db/mcp-connections";
 import { McpOAuthService } from "../../src/mcp/oauth";
-import { createMcpDestinationPolicy } from "../../src/mcp/authorization";
 import { McpServerStore } from "../../src/db/mcp-servers";
 import type { SqlDatabase } from "../../src/db/sql-database";
 import { applyMigrations } from "../../src/node/migrate";
@@ -79,17 +78,13 @@ async function createFixture(db: SqlDatabase, backgroundTasks: TestBackgroundTas
     GITHUB_CLIENT_ID: "review-only-github-client",
     GITHUB_CLIENT_SECRET: "review-only-github-secret",
     UNSAFE_ALLOW_ALL_USERS: "true",
-    MCP_ALLOWED_UPSTREAM_ORIGINS: gateway.origin,
-    MANAGED_MCP_ROUTING_ENABLED: "true",
-    MCP_USER_DELEGATION_ENABLED: "true",
   });
   const app = createControlPlaneApp([mcpConnectionRoutes, mcpServerRoutes], {
     backgroundTasks: () => backgroundTasks,
   });
   const registry = new McpServerStore(db, key);
   const store = new McpConnectionStore(db, key);
-  const destination = createMcpDestinationPolicy(env);
-  const oauth = new McpOAuthService(store, destination);
+  const oauth = new McpOAuthService(store);
   const server = await registry.create({
     name: "review-server",
     type: "remote",
@@ -167,7 +162,6 @@ async function createFixture(db: SqlDatabase, backgroundTasks: TestBackgroundTas
     registry,
     store,
     oauth,
-    destination,
     key,
     server,
     gateway,
@@ -378,41 +372,21 @@ describe.sequential("managed MCP connection lifecycle", () => {
     expect(await f.transactions()).toEqual([]);
   });
 
-  it("enforces the current origin allowlist on pending callbacks without sending credentials", async () => {
+  it("fences a pending callback once the definition is disabled, without sending credentials", async () => {
     const pending = await f.start();
-    const revokedEnv = { ...f.env, MCP_ALLOWED_UPSTREAM_ORIGINS: "" };
+    await f.registry.update(f.server.id, { enabled: false });
     const before = f.outbound.length;
-    const deniedStart = await f.request(`/mcp-connections/${f.server.id}/connect`, {
-      method: "POST",
-      env: revokedEnv,
-    });
-    expect(deniedStart.status).toBe(403);
-    expect(await deniedStart.json()).toMatchObject({ code: "mcp_unsupported" });
-    expect(f.outbound).toHaveLength(before);
-
     const redeemed = await f.request("/mcp-connections/oauth/callback", {
       method: "POST",
       body: pending,
-      env: revokedEnv,
     });
     expect(redeemed.status).toBe(403);
-    expect(await redeemed.json()).toMatchObject({ code: "mcp_unsupported" });
+    expect(await redeemed.json()).toMatchObject({ code: "mcp_denied" });
     expect(f.outbound).toHaveLength(before);
-    const connection = await f.store.get(USERS.alice, f.server.id);
-    expect(connection).toMatchObject({ status: "reconnect_required", encrypted_payload: null });
-    expect(await f.transactions()).toEqual([]);
-
-    // Disabling the definition independently fences a pending callback as well.
-    const second = await f.start();
-    await f.registry.update(f.server.id, { enabled: false });
-    const beforeDisabledCallback = f.outbound.length;
-    const disabledCallback = await f.request("/mcp-connections/oauth/callback", {
-      method: "POST",
-      body: second,
+    expect(await f.store.get(USERS.alice, f.server.id)).toMatchObject({
+      status: "reconnect_required",
+      encrypted_payload: null,
     });
-    expect(disabledCallback.status).toBe(403);
-    expect(await disabledCallback.json()).toMatchObject({ code: "mcp_denied" });
-    expect(f.outbound).toHaveLength(beforeDisabledCallback);
   });
 
   it("compares credential maps and repository scopes by value rather than order", async () => {
@@ -576,7 +550,7 @@ describe.sequential("managed MCP connection lifecycle", () => {
         return f.db.batch(statements);
       },
     };
-    const old = new McpOAuthService(new McpConnectionStore(pausedDb, f.key), f.destination);
+    const old = new McpOAuthService(new McpConnectionStore(pausedDb, f.key));
     const rejected = expect(
       old.start(
         USERS.alice,
@@ -599,7 +573,7 @@ describe.sequential("managed MCP connection lifecycle", () => {
   });
 
   it.each(["cached", "expired"])(
-    "rejects %s credentials when their origin is no longer allowed",
+    "rejects %s credentials once the definition is disabled",
     async (state) => {
       await f.connect();
       const row = (await f.store.get(USERS.alice, f.server.id))!;
@@ -610,31 +584,31 @@ describe.sequential("managed MCP connection lifecycle", () => {
           expiresAt: 0,
         });
       }
-      f.env.MCP_ALLOWED_UPSTREAM_ORIGINS = "";
+      await f.registry.update(f.server.id, { enabled: false });
       const before = f.outbound.length;
       await expect(f.oauth.credential(connectionBinding(row))).rejects.toMatchObject({
-        code: "mcp_unsupported",
+        code: "mcp_context_changed",
       });
       expect(f.outbound).toHaveLength(before);
       expect(f.gateway.refreshCount).toBe(0);
     }
   );
 
-  it("rechecks origin policy before publishing exchanged credentials", async () => {
+  it("does not publish exchanged credentials for a definition disabled during the exchange", async () => {
     const callback = await f.start();
     f.gateway.afterTokenExchange = async () => {
-      f.env.MCP_ALLOWED_UPSTREAM_ORIGINS = "";
+      await f.registry.update(f.server.id, { enabled: false });
     };
     const response = await f.request("/mcp-connections/oauth/callback", {
       method: "POST",
       body: callback,
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(409);
     expect(await f.store.get(USERS.alice, f.server.id)).toMatchObject({ encrypted_payload: null });
     expect(await f.transactions()).toEqual([]);
   });
 
-  it("fences a rotation when origin approval is withdrawn during exchange", async () => {
+  it("fences a rotation when the definition is disabled during the exchange", async () => {
     await f.connect();
     const row = (await f.store.get(USERS.alice, f.server.id))!;
     await f.store.claimRefresh(row, "expire-for-test", Date.now());
@@ -643,10 +617,10 @@ describe.sequential("managed MCP connection lifecycle", () => {
       expiresAt: 0,
     });
     f.gateway.afterTokenExchange = async () => {
-      f.env.MCP_ALLOWED_UPSTREAM_ORIGINS = "";
+      await f.registry.update(f.server.id, { enabled: false });
     };
     await expect(f.oauth.credential(connectionBinding(row))).rejects.toMatchObject({
-      code: "mcp_unsupported",
+      code: "mcp_context_changed",
     });
     expect(f.gateway.refreshCount).toBe(1);
     expect(await f.store.get(USERS.alice, f.server.id)).toMatchObject({

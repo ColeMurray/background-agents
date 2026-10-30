@@ -91,9 +91,10 @@ new grant revision; an abandoned or failed attempt leaves it in place. Expired, 
 obsolete, and pre-existing terminal history is lazily pruned when that owner lists, starts, or
 redeems connections; idle expired rows need no periodic job to bound repeated attempts. Changing
 authentication configuration invalidates grants, but metadata-only saves and reordered credential
-maps or equivalent repository scopes do not. OAuth services require an explicit current origin
-policy for discovery, cached clients, callbacks, and access-token/refresh use. Removing an origin
-blocks pending callbacks before token exchange as well as new consent.
+maps or equivalent repository scopes do not. The proxy and OAuth flows reach only public HTTPS
+hostnames (no IP literals, local or internal names, credentials in URLs, or non-default ports), and
+a token or authorization endpoint must share its issuer's origin. Disabling a definition blocks
+pending callbacks before token exchange as well as new consent.
 
 Personal delegation is supported by the OpenCode and Claude harnesses. Codex reports no personal MCP
 capability and omits managed personal connectors from native configuration; public and service

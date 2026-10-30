@@ -11,11 +11,7 @@ import { McpConnectionStore } from "../db/mcp-connections";
 import { McpOAuthService } from "../mcp/oauth";
 import { relayMcpRequest, readMcpBody } from "../mcp/relay";
 import { McpError, mcpErrorResponse, type McpErrorCode } from "../mcp/errors";
-import {
-  assertMcpDestinationEnabled,
-  assertMcpUserAccess,
-  createMcpDestinationPolicy,
-} from "../mcp/authorization";
+import { assertMcpUserAccess } from "../mcp/authorization";
 import { createLogger } from "../logger";
 
 const log = createLogger("mcp-proxy");
@@ -77,7 +73,6 @@ async function proxy(
         !server.repoScopes.some((scope) => names.has(scope.toLowerCase()))
       )
         throw new McpError("mcp_denied");
-      assertMcpDestinationEnabled(env, server);
       if (snapshot.grant) {
         await assertMcpUserAccess(ctx.db, env, snapshot.grant.canonicalUserId, params.id);
         const row = await connections.require(snapshot.grant);
@@ -92,7 +87,7 @@ async function proxy(
         ? await registry.getServiceHeaders(server.id, snapshot.serverAuthRevision)
         : snapshot.authMode === "user_oauth" && snapshot.grant
           ? {
-              Authorization: `Bearer ${await new McpOAuthService(connections, createMcpDestinationPolicy(env)).credential(snapshot.grant)}`,
+              Authorization: `Bearer ${await new McpOAuthService(connections).credential(snapshot.grant)}`,
             }
           : {};
     if (snapshot.authMode === "user_oauth" && !snapshot.grant)

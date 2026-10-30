@@ -6,7 +6,6 @@ const launch = {
   controlPlaneUrl: "https://control.example.com",
   sessionId: "session/name",
   sandboxToken: "allocation-a",
-  routingEnabled: true,
 };
 describe("managed launch contract", () => {
   it("allowlists fields, preserves registry input, is idempotent, and replaces allocation auth", () => {
@@ -40,7 +39,7 @@ describe("managed launch contract", () => {
     ).toEqual({ Authorization: "Bearer allocation-b" });
     expect(original.headers?.Authorization).toBe("upstream-secret");
   });
-  it("keeps legacy/local policy separate; routing rollback never converts user OAuth", () => {
+  it("routes only opted-in remotes and personal servers; legacy and local stay direct", () => {
     const local: McpServerConfig = {
       id: "local",
       name: "local",
@@ -59,14 +58,14 @@ describe("managed launch contract", () => {
       headers: { Authorization: "service-secret" },
       managedRouting: true,
     };
+    const legacy = { ...service, managedRouting: false };
+    expect(resolveRuntimeMcpServers([local, legacy], launch)).toEqual([local, legacy]);
+    expect(resolveRuntimeMcpServers([service], launch)[0]).toHaveProperty(
+      "managed_proxy.auth_mode",
+      "service_credentials"
+    );
     expect(
-      resolveRuntimeMcpServers([local, service], { ...launch, routingEnabled: false })
-    ).toEqual([local, service]);
-    expect(
-      resolveRuntimeMcpServers([{ ...service, authMode: "user_oauth" }], {
-        ...launch,
-        routingEnabled: false,
-      })[0]
+      resolveRuntimeMcpServers([{ ...legacy, authMode: "user_oauth" }], launch)[0]
     ).toHaveProperty("managed_proxy.auth_mode", "user_oauth");
   });
 });

@@ -40,15 +40,11 @@ module "control_plane" {
   github_deploy   = var.github_deploy
 
   config = merge({
-    APP_NAME                     = "Open-Inspect"
-    LOG_LEVEL                    = "info"
-    SANDBOX_PROVIDER             = "modal"
-    UNSAFE_ALLOW_ALL_USERS       = "false"
-    TEAMS_ENFORCEMENT            = "shadow"
-    MANAGED_MCP_ROUTING_ENABLED  = "false"
-    MCP_USER_DELEGATION_ENABLED  = "false"
-    MCP_MULTIPLAYER_ENABLED      = "false"
-    MCP_ALLOWED_UPSTREAM_ORIGINS = ""
+    APP_NAME               = "Open-Inspect"
+    LOG_LEVEL              = "info"
+    SANDBOX_PROVIDER       = "modal"
+    UNSAFE_ALLOW_ALL_USERS = "false"
+    TEAMS_ENFORCEMENT      = "shadow"
   }, var.config)
 
   tags = { Environment = local.environment }

@@ -3,7 +3,6 @@ import type { SqlDatabase } from "../../src/db/sql-database";
 import { McpServerStore } from "../../src/db/mcp-servers";
 import { McpConnectionStore, connectionBinding } from "../../src/db/mcp-connections";
 import { McpOAuthService, MCP_REFRESH_STALE_MS } from "../../src/mcp/oauth";
-import { createMcpDestinationPolicy } from "../../src/mcp/authorization";
 import { ManagedMcpGatewayFixture } from "../fixtures/managed-mcp-gateway";
 import { encryptToken, generateEncryptionKey } from "../../src/auth/crypto";
 import { mergeUsers } from "../../src/db/user-merge";
@@ -92,10 +91,7 @@ export function managedMcpConformance(factory: Factory) {
       oauth: { issuer: gateway.origin, resource: `${gateway.origin}/mcp` },
     });
     const store = new McpConnectionStore(db, key);
-    const destination = createMcpDestinationPolicy({
-      MCP_ALLOWED_UPSTREAM_ORIGINS: gateway.origin,
-    });
-    const service = new McpOAuthService(store, destination, (request) => gateway.fetch(request));
+    const service = new McpOAuthService(store, (request) => gateway.fetch(request));
     async function authorize(owner = "alice", externalUser = "reader") {
       const url = new URL(
         await service.start(
@@ -131,7 +127,6 @@ export function managedMcpConformance(factory: Factory) {
       registry,
       store,
       service,
-      destination,
       authorize,
       connect,
       expire,
@@ -168,10 +163,8 @@ export function managedMcpConformance(factory: Factory) {
         const f = await fixture(db);
         const binding = await f.connect();
         await f.expire();
-        const second = new McpOAuthService(
-          new McpConnectionStore(db, f.key),
-          f.destination,
-          (request) => f.gateway.fetch(request)
+        const second = new McpOAuthService(new McpConnectionStore(db, f.key), (request) =>
+          f.gateway.fetch(request)
         );
         const tokens = await Promise.all([
           f.service.credential(binding),
@@ -276,7 +269,7 @@ export function managedMcpConformance(factory: Factory) {
           },
         };
         const start = () =>
-          new McpOAuthService(new McpConnectionStore(failing, f.key), f.destination, (request) =>
+          new McpOAuthService(new McpConnectionStore(failing, f.key), (request) =>
             f.gateway.fetch(request)
           ).start(
             "alice",
@@ -356,10 +349,8 @@ export function managedMcpConformance(factory: Factory) {
             return db.batch(statements);
           },
         };
-        const oauth = new McpOAuthService(
-          new McpConnectionStore(pausedDb, f.key),
-          f.destination,
-          (request) => f.gateway.fetch(request)
+        const oauth = new McpOAuthService(new McpConnectionStore(pausedDb, f.key), (request) =>
+          f.gateway.fetch(request)
         );
         const pending = oauth.start(
           "alice",

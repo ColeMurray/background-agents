@@ -113,12 +113,12 @@ export class SessionMcpContext {
     );
   }
   /**
-   * The multiplayer fence: unless multiplayer delegation is on, a session in which
-   * another person has an eligible prompt delegates for nobody. A child spawned
-   * here inherits the same answer, so spawning cannot step around the fence.
+   * The multiplayer fence: a session in which another person has an eligible
+   * prompt delegates for nobody, because a request proves only the shared sandbox
+   * bearer, not which author's process sent it. A child spawned here inherits the
+   * same answer, so spawning cannot step around the fence.
    */
   mayDelegateFor(canonicalUserId: string): boolean {
-    if (this.env.MCP_MULTIPLAYER_ENABLED === "true") return true;
     return !this.sql
       .exec(
         "SELECT id FROM messages WHERE mcp_eligible = 1 AND admitted_canonical_user_id IS NOT NULL AND admitted_canonical_user_id != ? LIMIT 1",
@@ -174,11 +174,7 @@ export class SessionMcpContext {
         if (runtime?.mcp_runtime_version !== 1) throw new McpError("mcp_unsupported");
         if (!sandbox?.modal_sandbox_id || sandbox.status !== "ready" || sandbox.fenced || !session)
           throw new McpError("mcp_execution_inactive");
-        if (
-          this.env.MCP_USER_DELEGATION_ENABLED !== "true" ||
-          !message.mcp_eligible ||
-          !message.admitted_canonical_user_id
-        )
+        if (!message.mcp_eligible || !message.admitted_canonical_user_id)
           throw new McpError("mcp_execution_inactive");
         if (!this.mayDelegateFor(message.admitted_canonical_user_id))
           throw new McpError("mcp_unsupported");
@@ -307,8 +303,6 @@ export class SessionMcpContext {
         if (runtime?.mcp_runtime_version === POISONED_RUNTIME_VERSION)
           throw new McpError("mcp_runtime_restart_required");
         if (runtime?.mcp_runtime_version !== 1) throw new McpError("mcp_unsupported");
-        if (this.env.MCP_USER_DELEGATION_ENABLED !== "true")
-          throw new McpError("mcp_execution_inactive");
         const active = this.active();
         if (
           !active?.mcp_context ||
@@ -330,8 +324,7 @@ export class SessionMcpContext {
         snapshot.messageId = active.id;
         snapshot.revision = active.mcp_revision;
         snapshot.grant = grant;
-      } else if (this.env.MANAGED_MCP_ROUTING_ENABLED !== "true")
-        throw new McpError("mcp_execution_inactive");
+      }
       if (input.expected && JSON.stringify(snapshot) !== JSON.stringify(input.expected))
         throw new McpError("mcp_context_changed", 409);
       const now = Date.now();

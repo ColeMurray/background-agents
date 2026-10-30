@@ -8,7 +8,6 @@ import { McpServerStore } from "../db/mcp-servers";
 import { McpConnectionStore } from "../db/mcp-connections";
 import { McpOAuthService } from "../mcp/oauth";
 import { McpError, mcpErrorResponse } from "../mcp/errors";
-import { createMcpDestinationPolicy } from "../mcp/authorization";
 import { parseBody } from "./body";
 import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
 
@@ -22,7 +21,7 @@ function services(ctx: UserRouteContext, env: Env) {
   return {
     store,
     registry: new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env)),
-    oauth: new McpOAuthService(store, createMcpDestinationPolicy(env)),
+    oauth: new McpOAuthService(store),
   };
 }
 async function list(_request: Request, env: Env, _params: object, ctx: UserRouteContext) {

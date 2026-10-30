@@ -1163,8 +1163,7 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
 
   const mcpStore = new McpServerStore(db, repoSecretsEncryptionKey);
   const mcpServerLookup: McpServerLookup = {
-    getForLaunch: (repositories) =>
-      mcpStore.getForLaunch(repositories, env.MANAGED_MCP_ROUTING_ENABLED === "true"),
+    getForLaunch: (repositories) => mcpStore.getForLaunch(repositories),
   };
 
   // Session-scoped gate: resolved from the primary member (the scalar mirror
@@ -1191,7 +1190,6 @@ function createLifecycleManager(deps: LifecycleManagerDeps): SandboxLifecycleMan
   const config = {
     ...DEFAULT_LIFECYCLE_CONFIG,
     controlPlaneUrl,
-    managedMcpRoutingEnabled: env.MANAGED_MCP_ROUTING_ENABLED === "true",
     recordMcpServers: deps.recordMcpServers,
     model: DEFAULT_MODEL,
     // Re-derived per use until the session row exists: on the first-ever

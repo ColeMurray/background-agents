@@ -189,9 +189,6 @@ export default defineConfig({
           },
           queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
           bindings: {
-            MANAGED_MCP_ROUTING_ENABLED: "true",
-            MCP_USER_DELEGATION_ENABLED: "true",
-            MCP_ALLOWED_UPSTREAM_ORIGINS: "https://mcp.fixture.test",
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
             SERVICE_AUTH_SECRET_WEB: "test-service-secret-web",
             SERVICE_AUTH_SECRET_SLACK_BOT: "test-service-secret-slack-bot",
