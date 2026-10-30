@@ -107,6 +107,7 @@ function SessionContent({
     sandboxError,
     boot,
     events,
+    liveReasoning,
     participants,
     artifacts,
     currentParticipantId,
@@ -338,6 +339,7 @@ function SessionContent({
             >
               <SessionTimeline
                 events={events}
+                liveReasoning={liveReasoning}
                 sessionId={sessionId}
                 currentParticipantId={currentParticipantId}
                 participantProfiles={profiles}

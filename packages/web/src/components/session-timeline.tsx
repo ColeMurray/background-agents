@@ -36,7 +36,7 @@ import {
   type TimelineVirtualRow,
 } from "@/lib/timeline-virtual-rows";
 import { toUiArtifactMetadata } from "@/lib/session-socket/artifact-metadata";
-import { reasoningKey, selectLiveReasoning } from "@/lib/reasoning";
+import { reasoningKey } from "@/lib/reasoning";
 import type { SandboxEvent } from "@/types/session";
 import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
@@ -59,6 +59,7 @@ const MAX_AUTOFIX_RAW_FALLBACK_CHARS = 4_000;
 
 export function SessionTimeline({
   events,
+  liveReasoning = null,
   sessionId,
   currentParticipantId,
   participantProfiles,
@@ -69,6 +70,8 @@ export function SessionTimeline({
   onOpenMedia,
 }: {
   events: SandboxEvent[];
+  /** The step reasoning right now, derived before `events` was reordered for display. */
+  liveReasoning?: ReasoningEvent | null;
   sessionId: string;
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
@@ -99,16 +102,12 @@ export function SessionTimeline({
   >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
-  const liveReasoning = useMemo(
-    () => selectLiveReasoning(events, isProcessing),
-    [events, isProcessing]
-  );
   const virtualRows = useMemo(
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
         isProcessing,
-        liveReasoning,
+        liveReasoning: isProcessing ? liveReasoning : null,
       }),
     [isProcessing, liveReasoning, timelineItems]
   );

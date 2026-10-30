@@ -1,4 +1,5 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   ParticipantPresence,
   PromptQueueItem,
@@ -9,6 +10,7 @@ import type {
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
 import { applyBootProgress, endBootPhase, seedSandboxBoot, type SandboxBoot } from "./boot-phase";
+import { nextLiveReasoning } from "@/lib/reasoning";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
 interface HistoryCursor {
@@ -27,6 +29,12 @@ export interface SessionSocketState {
   presenceSynced: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
+  /**
+   * The reasoning step the model is in the middle of, derived from events in
+   * arrival order: `events` is a display log that holds back and reorders
+   * assistant tokens.
+   */
+  liveReasoning: ReasoningEvent | null;
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
@@ -58,6 +66,7 @@ export const initialSessionSocketState: SessionSocketState = {
   presenceSynced: false,
   sessionState: null,
   events: [],
+  liveReasoning: null,
   participants: [],
   artifacts: [],
   currentParticipantId: null,
@@ -98,8 +107,14 @@ function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact
   return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
 }
 
-function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
-  return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
+function renderTimelineEvents(
+  items: SessionTimelineEvent[]
+): Pick<SessionSocketState, "events" | "liveReasoning"> {
+  const events = items.map((item) => toUiSandboxEvent(item.event));
+  return {
+    events: collapseReplayTokenEvents(events),
+    liveReasoning: events.reduce(nextLiveReasoning, null),
+  };
 }
 
 export function createSessionSocketState(snapshot: SessionSnapshot): SessionSocketState {
@@ -112,7 +127,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
       totalCost: snapshot.session.totalCost ?? 0,
     },
     artifacts: snapshot.artifacts.map(toUiArtifact),
-    events: renderTimelineEvents(timelineEvents),
+    ...renderTimelineEvents(timelineEvents),
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
     promptQueue: snapshot.promptQueue,
@@ -206,7 +221,7 @@ function reduceServerMessage(
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
         canManageBudget: message.canManageBudget ?? false,
-        events: renderTimelineEvents(timelineEvents),
+        ...renderTimelineEvents(timelineEvents),
         hasMoreHistory: message.timeline.hasMore,
         cursor: message.timeline.cursor,
         // A fetch_history dropped by a disconnect would otherwise leave this
@@ -373,7 +388,12 @@ export function sessionSocketReducer(
       for (const event of action.events) {
         if (event.type === "boot_progress") boot = applyBootProgress(boot, event);
       }
-      return { ...state, events: [...state.events, ...action.events], boot };
+      return {
+        ...state,
+        events: [...state.events, ...action.events],
+        liveReasoning: action.events.reduce(nextLiveReasoning, state.liveReasoning),
+        boot,
+      };
     }
 
     case "history_requested":

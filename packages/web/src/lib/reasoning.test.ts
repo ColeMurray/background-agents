@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@/types/session";
-import { reasoningDetail, reasoningTitle, selectLiveReasoning } from "./reasoning";
+import { nextLiveReasoning, reasoningDetail, reasoningTitle } from "./reasoning";
+import {
+  createSessionSocketState,
+  initialSessionSocketState,
+  sessionSocketReducer,
+  type SessionSocketState,
+} from "./session-socket/reducer";
 import { buildTimelineItems } from "./timeline-items";
 
 function reasoning(
@@ -34,6 +41,14 @@ const toolCall: SandboxEvent = {
   timestamp: 20,
 };
 
+const completed: SandboxEvent = {
+  type: "execution_complete",
+  sandboxId: "sandbox-1",
+  messageId: "message-1",
+  success: true,
+  timestamp: 50,
+};
+
 describe("reasoningDetail", () => {
   it("keeps everything after the title line", () => {
     expect(reasoningDetail("**Planning the fix**\n\nThe test compares local and UTC dates.")).toBe(
@@ -51,32 +66,29 @@ describe("reasoningTitle", () => {
   });
 });
 
-describe("selectLiveReasoning", () => {
+function liveReasoningOf(events: SandboxEvent[]): ReasoningEvent | null {
+  return events.reduce(nextLiveReasoning, null);
+}
+
+describe("nextLiveReasoning", () => {
   it("narrates the newest reasoning while the runtime reports it active", () => {
     const first = reasoning("step-1", ["**Planning**"]);
     const latest = reasoning("step-1", ["**Planning**", "**Checking CI**"]);
 
-    expect(selectLiveReasoning([first, latest], true)).toBe(latest);
-    expect(selectLiveReasoning([first, latest, toolCall], true)).toBe(latest);
-    expect(selectLiveReasoning([toolCall, reasoning("step-2", [])], true)?.stepId).toBe("step-2");
+    expect(liveReasoningOf([first, latest])).toBe(latest);
+    expect(liveReasoningOf([first, latest, toolCall])).toBe(latest);
+    expect(liveReasoningOf([toolCall, reasoning("step-2", [])])?.stepId).toBe("step-2");
   });
 
   it("stops when the step moves on to output, however long the output takes", () => {
     const writing = reasoning("step-1", ["**Planning**"], 30, false);
     const resumed = reasoning("step-1", ["**Planning**"], 90, true);
 
-    expect(selectLiveReasoning([reasoning("step-1", ["**Planning**"]), writing], true)).toBeNull();
-    expect(selectLiveReasoning([writing, resumed], true)).toBe(resumed);
+    expect(liveReasoningOf([reasoning("step-1", ["**Planning**"]), writing])).toBeNull();
+    expect(liveReasoningOf([writing, resumed])).toBe(resumed);
   });
 
   it("ignores an earlier turn's reasoning but not a queued follow-up", () => {
-    const completed: SandboxEvent = {
-      type: "execution_complete",
-      sandboxId: "sandbox-1",
-      messageId: "message-0",
-      success: false,
-      timestamp: 5,
-    };
     const queued: SandboxEvent = {
       type: "user_message",
       messageId: "message-2",
@@ -85,12 +97,82 @@ describe("selectLiveReasoning", () => {
     };
     const live = reasoning("step-1", ["**Planning**"]);
 
-    expect(selectLiveReasoning([reasoning("step-0", ["**Earlier**"]), completed], true)).toBeNull();
-    expect(selectLiveReasoning([live, queued], true)).toBe(live);
+    expect(liveReasoningOf([reasoning("step-0", ["**Earlier**"]), completed])).toBeNull();
+    expect(liveReasoningOf([live, queued])).toBe(live);
+  });
+});
+
+describe("live reasoning at the socket boundary", () => {
+  // Commentary from an earlier step of the running turn. The display log
+  // moves an unfinished turn's replayed token to its end.
+  const commentary: SandboxEvent = {
+    type: "token",
+    sandboxId: "sandbox-1",
+    messageId: "message-1",
+    content: "Let me check the tests first.",
+    timestamp: 5,
+  };
+  const live = reasoning("step-2", ["**Planning**"], 30);
+  const timeline = [commentary, toolCall, live].map((event, index) => ({
+    eventId: `event-${index}`,
+    timelineSequence: index,
+    event,
+  }));
+  const snapshot: SessionSnapshot = {
+    session: {
+      id: "session-1",
+      title: null,
+      repoOwner: "acme",
+      repoName: "web-app",
+      baseBranch: "main",
+      branchName: null,
+      status: "active",
+      sandboxStatus: "ready",
+      harness: "opencode",
+      messageCount: 1,
+      createdAt: 1,
+      isProcessing: true,
+    },
+    artifacts: [],
+    timeline: { events: timeline, hasMore: false, cursor: null },
+    promptQueue: [],
+  };
+
+  it("keeps the live step when a snapshot's replayed token is moved after it", () => {
+    const state = createSessionSocketState(snapshot);
+
+    expect(state.events.at(-1)).toMatchObject({ type: "token" });
+    expect(state.liveReasoning).toEqual(live);
   });
 
-  it("is never live once the turn stops processing", () => {
-    expect(selectLiveReasoning([reasoning("step-1", ["**Planning**"])], false)).toBeNull();
+  it("keeps the live step when a reconnect resubscribes mid-step", () => {
+    const state = sessionSocketReducer(initialSessionSocketState, {
+      type: "server_message",
+      message: {
+        type: "subscribed",
+        session: snapshot.session,
+        artifacts: [],
+        participantId: "participant-1",
+        participant: { participantId: "participant-1", name: "Test User" },
+        timeline: snapshot.timeline,
+        promptQueue: [],
+      },
+    });
+
+    expect(state.liveReasoning).toEqual(live);
+  });
+
+  it("follows live events until the turn completes", () => {
+    const writing = { ...live, active: false };
+    const reduceEvents = (state: SessionSocketState, events: SandboxEvent[]) =>
+      sessionSocketReducer(state, { type: "events_appended", events });
+
+    const resumed = reduceEvents(createSessionSocketState(snapshot), [writing, { ...live }]);
+    const finished = reduceEvents(resumed, [commentary, completed]);
+
+    expect(reduceEvents(createSessionSocketState(snapshot), [writing]).liveReasoning).toBeNull();
+    expect(resumed.liveReasoning).toEqual(live);
+    expect(finished.liveReasoning).toBeNull();
   });
 });
 
