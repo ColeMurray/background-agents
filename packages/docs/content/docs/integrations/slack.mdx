@@ -20,12 +20,13 @@ relatedCode:
   - packages/control-plane/src/authorization/slack-post-gate.ts
   - packages/control-plane/src/authorization/teams-enforcement.ts
   - packages/slack-bot/src/events/message-handler.ts
+  - packages/slack-bot/src/solo-threads.ts
   - packages/slack-bot/src/classifier/catalog.ts
   - packages/web/src/components/settings/integrations/slack-integration-settings.tsx
   - docs/HOW_IT_WORKS.md
 ---
 
-Mention the OpenInspect bot in a channel or DM it, pick a target if asked, and continue the session in the same Slack thread. Mention the bot again on interactive channel follow-ups; DM follow-ups need no mention.
+Mention the OpenInspect bot in a channel or DM it, pick a target if asked, and continue the session in the same Slack thread. Mention the bot again on interactive channel follow-ups, unless your mention started the session and its acknowledgement said you can reply without one; DM follow-ups need no mention.
 
 This page is for people using Slack day to day. Installing the Slack app and deploying the worker is operator work; see [Getting started](https://github.com/ColeMurray/background-agents/blob/main/docs/GETTING_STARTED.md) in the repository.
 
@@ -57,7 +58,7 @@ If OpenInspect cannot tell which repository you mean, choose a repository, an en
 <Step>
 ### Follow the work
 
-Use **View Session** to open the full web session while the agent works. To continue, reply in the same thread and mention the bot if it is a channel thread. In a DM thread, just reply.
+Use **View Session** to open the full web session while the agent works. To continue, reply in the same thread and mention the bot if it is a channel thread (not needed in a [solo thread](#solo-threads)). In a DM thread, just reply.
 
 </Step>
 </Steps>
@@ -92,7 +93,7 @@ sequenceDiagram
 | ------------------------------ | ------------------------------------------------------------------------- |
 | Start from a channel           | Invite the bot, then `@mention` it with a request                         |
 | Start from a DM                | Send the bot a direct message                                             |
-| Continue a session             | Reply in the same thread; @mention the bot in channels, not DMs           |
+| Continue a session             | Reply in the same thread; @mention the bot unless the thread is solo      |
 | Send images to the agent       | Attach PNG, JPEG, WebP, or GIF images to an interactive request           |
 | Forward a message              | Share another Slack message with the bot; text, images, and source travel |
 | Pick the session target        | Use a repository, environment, or empty sandbox                           |
@@ -153,7 +154,7 @@ A `!reasoning`-only follow-up keeps the thread's session model, as a follow-up w
 
 Attach PNG, JPEG, WebP, or GIF images to a DM, to a channel request that mentions the bot, or to an interactive thread follow-up, with instructions or on their own (for example a screenshot with "fix the visible error"). Limits: at most six images per message, 10 MiB each. Images on earlier messages in the thread can also be forwarded as context; the current request's images take priority within the six-image limit.
 
-In an interactive channel thread, mention the bot on a follow-up for its text, images, or forwarded messages to reach the agent. Without a mention, the interactive bot does not process the follow-up. In a DM, no mention is needed. Watched-channel automations are a separate workflow and can respond to unmentioned text.
+In an interactive channel thread, mention the bot on a follow-up for its text, images, or forwarded messages to reach the agent. Without a mention, the follow-up does not send an instruction to the session, except in a [solo thread](#solo-threads). In a DM, no mention is needed. Watched-channel automations are a separate workflow and can respond to unmentioned text.
 
 - If OpenInspect asks you to choose a target, choose normally; the images are retrieved after you pick and sent with the saved request.
 - If some images cannot be read, the rest still reach the agent and the bot posts a warning in the thread. If an image-only request loses every image, nothing is sent.
@@ -165,7 +166,7 @@ In an interactive channel thread, mention the bot on a follow-up for its text, i
 
 ### Forwarded messages
 
-Share (forward) another Slack message to a DM, to a channel request that mentions the bot, or to a thread follow-up (with an @mention in channels). Add a comment such as "deal with this" and the comment becomes the instruction; forward without a comment and the shared message is the whole request.
+Share (forward) another Slack message to a DM, to a channel request that mentions the bot, or to a thread follow-up (with an @mention in channels, unless it is a [solo thread](#solo-threads)). Add a comment such as "deal with this" and the comment becomes the instruction; forward without a comment and the shared message is the whole request.
 
 The agent receives the forwarded text with links as written, its images (same six-image, 10 MiB limits), and its author, source channel, permalink, channel id, and timestamp. You can forward up to ten messages per request; each is truncated at 4,000 characters. Link previews are skipped.
 
@@ -179,7 +180,24 @@ In shared channels, only the original requester can choose. If the dropdown has 
 
 ## Threaded conversations
 
-A top-level request starts a thread. For interactive sessions, reply in that thread with an `@mention` in channels; in a DM thread, reply without a mention. Text, images, and forwarded messages on unmentioned channel replies are not delivered as interactive follow-ups. Slack message automations handle unmentioned channel text separately.
+A top-level request starts a thread. For interactive sessions, reply in that thread with an `@mention` in channels; in a DM thread, reply without a mention. Text, images, and forwarded messages on unmentioned channel replies are not delivered as interactive follow-ups, except in a solo thread. Slack message automations handle unmentioned channel text separately.
+
+### Solo threads
+
+A channel thread becomes a solo thread when your @mention of the bot starts its session and the bot's acknowledgement says: "You can reply without mentioning me while you are the only person in this thread." The bot adds that line only when it reads the thread as the session starts and finds that only you and bots have posted. In a solo thread, your replies send an instruction to this session without mentioning the bot.
+
+| Thread                                                     | Does a reply need an @mention to send an instruction? |
+| ---------------------------------------------------------- | ----------------------------------------------------- |
+| Solo thread, reply from the person who started the session | No                                                    |
+| Another person has posted in the thread                    | Yes, for everyone, from then on                       |
+| Another person posted before the session started           | Yes; the acknowledgement has no solo line             |
+| DM thread                                                  | No                                                    |
+
+When the bot notices another person in a solo thread, from their post or from the thread it reads for your next unmentioned reply, it posts a message in the thread for everyone: "This thread now has multiple people. From now on, mention @bot to send an instruction to this session." In rare cases, such as two people posting at the same moment, that message can appear twice. The thread then needs an @mention for good, even if that person deletes their message. Other bots and Slackbot do not count as people.
+
+An unmentioned reply only continues the thread's open session; it never starts one. It needs something to run: text, an image, or a forwarded message. A reply that opens by mentioning a teammate (`@alice can you check this?`) is left for them. Edits and replies also sent to the channel are not sent. The bot reads the thread on each unmentioned reply and does not send the reply if Slack cannot return the whole thread.
+
+A reply that is sent gets the same :eyes: reaction as a mentioned follow-up, works the same way, including `!model` and `!reasoning`, and does not also run Slack message automations. A reply that is not sent gets no response from the bot, except the message above when the thread shows another person, or the error for a malformed `!model` or `!reasoning` flag. It can still reach the session as thread context with your next instruction or match a Slack message automation. A thread stays solo for about 7 days after its session starts.
 
 The thread stays connected to the session for about 7 days. Replying after that, or outside the thread, may start target selection again and create a new session.
 
