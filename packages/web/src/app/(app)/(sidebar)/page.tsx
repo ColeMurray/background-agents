@@ -255,13 +255,15 @@ export default function Home() {
     }
   );
 
-  // Unlike warming, Send remains available for model/terminal feedback. Submission
+  // Unlike warming, Send remains available for model/terminal feedback. It is disabled
+  // while model preferences load, because submission ignores it until then. Submission
   // still guards loading and terminal failures, including keyboard shortcuts.
   const sendDisabled =
     (!prompt.trim() && !hasAttachments) ||
     launch.submitting ||
     sessionAttachments.isUploading ||
     !launchContextReady ||
+    models.loading ||
     !isLaunchable;
 
   return (
