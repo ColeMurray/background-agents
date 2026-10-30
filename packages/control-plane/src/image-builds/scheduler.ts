@@ -8,7 +8,7 @@ import type { ImageBuildProvider } from "./model";
 import { resolveImageBuildTokenScope } from "./credential-scope";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
-import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
+import { evaluateImageBuildRebuildPolicy, resolveMinRebuildIntervalMs } from "./rebuild-policy";
 import { ImageBuildReaper } from "./reaper";
 import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
@@ -239,6 +239,7 @@ export class ImageBuildScheduler {
     const provider = this.provider;
     const sourceControl = this.sourceControl;
     const scopes = await this.listScopes(this.db);
+    const minRebuildIntervalMs = resolveMinRebuildIntervalMs(this.env);
 
     for (const scope of scopes) {
       try {
@@ -251,7 +252,8 @@ export class ImageBuildScheduler {
             repositoriesFingerprint: target.repositoriesFingerprint,
           },
           rows,
-          provider
+          provider,
+          { minRebuildIntervalMs }
         );
 
         let rebuild = decision.type === "rebuild";

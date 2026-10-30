@@ -202,7 +202,10 @@ function harness(
   };
 }
 
-function mockReadyImages({ store, resolveTarget }: ReturnType<typeof harness>): void {
+function mockReadyImages(
+  { store, resolveTarget }: ReturnType<typeof harness>,
+  createdAt = 1
+): void {
   store.getReconciliationStatus.mockImplementation(async (scope: ImageBuildScope) => {
     const target = await resolveTarget({} as Env, {} as SqlDatabase, scope);
     return [
@@ -221,7 +224,7 @@ function mockReadyImages({ store, resolveTarget }: ReturnType<typeof harness>): 
         runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
         buildDurationSeconds: 1,
         errorMessage: null,
-        createdAt: 1,
+        createdAt,
       },
     ];
   });
@@ -398,6 +401,35 @@ describe("ImageBuildScheduler", () => {
     );
     expect(stats.branchUnknown).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it("leaves a moved branch alone while the ready image is within the minimum interval", async () => {
+    const getBranchHead = vi.fn(async () => "def456");
+    const h = harness({
+      env: createTestEnv({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "86400000" }),
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    mockReadyImages(h, Date.now() - 60 * 60 * 1000);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesScanned).toBe(1);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds a moved branch once the ready image is older than the minimum interval", async () => {
+    const getBranchHead = vi.fn(async () => "def456");
+    const h = harness({
+      env: createTestEnv({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "86400000" }),
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    mockReadyImages(h, Date.now() - 25 * 60 * 60 * 1000);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.branchDrifted).toBe(1);
+    expect(stats.triggered).toBe(1);
   });
 
   it("starts every required build found by the full scan", async () => {

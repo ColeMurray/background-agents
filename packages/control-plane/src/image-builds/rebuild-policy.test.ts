@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import type { ImageBuildProvider } from "./model";
-import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
+import { evaluateImageBuildRebuildPolicy, resolveMinRebuildIntervalMs } from "./rebuild-policy";
 import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 
 const unit = {
@@ -99,6 +99,63 @@ describe("evaluateImageBuildRebuildPolicy", () => {
     expect(decision.type).toBe("check_branches");
     if (decision.type === "check_branches") {
       expect(decision.recordedShas.get("acme/web")).toBe("abc123");
+    }
+  });
+});
+
+describe("minimum rebuild interval", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = 1_000 * HOUR;
+
+  it("skips the branch check while the ready image is younger than the interval", () => {
+    expect(
+      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - 2 * HOUR })], "modal", {
+        minRebuildIntervalMs: 24 * HOUR,
+        now,
+      })
+    ).toEqual({ type: "skip", reason: "fresh" });
+  });
+
+  it("checks branches once the ready image is older than the interval", () => {
+    expect(
+      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - 25 * HOUR })], "modal", {
+        minRebuildIntervalMs: 24 * HOUR,
+        now,
+      })
+    ).toMatchObject({ type: "check_branches" });
+  });
+
+  it("never delays a rebuild for a missing or incompatible image", () => {
+    const options = { minRebuildIntervalMs: 24 * HOUR, now };
+    expect(evaluateImageBuildRebuildPolicy(unit, [], "modal", options)).toMatchObject({
+      type: "rebuild",
+      reason: "missing_image",
+    });
+    expect(
+      evaluateImageBuildRebuildPolicy(
+        unit,
+        [row({ createdAt: now - HOUR, runtimeVersion: "v1-old" })],
+        "modal",
+        options
+      )
+    ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
+  });
+
+  it("keeps the old behavior without an interval", () => {
+    expect(
+      evaluateImageBuildRebuildPolicy(unit, [row({ createdAt: now - HOUR })], "modal")
+    ).toMatchObject({ type: "check_branches" });
+  });
+
+  it("reads IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS, treating blank or invalid values as no interval", () => {
+    expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "604800000" })).toBe(
+      168 * HOUR
+    );
+    expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: " 3600000 " })).toBe(
+      HOUR
+    );
+    for (const value of [undefined, "", "abc", "-1", "0"]) {
+      expect(resolveMinRebuildIntervalMs({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: value })).toBe(0);
     }
   });
 });

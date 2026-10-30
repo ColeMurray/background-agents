@@ -124,6 +124,25 @@ required rebuild it finds. Maintenance selects every pending terminal provider b
 artifact, while bounding concurrent cleanup calls. Sessions fall back to the normal startup flow
 while a scope waits for its build.
 
+#### Minimum rebuild interval
+
+When a build takes longer than the 30-minute schedule, or a base branch moves often, nearly every
+push starts a new build. To limit this, set `image_build_min_rebuild_interval_ms` in Terraform (the
+`IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS` Actions repository variable for CI deployments, or the
+environment variable of the same name on other hosts). While a scope's newest ready image is younger
+than this interval (in milliseconds), measured from the start of its build, the scheduler does not
+check that scope's branches, so new commits rebuild it at most once per interval. A missing image or
+an outdated runtime still rebuilds on the next tick, and the immediate triggers below are not
+limited. The default, `0`, rebuilds whenever a branch moves.
+
+```hcl
+image_build_min_rebuild_interval_ms = 604800000 # 7 days: new commits rebuild an image at most once a week
+```
+
+Sessions still sync the newer commits at startup, but setup scripts do not re-run, so a dependency
+change can take up to one interval to reach the image. Use the manual rebuild button when it must
+land sooner.
+
 When changing `sandbox_provider`, keep the previous provider's credentials configured until its
 terminal build-session cleanup backlog reaches zero. Maintenance dispatches cleanup from each row's
 recorded provider, independently of which provider is currently active; removing old credentials
@@ -482,7 +501,8 @@ Updating the shared sandbox toolchain does not automatically refresh prepared re
 environment images. Use the refresh button below after a dependency-only update when those images
 must pick up the new tools. Existing compatible saved sessions remain usable.
 
-Pre-built images are rebuilt every 30 minutes when new commits are detected. The image's
+Pre-built images are rebuilt every 30 minutes when new commits are detected, or at most once per
+[minimum rebuild interval](#minimum-rebuild-interval) when the deployment sets one. The image's
 [model catalog](#model-catalog) is as old as the image, so a newly published model reaches a quiet
 repository only on its next rebuild. If you just pushed code, or want a new model available
 immediately, trigger a manual rebuild — the refresh button next to the repository in Settings >

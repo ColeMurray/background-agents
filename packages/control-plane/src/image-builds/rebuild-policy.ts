@@ -10,17 +10,36 @@ import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 export const MIN_REBUILD_RUNTIME_VERSION = MIN_REBUILD_RUNTIME_GENERATION;
 
 export type ImageBuildRebuildDecision =
-  | { type: "skip"; reason: "building" }
+  | { type: "skip"; reason: "building" | "fresh" }
   | {
       type: "rebuild";
       reason: "missing_image" | "runtime_incompatible" | "invalid_provenance";
     }
   | { type: "check_branches"; recordedShas: Map<string, string> };
 
+export interface ImageBuildRebuildOptions {
+  /** Skip the branch check while the ready image is younger than this. 0 = always check. */
+  minRebuildIntervalMs?: number;
+  now?: number;
+}
+
+/**
+ * IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS limits how often branch drift alone
+ * rebuilds an image, in milliseconds (for example 604800000 for weekly). Missing, incompatible or
+ * malformed images still rebuild at once. Blank or invalid means no limit.
+ */
+export function resolveMinRebuildIntervalMs(env: {
+  IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS?: string;
+}): number {
+  const intervalMs = Number(env.IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS?.trim() || "0");
+  return Number.isFinite(intervalMs) && intervalMs > 0 ? Math.floor(intervalMs) : 0;
+}
+
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
   rows: ImageBuildRecordView[],
-  provider: ImageBuildProvider
+  provider: ImageBuildProvider,
+  options: ImageBuildRebuildOptions = {}
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
   if (providerRows.some((row) => row.status === "building")) {
@@ -52,6 +71,13 @@ export function evaluateImageBuildRebuildPolicy(
     unit.repositories.some((repository) => !recordedShas.has(repositoryIdentityKey(repository)))
   ) {
     return { type: "rebuild", reason: "invalid_provenance" };
+  }
+  const minRebuildIntervalMs = options.minRebuildIntervalMs ?? 0;
+  if (
+    minRebuildIntervalMs > 0 &&
+    (options.now ?? Date.now()) - ready.createdAt < minRebuildIntervalMs
+  ) {
+    return { type: "skip", reason: "fresh" };
   }
   return { type: "check_branches", recordedShas };
 }

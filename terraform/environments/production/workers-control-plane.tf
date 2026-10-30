@@ -108,6 +108,9 @@ module "control_plane_worker" {
     var.session_do_location_hint != "" ? {
       SESSION_DO_LOCATION_HINT = { value = var.session_do_location_hint }
     } : {},
+    var.image_build_min_rebuild_interval_ms > 0 ? {
+      IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS = { value = tostring(var.image_build_min_rebuild_interval_ms) }
+    } : {},
     local.github_oauth_enabled ? {
       GITHUB_CLIENT_ID = { value = trimspace(var.github_client_id) }
     } : {},
