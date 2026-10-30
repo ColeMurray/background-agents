@@ -14,6 +14,7 @@ import {
   seedMessage,
   seedSandboxAuth,
   routeRequest,
+  serviceFetch,
 } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
@@ -455,6 +456,47 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         scm_login: "second-user",
         scm_access_token_encrypted: null,
       },
+    ]);
+  });
+
+  it("passes personal MCP delegation only through the turn's own sandbox", async () => {
+    const alice = "11111111111111111111111111111111";
+    const bob = "22222222222222222222222222222222";
+    const { parentName, stub, sandboxToken } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      canonicalUserId: alice,
+    });
+    await queryDO(stub, "UPDATE messages SET mcp_eligible = 1 WHERE status = 'processing'");
+    const url = `https://test.local/sessions/${parentName}/children`;
+    const body = JSON.stringify({ title: "Tracker child", prompt: "Use the tracker" });
+    const childAuthority = async (response: Response) => {
+      expect(response.status).toBe(201);
+      const { sessionId } = await response.json<{ sessionId: string }>();
+      return queryDO<{ admitted_canonical_user_id: string | null; mcp_eligible: number }>(
+        env.SESSION.get(env.SESSION.idFromName(sessionId)),
+        "SELECT admitted_canonical_user_id, mcp_eligible FROM messages"
+      );
+    };
+
+    const fromSandbox = await SELF.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body,
+    });
+    expect(await childAuthority(fromSandbox)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 1 },
+    ]);
+
+    // A collaborator spawning during Alice's turn chooses the prompt, so it must not run
+    // with her personal MCP grants.
+    const fromCollaborator = await serviceFetch(url, {
+      method: "POST",
+      body,
+      as: { userId: bob, role: "member" },
+    });
+    expect(await childAuthority(fromCollaborator)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 0 },
     ]);
   });
 

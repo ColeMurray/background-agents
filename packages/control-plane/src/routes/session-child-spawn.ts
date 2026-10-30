@@ -368,7 +368,11 @@ export async function handleSpawnChild(
       content: body.prompt,
       authorId: spawnContext.promptAuthor.userId,
       canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
-      ...(spawnContext.promptAuthor.mcpEligible ? { mcpEligible: true } : {}),
+      // Only the turn's own sandbox acts for its author. Any other caller choosing
+      // the child's prompt would borrow that author's personal MCP grants.
+      ...(spawnContext.promptAuthor.mcpEligible && ctx.principal?.kind === "sandbox"
+        ? { mcpEligible: true }
+        : {}),
       promptAccountUserId,
       source: "agent",
     } satisfies EnqueuePromptRequest;
