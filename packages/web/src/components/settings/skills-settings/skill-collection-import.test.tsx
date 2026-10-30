@@ -192,9 +192,12 @@ describe("SkillImport collection mode", () => {
     await user.click(screen.getByLabelText("Repository"));
     await user.click(await screen.findByRole("option", { name: "acme/skills" }));
     await user.click(screen.getByRole("button", { name: "Preview collection" }));
-    for (const environment of environments) {
-      fireEvent.click(screen.getByLabelText(environment.name));
-    }
+    // Commit every toggle at once; a render per click overruns the timeout under coverage.
+    act(() => {
+      for (const environment of environments) {
+        fireEvent.click(screen.getByLabelText(environment.name));
+      }
+    });
     expect(screen.getByRole("button", { name: "Import 1 skills" })).toBeDisabled();
 
     useEnvironmentsMock.mockReturnValue({
