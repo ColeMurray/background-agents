@@ -29,6 +29,12 @@ variable "script_path" {
   type        = string
 }
 
+variable "script_sha256" {
+  description = "Expected SHA-256 of the file at script_path. When set, a file that does not match fails the plan instead of being deployed. Null skips the check."
+  type        = string
+  default     = null
+}
+
 variable "kv_namespaces" {
   description = "Map of KV namespace bindings keyed by binding name"
   type = map(object({

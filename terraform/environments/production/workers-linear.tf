@@ -2,9 +2,10 @@
 # Linear Bot Worker
 # =============================================================================
 
-# Build linear-bot worker bundle (only runs during apply, not plan)
+# Build linear-bot worker bundle (only runs during apply, not plan).
+# Skipped when the bundle is built before plan (build_workers_in_terraform = false).
 resource "null_resource" "linear_bot_build" {
-  count = var.enable_linear_bot ? 1 : 0
+  count = var.enable_linear_bot && var.build_workers_in_terraform ? 1 : 0
 
   triggers = {
     always_run = timestamp()
@@ -24,6 +25,7 @@ module "linear_bot_worker" {
   worker_name      = "open-inspect-linear-bot-${local.name_suffix}"
   worker_subdomain = var.cloudflare_worker_subdomain
   script_path      = local.linear_bot_script_path
+  script_sha256    = lookup(var.worker_bundle_sha256, "linear-bot", null)
 
   kv_namespaces = {
     LINEAR_KV = {
