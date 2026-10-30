@@ -92,7 +92,72 @@ function expectNormalized(result: ReturnType<typeof normalizeSentryEvent>) {
   return result.event;
 }
 
+// Shape from Sentry's integration-platform docs (webhooks/issue-alerts): no data.issue.
+const documentedEventAlertPayload = {
+  action: "triggered",
+  actor: { id: "sentry", name: "Sentry", type: "application" },
+  installation: { uuid: "a8e5d37a-696c-4c54-adb5-b3f28d64c7de" },
+  data: {
+    event: {
+      event_id: "e4874d664c3540c1a32eab185f12c5ab",
+      issue_id: "1117540176",
+      issue_url: "https://sentry.io/api/0/issues/1117540176/",
+      project: 1,
+      level: "error",
+      title: "ReferenceError: blooopy is not defined",
+      culprit: "?(app)",
+      url: "https://sentry.io/api/0/projects/test-org/front-end/events/e4874d664c3540c1a32eab185f12c5ab/",
+      web_url:
+        "https://sentry.io/organizations/test-org/issues/1117540176/events/e4874d664c3540c1a32eab185f12c5ab/",
+      metadata: { type: "ReferenceError", value: "blooopy is not defined", filename: "/runner" },
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                { filename: "/runner", abs_path: "/runner", function: null, lineno: 3 },
+                { filename: "/app.js", function: "init", lineno: 10 },
+              ],
+            },
+          },
+        ],
+      },
+      tags: [
+        ["browser", "Chrome 75.0.3770"],
+        ["level", "error"],
+      ],
+    },
+    triggered_rule: "Very Important Alert!",
+    issue_alert: { title: "Very Important Alert!", settings: [] },
+  },
+};
+
 describe("normalizeSentryEvent", () => {
+  it("normalizes the issue alert payload Sentry documents (no data.issue)", () => {
+    const event = expectNormalized(
+      normalizeSentryEvent(documentedEventAlertPayload, "auto-1", "event_alert")
+    );
+    expect(event.eventType).toBe("issue.created");
+    expect(event.triggerKey).toBe("sentry_issue:1117540176");
+    expect(event.concurrencyKey).toBe("sentry_issue:1117540176");
+    expect(event.sentryProject).toBe("front-end");
+    expect(event.sentryLevel).toBe("error");
+    expect(event.culpritFile).toBe("/runner");
+    expect(event.contextBlock).toContain("ReferenceError: blooopy is not defined");
+    expect(event.contextBlock).toContain("Issue ID: 1117540176");
+    expect(event.contextBlock).toContain("/app.js:10  init");
+    expect(event.contextBlock).toContain("Alert rule: Very Important Alert!");
+  });
+
+  it("skips a documented-shape alert whose event url has no project slug", () => {
+    const payload = structuredClone(documentedEventAlertPayload);
+    payload.data.event.url = "https://sentry.io/api/0/issues/1117540176/";
+    expect(normalizeSentryEvent(payload, undefined, "event_alert")).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
+  });
+
   it("normalizes a current Sentry issue.created webhook", () => {
     const event = expectNormalized(normalizeSentryEvent(issueWebhookPayload, undefined, "issue"));
 
