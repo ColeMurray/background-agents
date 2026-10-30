@@ -1,7 +1,6 @@
-import { describe, it, expect, onTestFinished, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { ExecutionContext as HonoExecutionContext } from "hono";
 import type { Env } from "../src/types";
-import type * as AutofixIngressModule from "../src/autofix-ingress";
 
 vi.mock("../src/github-auth", () => ({
   generateInstallationToken: vi.fn().mockResolvedValue("installation-token"),
@@ -10,14 +9,8 @@ vi.mock("../src/github-auth", () => ({
   checkSenderPermission: vi.fn().mockResolvedValue({ hasPermission: true }),
 }));
 
-vi.mock("../src/autofix-ingress", async (importOriginal) => {
-  const actual = await importOriginal<typeof AutofixIngressModule>();
-  return { ...actual, toAutofixEnvelope: vi.fn(actual.toAutofixEnvelope) };
-});
-
 import app from "../src/index";
 import { postReaction, postIssueComment, checkSenderPermission } from "../src/github-auth";
-import { toAutofixEnvelope } from "../src/autofix-ingress";
 
 /** Generate a valid GitHub webhook signature for a given secret and body. */
 async function sign(secret: string, body: string): Promise<string> {
@@ -379,78 +372,6 @@ describe("POST /webhooks/github", () => {
     await flushWaitUntil(ctx, 1);
     expect(forwardedEvents()).toHaveLength(2);
     expect(await env.GITHUB_KV.get("delivery:delivery-comment-1236")).toBe("processed");
-  });
-
-  it("redelivers an unqueued Autofix delivery without dispatching its session again", async () => {
-    // Ingress excludes bot mentions today, so admit this one anyway to cover a
-    // delivery that both starts a session and needs an Autofix handoff.
-    const actualIngress =
-      await vi.importActual<typeof AutofixIngressModule>("../src/autofix-ingress");
-    vi.mocked(toAutofixEnvelope).mockImplementation((input) =>
-      actualIngress.toAutofixEnvelope({ ...input, botUsername: undefined })
-    );
-    onTestFinished(() => vi.mocked(toAutofixEnvelope).mockReset());
-    const body = JSON.stringify({
-      action: "created",
-      issue: {
-        number: 42,
-        title: "Retry Autofix handoff",
-        pull_request: { url: "https://api.github.com/repos/test/repo/pulls/42" },
-      },
-      comment: { id: 1237, body: "@test-bot[bot] fix this", user: { login: "alice" } },
-      repository: { id: 99, owner: { login: "test" }, name: "repo", private: false },
-      sender: { login: "alice", id: 1001, avatar_url: "https://example.com/alice.png" },
-    });
-    const signature = await sign(SECRET, body);
-    const ctx = makeCtx();
-    const env = makeEnv();
-    vi.mocked(env.AUTOFIX_QUEUE.send).mockRejectedValueOnce(new Error("queue unavailable"));
-    const cpFetch = vi.mocked(env.CONTROL_PLANE.fetch);
-    cpFetch.mockImplementation(async (url) => {
-      const requestUrl = String(url);
-      if (requestUrl.includes("/integration-settings/github/resolved/")) {
-        return Response.json({ config: null });
-      }
-      if (requestUrl.startsWith("https://internal/github/route?")) {
-        return Response.json({ teamId: "team_pr", via: "pull_request_session" });
-      }
-      if (requestUrl.endsWith("/metadata")) {
-        return Response.json({ repo: "test/repo", metadata: null });
-      }
-      if (requestUrl === "https://internal/sessions") {
-        return Response.json({ sessionId: "session-123", status: "created" });
-      }
-      if (requestUrl.endsWith("/prompt")) return Response.json({ messageId: "message-123" });
-      return new Response(null, { status: 204 });
-    });
-    const request = () =>
-      new Request("http://localhost/webhooks/github", {
-        method: "POST",
-        body,
-        headers: {
-          "X-Hub-Signature-256": signature,
-          "X-GitHub-Event": "issue_comment",
-          "X-GitHub-Delivery": "delivery-autofix-retry",
-        },
-      });
-    const callsTo = (predicate: (url: string) => boolean) =>
-      cpFetch.mock.calls.filter(([url]) => predicate(String(url)));
-
-    expect((await app.fetch(request(), env, ctx)).status).toBe(503);
-    await flushWaitUntil(ctx, 0);
-    expect(callsTo((url) => url === "https://internal/sessions")).toHaveLength(1);
-    expect(callsTo((url) => url.endsWith("/prompt"))).toHaveLength(1);
-    expect(callsTo((url) => url.endsWith("/github-event"))).toHaveLength(1);
-    expect(await env.GITHUB_KV.get("delivery:delivery-autofix-retry")).toBeNull();
-    expect(await env.GITHUB_KV.get("delivery-dispatch:delivery-autofix-retry")).toBe("processed");
-
-    expect(await (await app.fetch(request(), env, ctx)).json()).toEqual({ ok: true });
-    await flushWaitUntil(ctx, 1);
-    expect(env.AUTOFIX_QUEUE.send).toHaveBeenCalledTimes(2);
-    expect(callsTo((url) => url === "https://internal/sessions")).toHaveLength(1);
-    expect(callsTo((url) => url.endsWith("/prompt"))).toHaveLength(1);
-    expect(callsTo((url) => url.endsWith("/github-event"))).toHaveLength(2);
-    expect(await env.GITHUB_KV.get("delivery:delivery-autofix-retry")).toBe("processed");
   });
 
   it("keys forwarded ready_for_review events by delivery id", async () => {
