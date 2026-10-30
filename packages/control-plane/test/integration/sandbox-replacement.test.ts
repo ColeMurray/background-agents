@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDurableObjectAlarm } from "cloudflare:test";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
 import type { SessionDO } from "../../src/cloudflare/durable-object";
 import { COMPATIBLE_RUNTIME_VERSION } from "../../src/image-builds/test-helpers";
 import { DEFAULT_LIFECYCLE_CONFIG } from "../../src/sandbox/lifecycle/manager";
@@ -12,14 +12,18 @@ import {
   initNamedSession,
   openSandboxWs,
   queryDO,
+  seedActiveUser,
   seedMessage,
   seedSandboxAuth,
 } from "./helpers";
+import { fetchRuns, makeRunRow, seedRun } from "./run-helpers";
 import { componentsOf, runInSessionDO } from "./session-do-access";
 
 const OLD_TOKEN = "replaced-sandbox-token";
 const OLD_SANDBOX_ID = "sb-replaced";
 const OLD_OBJECT_ID = "sb-replaced-object";
+const AUTOMATION_ID = "auto-replacement";
+const RUN_ID = "run-replacement";
 
 beforeEach(cleanD1Tables);
 afterEach(async () => {
@@ -97,6 +101,41 @@ async function seedInterruptedTurn(
   return stub;
 }
 
+/** Makes "msg-running" the prompt of a running automation run, unattended by anyone. */
+async function seedAutomationRun(stub: DurableObjectStub, sessionName: string) {
+  const owner = "automation-owner";
+  const now = Date.now();
+  await seedActiveUser(owner);
+  await env.DB.prepare(
+    `INSERT INTO automations
+       (id, owner_team_id, name, instructions, trigger_type, model, created_by, user_id,
+        created_at, updated_at, trigger_config)
+     VALUES (?, NULL, 'Nightly refactor', 'Fixture only', 'webhook', 'anthropic/claude-sonnet-4-6',
+       ?, ?, ?, ?, ?)`
+  )
+    .bind(AUTOMATION_ID, owner, owner, now, now, JSON.stringify({ conditions: [] }))
+    .run();
+  await seedRun(
+    makeRunRow(AUTOMATION_ID, {
+      id: RUN_ID,
+      session_id: sessionName,
+      status: "running",
+      started_at: now,
+    })
+  );
+  await runInSessionDO(stub, (_instance: SessionDO, state) => {
+    state.storage.sql.exec(
+      "UPDATE messages SET source = 'automation', callback_context = ? WHERE id = 'msg-running'",
+      JSON.stringify({
+        source: "automation",
+        automationId: AUTOMATION_ID,
+        runId: RUN_ID,
+        automationName: "Nightly refactor",
+      })
+    );
+  });
+}
+
 /** Stubs provider launches on the live DO, capturing the replacement's credentials. */
 function stubProviderLaunches(provider: SandboxProvider) {
   const launches: Launch[] = [];
@@ -171,11 +210,12 @@ describe("a sandbox replaced while a prompt is processing", () => {
       heartbeatAgeMs: timeoutMs + reconnectGraceMs + 1_000,
       managed: true,
     });
+    await seedAutomationRun(stub, name);
     let releaseWatchdogStop!: () => void;
-    const { launches, stopSandbox, notifyComplete } = await runInSessionDO(
+    const { launches, stopSandbox } = await runInSessionDO(
       stub,
       async (instance: SessionDO, state) => {
-        const { sandboxProvider: provider, callbackService } = componentsOf(instance);
+        const provider = componentsOf(instance).sandboxProvider;
         vi.spyOn(provider, "takeSnapshot").mockResolvedValue({
           success: true,
           imageId: "heartbeat-image",
@@ -186,11 +226,7 @@ describe("a sandbox replaced while a prompt is processing", () => {
           return { success: true };
         });
         await state.storage.setAlarm(Date.now() + 60_000);
-        return {
-          launches: stubProviderLaunches(provider),
-          stopSandbox,
-          notifyComplete: vi.spyOn(callbackService, "notifyComplete"),
-        };
+        return { launches: stubProviderLaunches(provider), stopSandbox };
       }
     );
 
@@ -215,12 +251,16 @@ describe("a sandbox replaced while a prompt is processing", () => {
       { id: "msg-running", status: "failed", error_message: SANDBOX_REPLACED_ERROR },
       { id: "msg-queued", status: "pending", error_message: null },
     ]);
-    await vi.waitFor(() =>
-      expect(notifyComplete).toHaveBeenCalledExactlyOnceWith(
-        "msg-running",
-        false,
-        SANDBOX_REPLACED_ERROR
-      )
+    await vi.waitFor(
+      async () =>
+        expect(await fetchRuns(AUTOMATION_ID)).toEqual([
+          expect.objectContaining({
+            id: RUN_ID,
+            status: "failed",
+            failure_reason: SANDBOX_REPLACED_ERROR,
+          }),
+        ]),
+      { timeout: 5_000 }
     );
 
     const { ws, prompt } = await connectReplacement(name, launches[0]);
