@@ -162,6 +162,14 @@ describe("live reasoning at the socket boundary", () => {
     expect(state.liveReasoning).toEqual(live);
   });
 
+  it("forgets the live step while the socket is closed", () => {
+    const closed = sessionSocketReducer(createSessionSocketState(snapshot), {
+      type: "socket_closed",
+    });
+
+    expect(closed.liveReasoning).toBeNull();
+  });
+
   it("follows live events until the turn completes", () => {
     const writing = { ...live, active: false };
     const reduceEvents = (state: SessionSocketState, events: SandboxEvent[]) =>

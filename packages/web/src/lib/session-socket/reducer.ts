@@ -405,6 +405,8 @@ export function sessionSocketReducer(
         ready: false,
         presenceSynced: false,
         participants: [],
+        // Silence while disconnected is not the model's; resubscribing restores the step.
+        liveReasoning: null,
       };
   }
 }
