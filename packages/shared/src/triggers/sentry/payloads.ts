@@ -70,6 +70,54 @@ export const sentryIssueAlertSchema = z.object({
   }),
 });
 
+/**
+ * Issue alert payload as Sentry actually sends it to an internal integration's alert action
+ * (`Sentry-Hook-Resource: event_alert`, `action: "triggered"`). It has no `data.issue`: the issue
+ * id and project come from the event (`issue_id`, and the project slug inside the API `url`).
+ */
+export const sentryEventAlertSchema = z.object({
+  action: z.string(),
+  data: z.object({
+    event: z.object({
+      issue_id: sentryIdentifierSchema,
+      url: z.string(),
+      web_url: z.string().optional(),
+      title: z.string().optional(),
+      culprit: z.string().nullish(),
+      level: z.string().optional(),
+      metadata: z
+        .object({
+          type: z.string().optional(),
+          value: z.string().optional(),
+          filename: z.string().optional(),
+        })
+        .optional(),
+      exception: z
+        .object({
+          values: z.array(
+            z.object({
+              stacktrace: z
+                .object({
+                  frames: z.array(
+                    z.object({
+                      filename: z.string().nullish(),
+                      abs_path: z.string().nullish(),
+                      function: z.string().nullish(),
+                      lineno: z.number().nullish(),
+                    })
+                  ),
+                })
+                .nullish(),
+            })
+          ),
+        })
+        .nullish(),
+      tags: z.array(z.tuple([z.string(), z.string()])).optional(),
+    }),
+    triggered_rule: z.string(),
+  }),
+});
+
 export const sentryMetricAlertSchema = z.object({
   action: z.string(),
   data: z.object({
@@ -92,4 +140,5 @@ export const sentryMetricAlertSchema = z.object({
 
 export type SentryIssueWebhookPayload = z.infer<typeof sentryIssueWebhookSchema>;
 export type SentryIssueAlertPayload = z.infer<typeof sentryIssueAlertSchema>;
+export type SentryEventAlertPayload = z.infer<typeof sentryEventAlertSchema>;
 export type SentryMetricAlertPayload = z.infer<typeof sentryMetricAlertSchema>;

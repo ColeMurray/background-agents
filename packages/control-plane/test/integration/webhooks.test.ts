@@ -165,12 +165,15 @@ describe("POST /webhooks/sentry/:id", () => {
     });
 
     expect(response.status).toBe(200);
-    const result = await response.json<{ ok: boolean; skipped?: boolean }>();
+    const result = await response.json<{ ok: boolean; skipped?: boolean; accepted?: boolean }>();
     expect(result.ok).toBe(true);
     expect(result.skipped).not.toBe(true);
+    expect(result.accepted).toBe(true);
 
-    const runs = await fetchRuns(automation.id);
-    expect(runs).toHaveLength(1);
+    // The run starts after the response, so Sentry's ~1s webhook timeout cannot cancel it.
+    await vi.waitFor(async () => {
+      expect(await fetchRuns(automation.id)).toHaveLength(1);
+    });
   });
 
   it("accepts valid signature (does not return 401)", async () => {
