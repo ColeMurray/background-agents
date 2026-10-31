@@ -189,6 +189,52 @@ describe("PersonalAccessTokenAdminSettings", () => {
     expect(screen.getByRole("button", { name: "Save policy" })).toBeDisabled();
   });
 
+  it("keeps the form inert while a save is in flight, so no edit is lost", async () => {
+    let finish!: (value: unknown) => void;
+    hooks.save.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const user = userEvent.setup();
+    render(<PersonalAccessTokenAdminSettings />);
+
+    const enabled = screen.getByRole("switch", { name: "Allow personal access tokens" });
+    await user.click(enabled);
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+    expect(enabled).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /30 days/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
+
+    finish({ status: "saved", policy: { ...OPEN_POLICY, enabled: false, revision: 4 } });
+    await waitFor(() => expect(enabled).toBeEnabled());
+  });
+
+  it("shows a stored lifetime cap that is not one of the standard choices", () => {
+    hooks.policy = { ...OPEN_POLICY, maxLifetimeDays: 45 };
+    render(<PersonalAccessTokenAdminSettings />);
+
+    expect(
+      screen
+        .getAllByRole("radio", { name: /year|days?$/ })
+        .map((radio) => radio.closest("label")?.textContent)
+    ).toEqual(["1 year", "180 days", "90 days", "45 days", "30 days", "7 days"]);
+    expect(screen.getByRole("radio", { name: /45 days/ })).toBeChecked();
+  });
+
+  it("saves a draft against the revision it was made from, so a later save is not overwritten", async () => {
+    hooks.save.mockResolvedValue({ status: "conflict" });
+    const user = userEvent.setup();
+    const { rerender } = render(<PersonalAccessTokenAdminSettings />);
+    await user.click(screen.getByRole("radio", { name: /90 days/ }));
+
+    // Another administrator turns tokens off; this page revalidates before saving.
+    hooks.policy = { ...OPEN_POLICY, enabled: false, revision: 4 };
+    rerender(<PersonalAccessTokenAdminSettings />);
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+
+    expect(hooks.save).toHaveBeenCalledWith(
+      { enabled: true, maxLifetimeDays: 90, allowedPermissions: null },
+      3
+    );
+  });
+
   it("keeps unsaved edits when the policy revalidates", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<PersonalAccessTokenAdminSettings />);

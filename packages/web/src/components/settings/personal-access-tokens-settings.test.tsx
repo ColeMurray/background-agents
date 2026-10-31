@@ -22,6 +22,7 @@ const hooks = vi.hoisted(() => ({
   tokens: [] as PersonalAccessToken[],
   permissions: [] as PermissionId[],
   policy: null as PersonalAccessTokenPolicy | null,
+  policyError: undefined as Error | undefined,
   mutate: vi.fn(),
   issue: vi.fn(),
   revoke: vi.fn(),
@@ -34,7 +35,11 @@ vi.mock("@/hooks/use-personal-access-tokens", () => ({
     error: undefined,
     mutate: hooks.mutate,
   }),
-  usePersonalAccessTokenPolicy: () => ({ policy: hooks.policy, loading: false, error: undefined }),
+  usePersonalAccessTokenPolicy: () => ({
+    policy: hooks.policy,
+    loading: !hooks.policy && !hooks.policyError,
+    error: hooks.policyError,
+  }),
   issuePersonalAccessToken: hooks.issue,
   revokePersonalAccessToken: hooks.revoke,
 }));
@@ -63,6 +68,11 @@ beforeAll(() => {
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const OPEN_POLICY: PersonalAccessTokenPolicy = {
+  enabled: true,
+  maxLifetimeDays: null,
+  allowedPermissions: null,
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -111,7 +121,8 @@ const TOKEN: PersonalAccessToken = {
 describe("PersonalAccessTokensSettings", () => {
   beforeEach(() => {
     hooks.tokens = [];
-    hooks.policy = null;
+    hooks.policy = OPEN_POLICY;
+    hooks.policyError = undefined;
     hooks.permissions = [
       "sessions.read",
       "sessions.create",
@@ -369,6 +380,41 @@ describe("PersonalAccessTokensSettings", () => {
     expect(screen.getByLabelText("Read sessions")).toBeInTheDocument();
     expect(screen.queryByLabelText("Read skills")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Manage skills")).not.toBeInTheDocument();
+  });
+
+  it("offers no new token until the workspace policy has loaded", () => {
+    hooks.policy = null;
+    render(<PersonalAccessTokensSettings />);
+    expect(screen.queryByRole("button", { name: /New token/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("explains that new tokens wait on a policy that failed to load", () => {
+    hooks.policy = null;
+    hooks.policyError = new Error("unavailable");
+    render(<PersonalAccessTokensSettings />);
+    expect(screen.queryByRole("button", { name: /New token/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/token policy/);
+  });
+
+  it("holds an open draft to a lifetime cap that arrives while it is being edited", async () => {
+    hooks.issue.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    const { rerender } = render(<PersonalAccessTokensSettings />);
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    expect(screen.getByRole("radio", { name: /30 days/ })).toBeChecked();
+    await user.type(screen.getByLabelText("Name"), "Laptop");
+    await user.click(screen.getByLabelText("Read sessions"));
+
+    hooks.policy = { ...OPEN_POLICY, maxLifetimeDays: 7 };
+    rerender(<PersonalAccessTokensSettings />);
+    expect(screen.getByRole("radio", { name: /7 days/ })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Create token" }));
+    expect(hooks.issue).toHaveBeenCalledWith({
+      name: "Laptop",
+      expiresInDays: 7,
+      permissions: ["sessions.read"],
+    });
   });
 
   it("shows the expiry the policy's lifetime cap imposes", () => {

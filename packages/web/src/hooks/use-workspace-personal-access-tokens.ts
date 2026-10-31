@@ -45,7 +45,10 @@ export function useWorkspacePersonalAccessTokenPolicy() {
   return { policy: data ?? null, error, loading: isLoading, mutate };
 }
 
-/** Every member's tokens, newest first, one page at a time. */
+/**
+ * Every member's tokens, newest first, one page at a time. Each page's key names the signed-in
+ * user, so another user signing in on the same browser never sees the cached inventory.
+ */
 export function useWorkspacePersonalAccessTokens() {
   const { data: session } = useAuthSession();
   const userId = session?.user?.id;
@@ -53,13 +56,13 @@ export function useWorkspacePersonalAccessTokens() {
     (
       index: number,
       previous: ListWorkspacePersonalAccessTokensResponse | null
-    ): `/api/${string}` | null => {
+    ): readonly [`/api/${string}`, string] | null => {
       if (!userId) return null;
-      if (index === 0) return TOKENS_KEY;
+      if (index === 0) return [TOKENS_KEY, userId];
       if (!previous?.nextCursor) return null;
-      return `${TOKENS_KEY}?cursor=${encodeURIComponent(previous.nextCursor)}`;
+      return [`${TOKENS_KEY}?cursor=${encodeURIComponent(previous.nextCursor)}`, userId];
     },
-    fetchTokens
+    ([url]: readonly [`/api/${string}`, string]) => fetchTokens(url)
   );
   const pages = data ?? [];
   return {
