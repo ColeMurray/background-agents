@@ -25,10 +25,14 @@ export interface RouteAdmission {
   result: RouteAdmissionResult;
 }
 
-/** The handler context a policy produces: its authentication's principal, plus tokens if it accepts them. */
+/**
+ * The handler context a policy produces: its authentication's principal, plus tokens if it may
+ * accept them. The opt-in passes through as declared, so a policy type that leaves it optional or
+ * a union (an annotated policy rather than an inline literal) conservatively includes tokens.
+ */
 export type PolicyContext<Policy extends AdmissionPolicy> = RouteContext<
   Policy["authentication"],
-  Policy extends { personalAccessTokens: "accept" } ? "accept" : undefined
+  Policy["personalAccessTokens"]
 >;
 
 /** What an admitted handler receives: the request as authenticated, and the context narrowed by the policy. */

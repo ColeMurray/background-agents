@@ -5,10 +5,11 @@
  */
 
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { BUILT_IN_ROLE_REGISTRY, type PermissionId } from "@open-inspect/shared/rbac";
 import { PERSONAL_ACCESS_TOKEN_PREFIX } from "@open-inspect/shared/types/personal-access-tokens";
 import { hashToken } from "../auth/crypto";
+import type { Principal } from "../auth/principal";
 import { createTestBackgroundTasks } from "../background-tasks.test-support";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 import type { RequestContext } from "../http/request-context";
@@ -24,7 +25,13 @@ import {
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
 } from "../routes/shared";
-import { admit, dispatch } from "./admit";
+import {
+  admit,
+  dispatch,
+  type AdmissionPolicy,
+  type AdmitMiddleware,
+  type PolicyContext,
+} from "./admit";
 import type { ControlPlaneHonoEnv } from "./hono-env";
 
 const TOKEN = `${PERSONAL_ACCESS_TOKEN_PREFIX}${"5a".repeat(32)}`;
@@ -226,6 +233,50 @@ describe("personal access token admission", () => {
 });
 
 describe("admit() with personalAccessTokens", () => {
+  type UserPrincipal = Extract<Principal, { kind: "user" }>;
+  type TokenPrincipal = Extract<Principal, { kind: "personal-access-token" }>;
+  type HumanUserPolicy = AdmissionPolicy & { authentication: { kind: "user" } };
+
+  /** The principal a handler behind `middleware` is typed to receive. */
+  function principalOf<Policy extends AdmissionPolicy>(
+    _middleware: AdmitMiddleware<Policy>
+  ): PolicyContext<Policy>["principal"] {
+    return undefined as never;
+  }
+
+  it("gives a handler a token principal wherever its policy may accept tokens", () => {
+    expectTypeOf(
+      principalOf(
+        admit({
+          ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+          authorization: requirePermission("automations.create"),
+          personalAccessTokens: "accept",
+        })
+      )
+    ).toEqualTypeOf<UserPrincipal | TokenPrincipal>();
+    expectTypeOf(
+      principalOf(
+        admit({
+          ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+          authorization: requirePermission("automations.create"),
+        })
+      )
+    ).toEqualTypeOf<UserPrincipal>();
+    // An annotated policy leaves the opt-in optional, so its handlers must expect a token.
+    expectTypeOf<PolicyContext<HumanUserPolicy>["principal"]>().toEqualTypeOf<
+      UserPrincipal | TokenPrincipal
+    >();
+    expectTypeOf<
+      PolicyContext<
+        | (HumanUserPolicy & { personalAccessTokens: "accept" })
+        | (HumanUserPolicy & { personalAccessTokens?: undefined })
+      >["principal"]
+    >().toEqualTypeOf<UserPrincipal | TokenPrincipal>();
+    expectTypeOf<
+      PolicyContext<HumanUserPolicy & { personalAccessTokens?: undefined }>["principal"]
+    >().toEqualTypeOf<UserPrincipal>();
+  });
+
   it("refuses at construction a token route no grant could narrow", () => {
     expect(() =>
       admit({
