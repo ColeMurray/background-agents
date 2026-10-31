@@ -80,6 +80,14 @@ describe("nextLiveReasoning", () => {
     expect(liveReasoningOf([writing, resumed])).toBe(resumed);
   });
 
+  it("keeps the current step when an earlier step reports a late finish", () => {
+    const current = reasoning("step-2", ["**Checking CI**"], 40);
+    const lateFinish = reasoning("step-1", ["**Planning**"], 50, false);
+
+    expect(liveReasoningOf([current, lateFinish])).toBe(current);
+    expect(liveReasoningOf([current, lateFinish, { ...current, active: false }])).toBeNull();
+  });
+
   it("is not ended by a queued follow-up", () => {
     const queued: SandboxEvent = {
       type: "user_message",
