@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal, parseVerifiedSandboxId } from "./routing/route-admission";
+import { enforceRoutePrincipal } from "./routing/route-admission";
+import { parseVerifiedSandboxId } from "./routing/sandbox-authentication";
 import {
   fakeSessionRuntimeDispatch,
   handleRequest,

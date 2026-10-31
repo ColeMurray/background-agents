@@ -1,15 +1,7 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
-import {
-  ACTOR_ADMISSION_DENIED_CODE,
-  ACTOR_EMAIL_REQUIRED_CODE,
-  type ActorProfileClaims,
-} from "@open-inspect/shared/types/actors";
 import { authenticate, isAuthError } from "../auth/authenticate";
 import { canonicalUserIdOf, type Principal } from "../auth/principal";
-import { AdmissionDeniedError, admissionPolicyConfigFromEnv } from "../auth/user/admission-policy";
-import { resolveEffectiveAdmissionPolicy } from "../auth/user/effective-admission-policy";
-import { AdmissionPolicyStore } from "../db/admission-policy-store";
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { restrictAuthorizationToGrant } from "../authorization/personal-access-token-policy";
 import {
@@ -24,9 +16,6 @@ import { evaluateSessionAdmission } from "../authorization/session-admission";
 import { legacyPermissionForAction } from "../authorization/teams-enforcement";
 import { TeamChannelBindingStore } from "../db/team-channel-bindings";
 import { SessionIndexStore } from "../db/session-index";
-import { IdentityClaimStore } from "../db/identity-claim-store";
-import { normalizeEmail } from "../db/email";
-import { isEmailAttestingProvider, requiresEnrollmentEmail, UserStore } from "../db/user-store";
 import type { RequestContext } from "../http/request-context";
 import { error, json } from "../http/responses";
 import { createLogger } from "../logger";
@@ -35,14 +24,12 @@ import type {
   RouteAdmissionPolicy,
   RouteAuthorizationRequirement,
   RouteParams,
-  ServiceActorClaimsResult,
 } from "../routes/shared";
-import { SessionInternalPaths } from "../session/contracts";
-import { createSessionRuntimeClient } from "../session/runtime-client";
-import { resolveScmProviderFromEnv, SourceControlProviderError } from "../source-control";
 import type { Env } from "../types";
-import { KnownActorProfileClaim, type KnownActor } from "./known-actor-profile";
 import { logPrincipal } from "./request-lifecycle";
+import { verifySandboxAuthSafely } from "./sandbox-authentication";
+import { enforceImplementedScmProvider } from "./scm-provider-support";
+import { finalizeServiceActor } from "./service-actor-finalization";
 import { enforceTeamRequirement } from "./team-admission";
 import {
   authorizationDenial,
@@ -93,118 +80,6 @@ function resultForFailure(
   return failure.decision
     ? { kind: "denied", response: failure.response, decision: failure.decision }
     : { kind: "error", response: failure.response, requestLog: failure.requestLog };
-}
-
-function enforceImplementedScmProvider(
-  policy: RouteAdmissionPolicy,
-  path: string,
-  env: Env,
-  ctx: RequestContext
-): Response | null {
-  try {
-    const provider = resolveScmProviderFromEnv(env.SCM_PROVIDER);
-    if (
-      policy.supportedScmProviders !== "all" &&
-      !policy.supportedScmProviders.includes(provider)
-    ) {
-      logger.warn("SCM provider not implemented", {
-        event: "scm.provider_not_implemented",
-        scm_provider: provider,
-        http_path: path,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return error(`SCM provider '${provider}' is not implemented in this deployment.`, 501);
-    }
-
-    return null;
-  } catch (errorValue) {
-    const errorMessage =
-      errorValue instanceof SourceControlProviderError
-        ? errorValue.message
-        : "Invalid SCM provider configuration";
-
-    logger.error("Invalid SCM provider configuration", {
-      event: "scm.provider_invalid",
-      error: errorValue instanceof Error ? errorValue : String(errorValue),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return error(errorMessage, 500);
-  }
-}
-
-export function parseVerifiedSandboxId(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  if (!("sandboxId" in value)) return null;
-  const sandboxId = value.sandboxId;
-  return typeof sandboxId === "string" && sandboxId ? sandboxId : null;
-}
-
-async function verifySandboxAuth(
-  request: Request,
-  env: Env,
-  sessionId: string,
-  ctx: RequestContext
-): Promise<Response | null> {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return error("Unauthorized: Missing sandbox token", 401);
-  }
-
-  const token = authHeader.slice(7);
-  const verifyResponse = await createSessionRuntimeClient(env, ctx).fetch(
-    sessionId,
-    SessionInternalPaths.verifySandboxToken,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    }
-  );
-
-  if (!verifyResponse.ok) {
-    const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    logger.warn("Auth failed: sandbox", {
-      event: "auth.sandbox_failed",
-      http_path: new URL(request.url).pathname,
-      client_ip: clientIP,
-      session_id: sessionId,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Unauthorized: Invalid sandbox token", 401);
-  }
-
-  let sandboxId: string | null = null;
-  try {
-    sandboxId = parseVerifiedSandboxId(await verifyResponse.json());
-  } catch {
-    sandboxId = null;
-  }
-  ctx.principal = { kind: "sandbox", sessionId, sandboxId };
-  return null;
-}
-
-async function verifySandboxAuthSafely(
-  request: Request,
-  env: Env,
-  sessionId: string,
-  ctx: RequestContext
-): Promise<Response | null> {
-  try {
-    return await verifySandboxAuth(request, env, sessionId, ctx);
-  } catch (cause) {
-    logger.error("Sandbox authentication unavailable", {
-      event: "auth.sandbox_unavailable",
-      session_id: sessionId,
-      error: cause instanceof Error ? cause : String(cause),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Sandbox authentication unavailable", 503);
-  }
 }
 
 /**
@@ -260,10 +135,6 @@ export function enforceRoutePrincipal(
   return null;
 }
 
-/**
- * Load the canonical subject's effective authorization. Service actors reach
- * this step already finalized, so the subject is the admitted canonical user.
- */
 /** Authorization kinds whose admission loads the canonical subject's role. */
 function loadsCanonicalSubject(policy: RouteAdmissionPolicy): boolean {
   return (
@@ -273,12 +144,14 @@ function loadsCanonicalSubject(policy: RouteAdmissionPolicy): boolean {
   );
 }
 
+/**
+ * Load the canonical subject's effective authorization. Service actors reach
+ * this step already finalized, so the subject is the admitted canonical user.
+ */
 async function enforceActiveUser(
-  policy: RouteAdmissionPolicy,
   ctx: RequestContext,
   evidence: AuthorizationEvidence
 ): Promise<AuthorizationFailure | null> {
-  if (!loadsCanonicalSubject(policy)) return null;
   if (
     ctx.principal?.kind === "service" &&
     ctx.principal.actor &&
@@ -411,166 +284,6 @@ async function enforceSlackWriteScope(
     });
     return { response: json(refusal, 503) };
   }
-}
-
-/**
- * Resolve the verified service actor to its canonical user exactly once,
- * before any RBAC lookup, so the subject authorized is the subject attributed.
- * An actor already known still has its route's profile claims applied, since
- * the request that enrolled it may have carried none. An unknown actor from a
- * provider that requires an enrollment email is refused without one.
- */
-async function finalizeServiceActor(
-  policy: RouteAdmissionPolicy,
-  request: Request,
-  pathname: string,
-  env: Env,
-  ctx: RequestContext
-): Promise<AuthorizationFailure | null> {
-  if (!loadsCanonicalSubject(policy)) return null;
-  const principal = ctx.principal;
-  if (principal?.kind !== "service" || !principal.actor) return null;
-  if (principal.actor.canonicalUserId) {
-    await completeKnownActorProfile(policy, request, ctx, {
-      ...principal.actor,
-      canonicalUserId: principal.actor.canonicalUserId,
-    });
-    return null;
-  }
-
-  // Deployment capability does not depend on the caller: a request this
-  // deployment cannot serve must not enroll a user, identity, or assignment.
-  const providerCheck = enforceImplementedScmProvider(policy, pathname, env, ctx);
-  if (providerCheck) return { response: providerCheck, requestLog: "skip" };
-
-  try {
-    const prepared = policy.serviceActorClaims
-      ? await policy.serviceActorClaims(request.clone(), ctx)
-      : null;
-    // The route refused this body: answer with its response and write nothing.
-    if (prepared?.kind === "rejected") return { response: prepared.response };
-    const claims = prepared?.claims;
-    const actor = principal.actor;
-    const email = isEmailAttestingProvider(actor.provider) ? normalizeEmail(claims?.email) : null;
-    if (requiresEnrollmentEmail(actor.provider) && email === null) {
-      logger.warn("Refused to enroll a service actor without an attested email", {
-        event: "auth.service_actor_email_required",
-        provider: actor.provider,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return {
-        response: json(
-          { error: "Actor enrollment requires an attested email", code: ACTOR_EMAIL_REQUIRED_CODE },
-          403
-        ),
-      };
-    }
-    // Resolve existing accounts first so linking preserves role and suspension;
-    // the store checks admission immediately before creating a new user.
-    const user = await new UserStore(ctx.db).resolveOrCreateUser(
-      {
-        provider: actor.provider,
-        providerUserId: actor.providerUserId,
-        displayName: claims?.displayName,
-        providerEmail: email ?? undefined,
-        avatarUrl: claims?.avatarUrl,
-      },
-      async (identity) => {
-        const admissionPolicy = await resolveEffectiveAdmissionPolicy(
-          admissionPolicyConfigFromEnv(env),
-          new AdmissionPolicyStore(ctx.db)
-        );
-        const attestedEmail = isEmailAttestingProvider(identity.provider)
-          ? normalizeEmail(identity.providerEmail)
-          : null;
-        admissionPolicy.requireBotEnrollment(attestedEmail ? [attestedEmail] : []);
-      }
-    );
-    const knownActor: KnownActor = { ...actor, canonicalUserId: user.id };
-    // Enrolled by a concurrent request after this one authenticated (#2470):
-    // apply claims exactly as for an actor known at authentication.
-    if (user.outcome === "existing" && claims) {
-      await claimKnownActorProfile(ctx, knownActor, claims);
-    }
-    ctx.principal = {
-      ...principal,
-      actor: knownActor,
-    };
-    return null;
-  } catch (cause) {
-    if (cause instanceof AdmissionDeniedError) {
-      logger.warn("Refused to enroll a service actor outside workspace admission", {
-        event: "auth.service_actor_admission_denied",
-        provider: principal.actor.provider,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return {
-        response: json(
-          {
-            error:
-              "Your account is not authorized to join this workspace. Sign in on the web or ask an administrator to check the admission allowlists.",
-            code: ACTOR_ADMISSION_DENIED_CODE,
-          },
-          403
-        ),
-      };
-    }
-    logger.error("Failed to finalize verified service actor", {
-      event: "auth.service_actor_resolution_failed",
-      error: cause instanceof Error ? cause : String(cause),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return authorizationUnavailable();
-  }
-}
-
-/**
- * A known actor's identity is final, so its route's claims can only complete
- * the profile. Best effort and never a denial: the handler still answers for
- * the body, so a body the route would refuse just writes nothing.
- */
-async function completeKnownActorProfile(
-  policy: RouteAdmissionPolicy,
-  request: Request,
-  ctx: RequestContext,
-  actor: KnownActor
-): Promise<void> {
-  if (!policy.serviceActorClaims) return;
-  let prepared: ServiceActorClaimsResult;
-  try {
-    prepared = await policy.serviceActorClaims(request.clone(), ctx);
-  } catch (cause) {
-    return warnProfileClaimFailed(ctx, cause);
-  }
-  if (prepared.kind === "claims") await claimKnownActorProfile(ctx, actor, prepared.claims);
-}
-
-async function claimKnownActorProfile(
-  ctx: RequestContext,
-  actor: KnownActor,
-  claims: ActorProfileClaims
-): Promise<void> {
-  try {
-    const profileClaim = new KnownActorProfileClaim(
-      new UserStore(ctx.db),
-      new IdentityClaimStore(ctx.db)
-    );
-    await profileClaim.claim(actor, claims);
-  } catch (cause) {
-    warnProfileClaimFailed(ctx, cause);
-  }
-}
-
-function warnProfileClaimFailed(ctx: RequestContext, cause: unknown): void {
-  logger.warn("Failed to complete known service actor profile", {
-    event: "auth.service_actor_profile_failed",
-    error: cause instanceof Error ? cause : String(cause),
-    request_id: ctx.request_id,
-    trace_id: ctx.trace_id,
-  });
 }
 
 function authorizationUserId(ctx: RequestContext): string | null {
@@ -868,11 +581,13 @@ async function enforceRouteAuthorization(
   const scopeFailure = await enforceSlackWriteScope(params, request, pathname, ctx, evidence);
   if (scopeFailure) return resultForFailure(scopeFailure);
 
-  const actorFailure = await finalizeServiceActor(policy, request, pathname, env, ctx);
-  if (actorFailure) return resultForFailure(actorFailure);
+  if (loadsCanonicalSubject(policy)) {
+    const actorFailure = await finalizeServiceActor(policy, request, pathname, env, ctx);
+    if (actorFailure) return resultForFailure(actorFailure);
 
-  const activeUserFailure = await enforceActiveUser(policy, ctx, evidence);
-  if (activeUserFailure) return resultForFailure(activeUserFailure);
+    const activeUserFailure = await enforceActiveUser(ctx, evidence);
+    if (activeUserFailure) return resultForFailure(activeUserFailure);
+  }
 
   if (policy.authorization.kind === "active-user") {
     for (const requirement of policy.authorization.allOf) {
