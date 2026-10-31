@@ -2,6 +2,46 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## October 31, 2026
+
+**Personal access tokens and an MCP server.** **Settings › Access tokens** issues tokens that let a
+tool on your machine call Open-Inspect as you. Every token expires within a year and holds only the
+permissions you pick from those your role includes. Each request narrows it again to your role's
+current permissions, so it loses a permission when you do and stops working while you are suspended.
+Workspace administration permissions can't be granted, and a token can't create or revoke tokens. It
+works only on routes that accept tokens: reading sessions, automations, and skills, plus creating
+and running automations and importing skills. The new `packages/mcp-server` uses a token to give
+Claude Code or another MCP client 13 tools over those routes, and an automation it runs stays within
+the token's grant. Issuing, revoking, and using tokens is audited. Requires D1 migration 0096. See
+the [MCP server README](packages/mcp-server/README.md).
+
+**Access token policy for administrators.** **Settings › Access token policy** can turn every
+personal access token off at once without revoking any, cap how long tokens last, and limit which
+permissions tokens may hold. Each rule applies to existing tokens as soon as it's saved, so a token
+older than the cap stops working. The same page lists every member's tokens and can revoke one token
+or all of a member's. It requires the new `workspace.personal_access_tokens.manage` permission,
+which Owners and Administrators hold and which can be added to a custom role; tokens can never hold
+it. Requires D1 migration 0097.
+
+## October 30, 2026
+
+**Managed MCP routing and personal OAuth connections.** A remote MCP server can now **Route through
+Open Inspect**, so the sandbox reaches it through the control plane with its own session token and
+never holds the upstream credential. The proxy forwards only to HTTPS hosts and limits each sandbox
+to 8 concurrent requests and 120 per minute. A server's **Authentication** can be none, shared
+service credentials, or each user's OAuth connection. With personal OAuth, people connect their own
+accounts under **Settings › Connections**, and each turn calls the server as the author of that
+turn's prompt, so a session several people prompt uses each author's account in turn. Personal
+servers work in OpenCode and Claude Agent sessions on runtime generation 80 or later; Codex sessions
+and older images leave them out and show a warning on the prompt, in the web and in Slack. The proxy
+authenticates the sandbox, not the process, so a process left running from an earlier turn can make
+personal calls during a later author's turn. Existing servers keep connecting directly until an
+admin turns on routing, and disabling a server stops its routing and delegation at once. While
+connections are live, the server can't be deleted and the user can't be merged or deleted: disable
+the server and revoke its connections, or have the user disconnect. Requires D1 migration 0095;
+runtime generation 80 rebuilds prebuilt images. See
+[Personal MCP Connections](packages/control-plane/README.md#personal-mcp-connections).
+
 ## October 29, 2026
 
 **Saved MCP credentials are listed by name.** Editing an MCP server used to show only that
@@ -13,7 +53,29 @@ values are never returned to anyone. API clients can send `keepCredentialKeys` w
 `PUT /mcp-servers/:id` for the same per-name edits; without it, sent credentials still replace the
 saved set.
 
+**Automation pull requests come from the GitHub App.** A pull request opened by an automation run's
+own prompt, including a **Run now** run, is now created by the GitHub App instead of with the
+owner's GitHub OAuth token. Unattended work no longer looks like a PR the owner opened, and the
+owner can review and approve it. Commits are still attributed to the owner. Prompts a person sends
+into an automation-started session still open PRs as that person, and child sessions the run spawns
+still use the owner's OAuth. Because the App authored them, the review bot can only comment on these
+PRs, not approve or request changes, and GitHub event automations that match the owner's login no
+longer fire on them. `POST /sessions/:id/prompt` now rejects the internal `automation` and `agent`
+prompt sources. See [Creating Pull Requests](docs/HOW_IT_WORKS.md#creating-pull-requests).
+
 ## October 28, 2026
+
+**Sign-in allowlist in Settings.** Owners and Administrators can now edit who may sign in under
+**Settings › Workspace access › Who can sign in**, without redeploying. Type an email, domain, or
+GitHub name into one field; the editor infers the rule type and asks whether a bare name is a GitHub
+user or organization. These rules add to the deployment's `ALLOWED_*` variables and Terraform
+`allowed_*` inputs, which appear with a lock and stay read-only, and can never narrow them. Their
+email and domain rules also govern which new Slack and Linear users can be enrolled. The list holds
+up to 50 rules, and changes are reviewed before saving and recorded in the audit log. Removing a
+rule doesn't end existing sessions or remove bot accounts; suspend the member for that. Keep a
+recovery administrator's email in `allowed_emails`, since an empty deployment baseline isn't
+supported. Requires D1 migrations 0093 and 0094. See
+[Sign-In Allowlist](docs/AUTH.md#sign-in-allowlist).
 
 **Session connections recover automatically.** Transient disconnects now retry without an attempt
 limit, with capped backoff and random jitter, rather than waiting for a click on **Reconnect** after
