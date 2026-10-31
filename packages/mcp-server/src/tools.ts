@@ -10,13 +10,31 @@
 import { harnessIdSchema } from "@open-inspect/shared/harnesses";
 import { automationTriggerTypeSchema, triggerConfigSchema } from "@open-inspect/shared/triggers";
 import {
+  createAutomationRequestSchema,
   MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
+  MAX_AUTOMATION_INVOCATION_LIST_LIMIT,
   MAX_AUTOMATION_LIST_PAGE_SIZE,
   MAX_AUTOMATION_NAME_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
   sentryClientSecretSchema,
+  type CreateAutomationRequest,
 } from "@open-inspect/shared/types/automations";
-import { SKILL_LIST_PAGE_SIZE } from "@open-inspect/shared/types/skills";
+import type {
+  importSkillInputSchema,
+  reimportSkillInputSchema,
+  reimportSkillPreviewInputSchema,
+  skillImportPreviewInputSchema,
+} from "@open-inspect/shared/types/skills";
+import {
+  reimportSkillResponseSchema,
+  SKILL_LIST_PAGE_SIZE,
+  skillImportPreviewResponseSchema,
+  skillImportProvenanceSchema,
+  skillImportSourceSchema,
+  skillImportWarningSchema,
+  skillResponseSchema,
+  skillSchema,
+} from "@open-inspect/shared/types/skills";
 import { z } from "zod";
 import type { ControlPlaneClient } from "./client";
 
@@ -39,13 +57,14 @@ const cursor = z
   .optional()
   .describe("Continuation cursor from a previous page of this same call");
 
+/** A tool as the server registers it, whatever the shape of its arguments. */
 export interface ToolDefinition {
   name: string;
   title: string;
   description: string;
   /** The grant a token needs for this tool, as the tool description states it. */
   requires: string;
-  /** Drives the MCP `readOnlyHint`, which is how a client decides what to prompt for. */
+  /** Drives the MCP `readOnlyHint`, a hint a client may use to decide what to prompt for. */
   readOnly: boolean;
   /**
    * Drives the MCP `destructiveHint`, which means additive-only when false.
@@ -54,7 +73,27 @@ export interface ToolDefinition {
    */
   destructive?: true;
   inputSchema: z.ZodRawShape;
-  run(client: ControlPlaneClient, args: Record<string, unknown>): Promise<unknown>;
+  /** Validates `args` against `inputSchema`, then runs the tool on what that produced. */
+  run(client: ControlPlaneClient, args: unknown): Promise<unknown>;
+}
+
+/** A tool as it is written: its handler receives exactly what its schema produces. */
+interface ToolSpec<Shape extends z.ZodRawShape> extends Omit<
+  ToolDefinition,
+  "inputSchema" | "run"
+> {
+  inputSchema: Shape;
+  run(client: ControlPlaneClient, args: z.output<z.ZodObject<Shape>>): Promise<unknown>;
+}
+
+/**
+ * The one place a tool's argument type is erased for the registry. Parsing here rather than
+ * trusting the caller keeps the handler's type true for every caller: the SDK validates first,
+ * but a test or a future caller that does not still cannot hand the handler something else.
+ */
+function defineTool<const Shape extends z.ZodRawShape>(spec: ToolSpec<Shape>): ToolDefinition {
+  const schema = z.object(spec.inputSchema);
+  return { ...spec, run: async (client, args) => spec.run(client, schema.parse(args)) };
 }
 
 const sessionId = z.string().min(1).describe("Session id, as returned by list_sessions");
@@ -65,67 +104,57 @@ const automationId = z
   .describe("Automation id, as returned by list_automations or create_automation");
 
 /**
- * The preview fields a confirmation needs, read leniently.
+ * The control plane's skill responses, projected from its own schemas onto what these tools read.
  *
- * `z.object` rather than the control plane's own `strictObject` schema: this
- * server is built on a laptop and talks to a deployment that may be a version
- * ahead, and an unrecognized field is no reason to fail an import.
+ * Unknown keys are stripped at every level rather than refused, since this server is built on a
+ * laptop and may talk to a deployment a version ahead; every field the tools do read still has to
+ * match its shared contract.
  */
-const importPreviewSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  nameAvailable: z.boolean(),
-  revisionSha256: z.string(),
-  totalBytes: z.number(),
-  source: z.object({
-    provider: z.string(),
-    repoOwner: z.string(),
-    repoName: z.string(),
-    resolvedRef: z.string(),
-    commitSha: z.string(),
-    subdirectory: z.string().nullable(),
-    sourceSha256: z.string(),
-  }),
-  warnings: z.array(z.object({ code: z.string(), message: z.string() })).default([]),
-  files: z.array(z.object({ path: z.string() })).default([]),
-});
+const importPreviewSchema = skillImportPreviewResponseSchema
+  .pick({ name: true, nameAvailable: true, revisionSha256: true, totalBytes: true })
+  .extend({
+    source: skillImportSourceSchema.strip(),
+    // Shown to the model and never acted on, so a code a newer deployment adds passes through.
+    warnings: z.array(skillImportWarningSchema.extend({ code: z.string() }).strip()),
+    // Paths only: the contents are what the report deliberately leaves out.
+    files: z.array(
+      skillImportPreviewResponseSchema.shape.files.element.pick({ path: true }).strip()
+    ),
+  })
+  .strip();
 
-type ImportPreview = z.infer<typeof importPreviewSchema>;
+type ImportPreview = z.output<typeof importPreviewSchema>;
 
-/** The identity of a stored skill, without the revision content. */
-const storedSkillSchema = z.object({
-  skill: z.object({
-    id: z.string(),
-    name: z.string(),
-    description: z.string(),
-    enabled: z.boolean(),
-    currentRevisionId: z.string(),
-    revisionNumber: z.number(),
-    /**
-     * Recorded provenance, passed through as the control plane sent it rather
-     * than narrowed to a shape this build knows — every field of it is a fact
-     * about what is stored, and dropping one would report less than is known.
-     */
-    source: z.unknown().optional(),
-  }),
-});
+/** A stored skill's identity and recorded provenance, without its body or files. */
+const storedSkillSchema = skillSchema
+  .pick({
+    id: true,
+    name: true,
+    description: true,
+    enabled: true,
+    currentRevisionId: true,
+    revisionNumber: true,
+  })
+  .extend({ source: skillImportProvenanceSchema.strip().nullable().optional().default(null) })
+  .strip();
 
-function parsePreview(value: unknown): ImportPreview {
-  const parsed = importPreviewSchema.safeParse(value);
+type StoredSkill = z.output<typeof storedSkillSchema>;
+
+const skillReadSchema = skillResponseSchema.extend({ skill: storedSkillSchema }).strip();
+const reimportResultSchema = reimportSkillResponseSchema
+  .extend({ skill: storedSkillSchema })
+  .strip();
+
+function parseResponse<Schema extends z.ZodType>(
+  schema: Schema,
+  value: unknown,
+  what: string
+): z.output<Schema> {
+  const parsed = schema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(
-      `Control plane returned an unrecognized import preview: ${parsed.error.message}`
-    );
+    throw new Error(`Control plane returned an unrecognized ${what}: ${parsed.error.message}`);
   }
   return parsed.data;
-}
-
-function parseStoredSkill(value: unknown): z.infer<typeof storedSkillSchema>["skill"] {
-  const parsed = storedSkillSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error(`Control plane returned an unrecognized skill: ${parsed.error.message}`);
-  }
-  return parsed.data.skill;
 }
 
 /**
@@ -136,7 +165,7 @@ function parseStoredSkill(value: unknown): z.infer<typeof storedSkillSchema>["sk
  * confirming in one tool call leaves only a race to catch, and a moved source
  * surfaces as a 409 rather than as an unreviewed import.
  */
-function confirmation(preview: ImportPreview): Record<string, string> {
+function confirmation(preview: ImportPreview) {
   return {
     expectedCommitSha: preview.source.commitSha,
     expectedSourceSha256: preview.source.sourceSha256,
@@ -144,30 +173,20 @@ function confirmation(preview: ImportPreview): Record<string, string> {
   };
 }
 
-/** What both write tools report back, without the skill body or file contents. */
-function importReport(
-  skill: z.infer<typeof storedSkillSchema>["skill"],
-  preview: ImportPreview
-): Record<string, unknown> {
+/**
+ * What both write tools report back, without the skill body or file contents. Provenance is
+ * the skill's as stored: a re-import whose content is unchanged keeps the revision, and the
+ * commit, it already had, so the previewed commit would claim a move that never happened.
+ */
+function importReport(skill: StoredSkill, preview: ImportPreview) {
   const { source, ...identity } = skill;
   return {
     skill: identity,
-    // Provenance as stored, never as previewed. A re-import whose content
-    // digest is unchanged keeps the revision it had, and the provenance that
-    // came with it: reporting the previewed commit there would claim the skill
-    // had moved to a commit it was never recorded at.
-    source: source ?? preview.source,
+    source,
     files: preview.files.map((file) => file.path),
     totalBytes: preview.totalBytes,
     warnings: preview.warnings,
   };
-}
-
-/** One entry of create_automation's repository list, before camel-casing. */
-interface AutomationRepositoryArg {
-  repo_owner: string;
-  repo_name: string;
-  base_branch?: string;
 }
 
 const repoOwner = z
@@ -184,7 +203,7 @@ const importRef = z
   .describe("Branch, tag, or commit to read. Defaults to the repository's default branch.");
 
 export const TOOLS: ToolDefinition[] = [
-  {
+  defineTool({
     name: "list_sessions",
     requires: "sessions.read",
     title: "List sessions",
@@ -202,12 +221,12 @@ export const TOOLS: ToolDefinition[] = [
     },
     run: (client, args) =>
       client.get("/sessions", {
-        status: args.status as string | undefined,
-        limit: (args.limit as number | undefined) ?? DEFAULT_SESSION_LIMIT,
-        offset: args.offset as number | undefined,
+        status: args.status,
+        limit: args.limit ?? DEFAULT_SESSION_LIMIT,
+        offset: args.offset,
       }),
-  },
-  {
+  }),
+  defineTool({
     name: "get_session_events",
     requires: "sessions.read",
     title: "Read a session timeline",
@@ -221,12 +240,12 @@ export const TOOLS: ToolDefinition[] = [
       cursor,
     },
     run: (client, args) =>
-      client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/events`, {
-        limit: (args.limit as number | undefined) ?? DEFAULT_EVENT_LIMIT,
-        cursor: args.cursor as string | undefined,
+      client.get(`/sessions/${encodeURIComponent(args.session_id)}/events`, {
+        limit: args.limit ?? DEFAULT_EVENT_LIMIT,
+        cursor: args.cursor,
       }),
-  },
-  {
+  }),
+  defineTool({
     name: "get_session_messages",
     requires: "sessions.read",
     title: "Read session messages",
@@ -240,22 +259,51 @@ export const TOOLS: ToolDefinition[] = [
       cursor,
     },
     run: (client, args) =>
-      client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/messages`, {
-        limit: args.limit as number | undefined,
-        cursor: args.cursor as string | undefined,
+      client.get(`/sessions/${encodeURIComponent(args.session_id)}/messages`, {
+        limit: args.limit,
+        cursor: args.cursor,
       }),
-  },
-  {
+  }),
+  defineTool({
     name: "get_session_diff",
     requires: "sessions.read",
-    title: "Read a session's diff",
+    title: "List a session's changed files",
     readOnly: true,
-    description: "Read the working-tree diff a session produced, as a list of changed files.",
+    description:
+      "Read the manifest of the latest working-tree diff a session produced: its revisionId " +
+      "under current, and per repository the changed files with their id, path, and status. " +
+      "The manifest carries no patches; read what changed in a file with get_session_diff_file. " +
+      "current is null when the session has captured no diff.",
     inputSchema: { session_id: sessionId },
+    run: (client, args) => client.get(`/sessions/${encodeURIComponent(args.session_id)}/diff`),
+  }),
+  defineTool({
+    name: "get_session_diff_file",
+    requires: "sessions.read",
+    title: "Read one file's patch",
+    readOnly: true,
+    description:
+      "Read the patch for one file in a session's diff. Take revision_id and file_id from " +
+      "get_session_diff; a revision the session has since replaced is refused, so read the " +
+      "manifest again and use its current ids.",
+    inputSchema: {
+      session_id: sessionId,
+      revision_id: z
+        .string()
+        .min(1)
+        .describe("The diff revision, current.revisionId from get_session_diff"),
+      file_id: z
+        .string()
+        .min(1)
+        .describe("The file, current.repositories[].files[].id from get_session_diff"),
+    },
     run: (client, args) =>
-      client.get(`/sessions/${encodeURIComponent(args.session_id as string)}/diff`),
-  },
-  {
+      client.get(
+        `/sessions/${encodeURIComponent(args.session_id)}/diff` +
+          `/${encodeURIComponent(args.revision_id)}/files/${encodeURIComponent(args.file_id)}`
+      ),
+  }),
+  defineTool({
     name: "list_automations",
     requires: "automations.read",
     title: "List automations",
@@ -295,49 +343,58 @@ export const TOOLS: ToolDefinition[] = [
     },
     run: (client, args) =>
       client.get("/automations", {
-        search: args.search as string | undefined,
-        repoOwner: args.repo_owner as string | undefined,
-        repoName: args.repo_name as string | undefined,
-        limit: args.limit as number | undefined,
-        cursor: args.cursor as string | undefined,
+        search: args.search,
+        repoOwner: args.repo_owner,
+        repoName: args.repo_name,
+        limit: args.limit,
+        cursor: args.cursor,
       }),
-  },
-  {
-    name: "list_automation_runs",
+  }),
+  defineTool({
+    name: "list_automation_invocations",
     requires: "automations.read",
     title: "List automation invocations",
     readOnly: true,
     description:
-      "List one automation's recent invocations with their status. Use to check whether a " +
-      "scheduled automation fired, skipped, or failed.",
+      "List one automation's recent invocations, newest first: one per firing, each with the " +
+      "child runs it launched, one per target. Use to check whether an automation fired, " +
+      "skipped, or failed. A skipped invocation launched nothing and has no runs. Read one " +
+      "child run with get_automation_run, passing invocations[].runs[].id.",
     inputSchema: {
       automation_id: automationId,
-      limit: z.number().int().min(1).max(MAX_SESSION_LIMIT).optional(),
+      limit: z.number().int().min(1).max(MAX_AUTOMATION_INVOCATION_LIST_LIMIT).optional(),
     },
     run: (client, args) =>
-      client.get(`/automations/${encodeURIComponent(args.automation_id as string)}/invocations`, {
-        limit: args.limit as number | undefined,
+      client.get(`/automations/${encodeURIComponent(args.automation_id)}/invocations`, {
+        limit: args.limit,
       }),
-  },
-  {
+  }),
+  defineTool({
     name: "get_automation_run",
     requires: "automations.read",
     title: "Read one automation run",
     readOnly: true,
     description:
-      "Read a single automation invocation, including the child sessions it launched. Pair " +
-      "with get_session_events on a child id to see what that run actually did.",
+      "Read one child run of an automation: a single target's launch within an invocation, " +
+      "with its status, failure reason, and the session it ran in. An invocation id is not a " +
+      "run id. Pair with get_session_events on the run's sessionId to see what it actually did.",
     inputSchema: {
       automation_id: automationId,
-      run_id: z.string().min(1).describe("Run id, as returned by list_automation_runs"),
+      run_id: z
+        .string()
+        .min(1)
+        .describe(
+          "Child run id: invocations[].runs[].id from list_automation_invocations, or runs[].id " +
+            "from trigger_automation"
+        ),
     },
     run: (client, args) =>
       client.get(
-        `/automations/${encodeURIComponent(args.automation_id as string)}` +
-          `/runs/${encodeURIComponent(args.run_id as string)}`
+        `/automations/${encodeURIComponent(args.automation_id)}` +
+          `/runs/${encodeURIComponent(args.run_id)}`
       ),
-  },
-  {
+  }),
+  defineTool({
     name: "create_automation",
     requires:
       "automations.create and sessions.create, plus repositories.use or environments.use for its targets",
@@ -353,6 +410,10 @@ export const TOOLS: ToolDefinition[] = [
       "takes, and for a webhook trigger the key that calls it, which is shown this once only. " +
       "Targets have to be repositories and environments the owner may already use.",
     inputSchema: {
+      team_id: createAutomationRequestSchema.shape.teamId.describe(
+        "Team (team_…) that will own the automation, which the owner must belong to. Required " +
+          "where the workspace requires a team on creation; omitted, the automation is personal."
+      ),
       name: z
         .string()
         .min(1)
@@ -436,27 +497,26 @@ export const TOOLS: ToolDefinition[] = [
         .describe("Reasoning effort, where the selected model takes one"),
     },
     run: (client, args) => {
-      const triggerType = args.trigger_type as string | undefined;
-      const scheduleCron = args.schedule_cron as string | undefined;
+      const triggerType = args.trigger_type;
+      const scheduleCron = args.schedule_cron;
       // The control plane demands a timezone alongside a cron and refuses both
       // on an event trigger, so the default applies only where one is required
       // — defaulting unconditionally would turn a missing field into a 400.
       const scheduleTz =
-        (args.schedule_tz as string | undefined) ??
+        args.schedule_tz ??
         ((triggerType ?? "schedule") === "schedule" && scheduleCron !== undefined
           ? "UTC"
           : undefined);
-      const repositories = (args.repositories as AutomationRepositoryArg[] | undefined)?.map(
-        (repository) => ({
-          repoOwner: repository.repo_owner,
-          repoName: repository.repo_name,
-          baseBranch: repository.base_branch ?? null,
-        })
-      );
+      const repositories = args.repositories?.map((repository) => ({
+        repoOwner: repository.repo_owner,
+        repoName: repository.repo_name,
+        baseBranch: repository.base_branch ?? null,
+      }));
 
       // Undefined fields drop out of the serialized body, which is what keeps
       // an omitted argument an omission rather than an explicitly empty value.
       return client.post("/automations", {
+        teamId: args.team_id,
         name: args.name,
         instructions: args.instructions,
         triggerType,
@@ -470,25 +530,29 @@ export const TOOLS: ToolDefinition[] = [
         harness: args.harness,
         model: args.model,
         reasoningEffort: args.reasoning_effort,
-      });
+      } satisfies CreateAutomationRequest);
     },
-  },
-  {
+  }),
+  defineTool({
     name: "trigger_automation",
-    requires: "automations.trigger.own for automations you run, or automations.trigger.any",
+    requires:
+      "automations.trigger.own for automations you run, or automations.trigger.any, plus " +
+      "sessions.create, and repositories.use or environments.use for its targets",
     title: "Run an automation now",
     readOnly: false,
     description:
-      "Start one run of an automation immediately, outside its schedule. Returns the invocation " +
-      "id and the sessions it launched; follow those with get_automation_run, or with " +
-      "get_session_events on a session id. The schedule is untouched — a manual run is an extra " +
-      "run, not a replacement for the next scheduled one. Fails with 409 while a run of this " +
-      "automation is already active, and does not queue behind it.",
+      "Start one invocation of an automation immediately, outside its schedule. Returns the " +
+      "invocationId and its child runs, one per target; read a run with get_automation_run " +
+      "using runs[].id, or its session with get_session_events on the run's sessionId. The run " +
+      "uses no permission the token was not granted, even where the automation's owner holds " +
+      "it. The schedule is untouched — a manual run is an extra run, not a replacement for the " +
+      "next scheduled one. Fails with 409 while a run of this automation is already active, " +
+      "and does not queue behind it.",
     inputSchema: { automation_id: automationId },
     run: (client, args) =>
-      client.post(`/automations/${encodeURIComponent(args.automation_id as string)}/trigger`, {}),
-  },
-  {
+      client.post(`/automations/${encodeURIComponent(args.automation_id)}/trigger`, {}),
+  }),
+  defineTool({
     name: "list_skills",
     requires: "skills.read",
     title: "List managed skills",
@@ -503,13 +567,13 @@ export const TOOLS: ToolDefinition[] = [
     },
     run: (client, args) =>
       client.get("/skills", {
-        limit: args.limit as number | undefined,
-        cursor: args.cursor as string | undefined,
+        limit: args.limit,
+        cursor: args.cursor,
       }),
-  },
-  {
+  }),
+  defineTool({
     name: "import_skill_from_git",
-    requires: "skills.manage",
+    requires: "skills.read and skills.manage",
     title: "Create a skill from a repository",
     readOnly: false,
     description:
@@ -546,14 +610,20 @@ export const TOOLS: ToolDefinition[] = [
         ),
     },
     run: async (client, args) => {
-      const source = {
-        repository: { repoOwner: args.repo_owner as string, repoName: args.repo_name as string },
-        ref: (args.ref as string | undefined) ?? null,
-        subdirectory: (args.subdirectory as string | undefined) ?? null,
-      };
-      const name = (args.name as string | undefined) ?? null;
+      const request = {
+        source: {
+          repository: { repoOwner: args.repo_owner, repoName: args.repo_name },
+          ref: args.ref ?? null,
+          subdirectory: args.subdirectory ?? null,
+        },
+        name: args.name ?? null,
+      } satisfies z.input<typeof skillImportPreviewInputSchema>;
 
-      const preview = parsePreview(await client.post("/skills/import/preview", { source, name }));
+      const preview = parseResponse(
+        importPreviewSchema,
+        await client.post("/skills/import/preview", request),
+        "import preview"
+      );
       if (!preview.nameAvailable) {
         // Importing would 409 on the name. Say which tool takes it from here
         // rather than making the model read that out of a status code.
@@ -564,15 +634,14 @@ export const TOOLS: ToolDefinition[] = [
       }
 
       const imported = await client.post("/skills/import", {
-        source,
-        name,
-        assignments: (args.assignments as unknown[] | undefined) ?? [],
+        ...request,
+        assignments: args.assignments ?? [],
         ...confirmation(preview),
-      });
-      return importReport(parseStoredSkill(imported), preview);
+      } satisfies z.input<typeof importSkillInputSchema>);
+      return importReport(parseResponse(skillReadSchema, imported, "skill").skill, preview);
     },
-  },
-  {
+  }),
+  defineTool({
     name: "update_skill_from_git",
     requires: "skills.read and skills.manage",
     title: "Update a skill from its repository",
@@ -585,38 +654,45 @@ export const TOOLS: ToolDefinition[] = [
       "Re-import an existing skill from the repository it was imported from, adding a revision " +
       "with whatever the source says now. The repository and subdirectory come from the skill's " +
       "recorded provenance; only the ref may move. Reports revisionCreated false when the source " +
-      "had not changed. Fails on a skill that was authored in the editor rather than imported. " +
-      "Reads the skill before writing it, so it needs skills.read alongside skills.manage.",
+      "had not changed. Fails on a skill that was authored in the editor rather than imported.",
     inputSchema: {
       skill_id: z.string().min(1).describe("Skill id, as returned by list_skills"),
       ref: importRef,
     },
     run: async (client, args) => {
-      const skillId = encodeURIComponent(args.skill_id as string);
-      const ref = (args.ref as string | undefined) ?? null;
+      const skillId = encodeURIComponent(args.skill_id);
+      const ref = args.ref ?? null;
 
       // Read the revision first: it is the If-Match the re-import needs, and
       // pinning it here means a concurrent edit fails the write rather than
       // silently losing itself in a new revision.
-      const current = parseStoredSkill(await client.get(`/skills/${skillId}`));
-      const preview = parsePreview(
-        await client.post(`/skills/${skillId}/reimport/preview`, { ref })
+      const current = parseResponse(
+        skillReadSchema,
+        await client.get(`/skills/${skillId}`),
+        "skill"
+      ).skill;
+      const preview = parseResponse(
+        importPreviewSchema,
+        await client.post(`/skills/${skillId}/reimport/preview`, {
+          ref,
+        } satisfies z.input<typeof reimportSkillPreviewInputSchema>),
+        "import preview"
       );
 
-      const applied = await client.post(
-        `/skills/${skillId}/reimport`,
-        { ref, ...confirmation(preview) },
-        { headers: { "If-Match": `"${current.currentRevisionId}"` } }
+      const applied = parseResponse(
+        reimportResultSchema,
+        await client.post(
+          `/skills/${skillId}/reimport`,
+          { ref, ...confirmation(preview) } satisfies z.input<typeof reimportSkillInputSchema>,
+          { headers: { "If-Match": `"${current.currentRevisionId}"` } }
+        ),
+        "re-import result"
       );
-      const revisionCreated =
-        typeof applied === "object" && applied !== null && "revisionCreated" in applied
-          ? Boolean((applied as { revisionCreated: unknown }).revisionCreated)
-          : null;
       return {
-        ...importReport(parseStoredSkill(applied), preview),
+        ...importReport(applied.skill, preview),
         previousRevisionId: current.currentRevisionId,
-        revisionCreated,
+        revisionCreated: applied.revisionCreated,
       };
     },
-  },
+  }),
 ];

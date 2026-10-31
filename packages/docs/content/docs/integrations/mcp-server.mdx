@@ -4,7 +4,7 @@ description: Let Claude Code or another MCP client investigate sessions and auto
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-30"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/mcp-server/README.md
   - packages/mcp-server/src/tools.ts
@@ -38,16 +38,16 @@ The control plane URL must use `https://`; plain `http://` is accepted only for 
 
 ## What it can do
 
-| Tool                                                                              | Needs the token to hold                                             |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `list_sessions`, `get_session_events`, `get_session_messages`, `get_session_diff` | **Read sessions**                                                   |
-| `list_automations`, `list_automation_runs`, `get_automation_run`                  | **Read automations**                                                |
-| `list_skills`                                                                     | **Read skills**                                                     |
-| `create_automation`                                                               | **Create automations**, **Create sessions**, and use of its targets |
-| `trigger_automation`                                                              | **Run your automations** or **Run any automation**                  |
-| `import_skill_from_git`, `update_skill_from_git`                                  | **Manage skills** (administrators)                                  |
+| Tool                                                                                                       | Needs the token to hold                                                                         |
+| ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `list_sessions`, `get_session_events`, `get_session_messages`, `get_session_diff`, `get_session_diff_file` | **Read sessions**                                                                               |
+| `list_automations`, `list_automation_invocations`, `get_automation_run`                                    | **Read automations**                                                                            |
+| `list_skills`                                                                                              | **Read skills**                                                                                 |
+| `create_automation`                                                                                        | **Create automations**, **Create sessions**, and use of its targets                             |
+| `trigger_automation`                                                                                       | **Run your automations** or **Run any automation**, **Create sessions**, and use of its targets |
+| `import_skill_from_git`, `update_skill_from_git`                                                           | **Manage skills** (administrators), which always comes with **Read skills**                     |
 
-A token without a tool's permission gets an error naming the missing permission. The token never exceeds your own role, and nothing it does can delete or pause an automation, delete a skill, or reach secrets or workspace settings.
+A token without a tool's permission gets an error naming the missing permission. The token never exceeds your own role, and nothing it does can delete or pause an automation, delete a skill, or reach secrets or workspace settings. A run started with `trigger_automation` uses only what the token was granted, even where your role allows more.
 
 ## Keep the assistant in check
 
@@ -56,4 +56,6 @@ Session transcripts and diffs are content the agent and your repositories produc
 - An automation runs its instructions later, in a sandbox, as you.
 - A skill assigned globally loads into every later session in the workspace.
 
-A read-only token cannot be talked into writing. Your MCP client asks before running a write tool; read what it is about to create before you approve it.
+A read-only token cannot be talked into writing: the control plane refuses the call whatever the assistant sends. The token's grant is the only limit anything enforces.
+
+The server marks its write tools as not read-only, and many MCP clients ask before running such a tool by default. That marking is a hint, though, and whether you are asked depends on your client's settings: a client set to approve tools automatically runs writes without asking. If you give a token write permissions, check how your client handles write tools, and read what a write is about to create before you approve it.

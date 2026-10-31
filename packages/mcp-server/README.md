@@ -28,9 +28,9 @@ give it the shortest lifetime that works.
 | You want the assistant to…               | Grant                                                                                         |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Investigate sessions and automation runs | `sessions.read`, `automations.read`, `skills.read`                                            |
-| Also run existing automations            | add `automations.trigger.own` (or `.any`)                                                     |
+| Also run existing automations            | add `automations.trigger.own` (or `.any`), `sessions.create`, and the targets' use permission |
 | Also create automations                  | add `automations.create`, `sessions.create`, and `repositories.use` and/or `environments.use` |
-| Also import and update skills            | add `skills.manage`                                                                           |
+| Also import and update skills            | add `skills.manage` (the picker adds `skills.read` with it)                                   |
 
 The **Read-only** button in the token picker selects the first row and every other read permission
 your role has.
@@ -50,9 +50,11 @@ your authority:
 Three things limit this:
 
 - A token without write permissions cannot be talked into writing. The control plane refuses the
-  call whatever the assistant sends.
-- Every write tool is annotated `readOnlyHint: false`, so MCP clients ask before running it by
-  default. Read what it is about to create before you approve.
+  call whatever the assistant sends. This is the only one of the three that is enforced.
+- Every write tool is annotated `readOnlyHint: false`. That is a hint, not an enforced prompt:
+  whether your client asks before running the tool depends on its settings, and a client set to
+  approve tools automatically will not ask. Check yours before you grant write permissions, and read
+  what a write is about to create before you approve it.
 - Automations and skills created this way are visible in the dashboard and audit log, and you can
   delete them there.
 
@@ -103,23 +105,30 @@ check that the command printed something.
 
 Each tool's description states the grant it needs, so the assistant can tell you what is missing.
 
-| Tool                    | Route                              | Grant                                   |
-| ----------------------- | ---------------------------------- | --------------------------------------- |
-| `list_sessions`         | `GET /sessions`                    | `sessions.read`                         |
-| `get_session_events`    | `GET /sessions/:id/events`         | `sessions.read`                         |
-| `get_session_messages`  | `GET /sessions/:id/messages`       | `sessions.read`                         |
-| `get_session_diff`      | `GET /sessions/:id/diff`           | `sessions.read`                         |
-| `list_automations`      | `GET /automations`                 | `automations.read`                      |
-| `list_automation_runs`  | `GET /automations/:id/invocations` | `automations.read`                      |
-| `get_automation_run`    | `GET /automations/:id/runs/:runId` | `automations.read`                      |
-| `create_automation`     | `POST /automations`                | `automations.create`, `sessions.create` |
-| `trigger_automation`    | `POST /automations/:id/trigger`    | `automations.trigger.own` or `.any`     |
-| `list_skills`           | `GET /skills`                      | `skills.read`                           |
-| `import_skill_from_git` | `POST /skills/import` (+ preview)  | `skills.manage`                         |
-| `update_skill_from_git` | `POST /skills/:id/reimport` (+ …)  | `skills.read`, `skills.manage`          |
+| Tool                          | Route                                              | Grant                                                  |
+| ----------------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| `list_sessions`               | `GET /sessions`                                    | `sessions.read`                                        |
+| `get_session_events`          | `GET /sessions/:id/events`                         | `sessions.read`                                        |
+| `get_session_messages`        | `GET /sessions/:id/messages`                       | `sessions.read`                                        |
+| `get_session_diff`            | `GET /sessions/:id/diff`                           | `sessions.read`                                        |
+| `get_session_diff_file`       | `GET /sessions/:id/diff/:revisionId/files/:fileId` | `sessions.read`                                        |
+| `list_automations`            | `GET /automations`                                 | `automations.read`                                     |
+| `list_automation_invocations` | `GET /automations/:id/invocations`                 | `automations.read`                                     |
+| `get_automation_run`          | `GET /automations/:id/runs/:runId`                 | `automations.read`                                     |
+| `create_automation`           | `POST /automations`                                | `automations.create`, `sessions.create`                |
+| `trigger_automation`          | `POST /automations/:id/trigger`                    | `automations.trigger.own` or `.any`, `sessions.create` |
+| `list_skills`                 | `GET /skills`                                      | `skills.read`                                          |
+| `import_skill_from_git`       | `POST /skills/import` (+ preview)                  | `skills.read`, `skills.manage`                         |
+| `update_skill_from_git`       | `POST /skills/:id/reimport` (+ …)                  | `skills.read`, `skills.manage`                         |
 
-`create_automation` also needs `repositories.use` or `environments.use` for the targets it names,
-the same checks you face in the web UI.
+`create_automation` and `trigger_automation` also need `repositories.use` or `environments.use` for
+the automation's targets, the same checks you face in the web UI. A triggered run uses only what the
+token was granted, even where your role allows more.
+
+`get_session_diff` lists a diff's changed files without their patches; `get_session_diff_file` reads
+one file's patch, using the revision and file ids from that list. `list_automation_invocations`
+returns one invocation per firing, each with its child runs (one per target); `get_automation_run`
+reads one child run by its id.
 
 `get_session_events`, `get_session_messages`, `list_automations`, and `list_skills` are paged. Pass
 the cursor from a response back to continue. `list_automations` also filters by name (`search`) and
@@ -127,9 +136,10 @@ by target repository (`repo_owner`, `repo_name`, either alone).
 
 ### Automation writes
 
-- `create_automation` takes a name, instructions, and a trigger. The default trigger is `schedule`,
-  which needs a `schedule_cron` and the `schedule_tz` it is read in. The timezone defaults to UTC,
-  which is rarely the hour anyone means, so pass your own.
+- `create_automation` takes a name, instructions, a trigger, and an optional `team_id`, which a
+  workspace that requires a team on creation needs. The default trigger is `schedule`, which needs a
+  `schedule_cron` and the `schedule_tz` it is read in. The timezone defaults to UTC, which is rarely
+  the hour anyone means, so pass your own.
   - Event-driven triggers (`github_event`, `linear_event`, `slack_event`, `sentry`, `webhook`) need
     an `event_type` and usually a `trigger_config` of conditions.
   - A `sentry` trigger also needs `sentry_client_secret`.
@@ -139,8 +149,10 @@ by target repository (`repo_owner`, `repo_name`, either alone).
   edits or pauses an automation, so create it with the schedule it should keep, and fix a mistake in
   the web UI.
 
-- `trigger_automation` runs one now, outside its schedule. It returns the invocation id and the
-  sessions it launched. It fails with `409` while a run of that automation is already active.
+- `trigger_automation` runs one now, outside its schedule. It returns the invocation id and its
+  child runs; read one with `get_automation_run`. It fails with `409` while a run of that automation
+  is already active. The invocation records its author as `unknown`, since a token does not
+  establish whether a person or an agent fired it.
 
 ### Skill writes
 

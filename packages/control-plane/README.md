@@ -705,6 +705,19 @@ pins this list, so adding to it is a visible change:
 - reading skills: `GET /skills` and `/skills/:id`
 - creating an automation (`POST /automations`) and triggering one (`POST /automations/:id/trigger`)
 - skill import and re-import, with their previews
+- reading one file of a session diff: `GET /sessions/:id/diff/:revisionId/files/:fileId`
+
+Two rules reach past route admission:
+
+- **A manual run stays within the token's grant.** The trigger route passes the admitted permissions
+  to the scheduler as a ceiling, and the execution check requires `sessions.create`, and
+  `repositories.use` or `environments.use` for the selected targets, to be in that ceiling as well
+  as in the owner's live role. This holds at admission and again at each child launch. The
+  invocation records `actor_kind = 'unknown'`, since a token does not establish who fired it.
+- **A token's `skills.manage` needs `skills.read`.** Every token route that manages skills answers
+  with skill or repository content, so issuing refuses `skills.manage` without `skills.read`
+  (`permission_prerequisite_missing`), and narrowing drops a `skills.manage` whose `skills.read` did
+  not survive (`PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES` in shared).
 
 Editing, pausing, or deleting automations, bulk skill import, and every session mutation, secret,
 and setting refuse tokens.

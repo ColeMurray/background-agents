@@ -10,22 +10,30 @@ function tool(name: string): ToolDefinition {
   return found;
 }
 
-/** A preview as the control plane returns it, trimmed to what the tools read. */
+const SOURCE_SHA256 = "5".repeat(64);
+const REVISION_SHA256 = "d".repeat(64);
+
+/** A preview as the control plane returns it, including the content the tools never report. */
 function preview(overrides: Record<string, unknown> = {}) {
   return {
     name: "deploy-service",
     description: "How to deploy",
+    body: "# Deploy\n",
+    license: null,
+    compatibility: null,
+    metadata: {},
     nameAvailable: true,
-    revisionSha256: "r".repeat(64),
+    revisionSha256: REVISION_SHA256,
     totalBytes: 512,
     source: {
       provider: "github",
       repoOwner: "acme",
       repoName: "skills",
+      requestedRef: "main",
       resolvedRef: "main",
       commitSha: "c".repeat(40),
       subdirectory: "skills/deploy",
-      sourceSha256: "s".repeat(64),
+      sourceSha256: SOURCE_SHA256,
     },
     warnings: [{ code: "name-derived", message: "Name taken from frontmatter" }],
     files: [{ path: "SKILL.md", content: "# Deploy\n", sizeBytes: 10, executable: false }],
@@ -33,6 +41,7 @@ function preview(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** A skill as the control plane returns it, with its body, files, and recorded provenance. */
 function storedSkill(overrides: Record<string, unknown> = {}) {
   return {
     skill: {
@@ -42,7 +51,18 @@ function storedSkill(overrides: Record<string, unknown> = {}) {
       enabled: true,
       currentRevisionId: "skillrev_2",
       revisionNumber: 2,
-      source: { commitSha: "a".repeat(40), repoOwner: "acme", repoName: "skills" },
+      source: {
+        provider: "github",
+        repoOwner: "acme",
+        repoName: "skills",
+        requestedRef: "main",
+        resolvedRef: "main",
+        commitSha: "a".repeat(40),
+        subdirectory: "skills/deploy",
+        sourceSha256: SOURCE_SHA256,
+        importedAt: 1,
+        revisionId: "skillrev_2",
+      },
       body: "# Deploy\n",
       files: [{ path: "SKILL.md", content: "# Deploy\n" }],
       ...overrides,
@@ -89,6 +109,7 @@ describe("tool surface", () => {
       "trigger_automation",
       "update_skill_from_git",
     ]);
+    expect(tools).toHaveLength(13);
     // Re-import moves the skill's current revision, which is what later
     // sessions load; a client reads this to decide how hard to prompt.
     const hints = Object.fromEntries(
@@ -180,6 +201,71 @@ describe("tool surface", () => {
   });
 });
 
+describe("tool arguments", () => {
+  it("are parsed by the tool's own schema before its handler runs, whoever calls it", async () => {
+    const { client, get } = fakeClient({ get: () => ({ sessions: [] }) });
+
+    await expect(tool("list_sessions").run(client, { status: "running" })).rejects.toThrow();
+    await expect(tool("get_session_events").run(client, {})).rejects.toThrow();
+    expect(get).not.toHaveBeenCalled();
+
+    // The schema's own transforms apply too.
+    await tool("list_automations").run(client, { search: "  nightly " });
+    expect(get).toHaveBeenCalledWith(
+      "/automations",
+      expect.objectContaining({ search: "nightly" })
+    );
+  });
+});
+
+describe("session diffs", () => {
+  it("reads one file's patch with the ids the manifest lists", async () => {
+    const { client, get } = fakeClient({ get: () => ({ file: { patch: "@@" } }) });
+
+    await tool("get_session_diff_file").run(client, {
+      session_id: "session/1",
+      revision_id: "rev 1",
+      file_id: "file/../2",
+    });
+
+    expect(get).toHaveBeenCalledWith("/sessions/session%2F1/diff/rev%201/files/file%2F..%2F2");
+  });
+});
+
+describe("automation invocations and runs", () => {
+  it("lists invocations, then reads each child run by its own id", async () => {
+    const invocations = {
+      invocations: [
+        { id: "inv_2", runs: [{ id: "run_b" }, { id: "run_c" }] },
+        { id: "inv_1", runs: [] },
+      ],
+      total: 2,
+    };
+    const { client, get } = fakeClient({
+      get: (path) =>
+        path.endsWith("/invocations") ? invocations : { run: { id: path.split("/").at(-1) } },
+    });
+
+    const listed = (await tool("list_automation_invocations").run(client, {
+      automation_id: "auto_1",
+      limit: 10,
+    })) as typeof invocations;
+    expect(get).toHaveBeenCalledWith("/automations/auto_1/invocations", { limit: 10 });
+
+    const childIds = listed.invocations.flatMap((invocation) =>
+      invocation.runs.map((run) => run.id)
+    );
+    expect(childIds).toEqual(["run_b", "run_c"]);
+    for (const runId of childIds) {
+      await expect(
+        tool("get_automation_run").run(client, { automation_id: "auto_1", run_id: runId })
+      ).resolves.toEqual({ run: { id: runId } });
+    }
+    expect(get).toHaveBeenCalledWith("/automations/auto_1/runs/run_b");
+    expect(get).toHaveBeenCalledWith("/automations/auto_1/runs/run_c");
+  });
+});
+
 describe("list_skills", () => {
   it("pages through the catalog with the caller's cursor", async () => {
     const { client, get } = fakeClient({ get: () => ({ skills: [], hasMore: false }) });
@@ -258,6 +344,7 @@ describe("create_automation", () => {
     });
 
     expect(post).toHaveBeenCalledWith("/automations", {
+      teamId: undefined,
       name: "Nightly sync",
       instructions: "Run the tests",
       triggerType: undefined,
@@ -271,6 +358,29 @@ describe("create_automation", () => {
       model: undefined,
       reasoningEffort: undefined,
     });
+  });
+
+  it("forwards the owning team, which a workspace may require on creation", async () => {
+    const { client, post } = fakeClient({ post: () => ({ automation: { id: "auto_1" } }) });
+
+    await tool("create_automation").run(client, {
+      team_id: "team_platform",
+      name: "Nightly sync",
+      instructions: "Run the tests",
+      schedule_cron: "0 9 * * *",
+    });
+
+    expect(post).toHaveBeenCalledWith(
+      "/automations",
+      expect.objectContaining({ teamId: "team_platform" })
+    );
+    await expect(
+      tool("create_automation").run(client, {
+        team_id: "platform",
+        name: "Nightly sync",
+        instructions: "Run the tests",
+      })
+    ).rejects.toThrow();
   });
 
   it("keeps the caller's timezone rather than the default", async () => {
@@ -414,8 +524,8 @@ describe("import_skill_from_git", () => {
       name: null,
       assignments: [],
       expectedCommitSha: "c".repeat(40),
-      expectedSourceSha256: "s".repeat(64),
-      expectedRevisionSha256: "r".repeat(64),
+      expectedSourceSha256: SOURCE_SHA256,
+      expectedRevisionSha256: REVISION_SHA256,
     });
   });
 
@@ -462,7 +572,9 @@ describe("import_skill_from_git", () => {
 
     expect(report.files).toEqual(["SKILL.md"]);
     expect(report.skill).not.toHaveProperty("body");
+    expect(report.skill).not.toHaveProperty("files");
     expect(report.warnings).toHaveLength(1);
+    expect(JSON.stringify(report)).not.toContain("# Deploy");
   });
 });
 
@@ -481,8 +593,8 @@ describe("update_skill_from_git", () => {
       {
         ref: "v2",
         expectedCommitSha: "c".repeat(40),
-        expectedSourceSha256: "s".repeat(64),
-        expectedRevisionSha256: "r".repeat(64),
+        expectedSourceSha256: SOURCE_SHA256,
+        expectedRevisionSha256: REVISION_SHA256,
       },
       { headers: { "If-Match": '"skillrev_1"' } }
     );
@@ -491,7 +603,8 @@ describe("update_skill_from_git", () => {
   it("defaults the ref to the one the skill recorded", async () => {
     const { client, post } = fakeClient({
       get: () => storedSkill(),
-      post: (path) => (path.endsWith("/preview") ? preview() : storedSkill()),
+      post: (path) =>
+        path.endsWith("/preview") ? preview() : { ...storedSkill(), revisionCreated: true },
     });
 
     await tool("update_skill_from_git").run(client, { skill_id: "skill_1" });
@@ -536,24 +649,38 @@ describe("update_skill_from_git", () => {
     expect(report.revisionCreated).toBe(false);
   });
 
-  it("falls back to the previewed source when the response records none", async () => {
+  it("refuses a re-import result it does not recognize rather than inventing one", async () => {
+    // The route always reports whether a revision was added; a result without it is not one this
+    // build can describe, and guessing would report a storage fact nobody stated.
     const { client } = fakeClient({
       get: () => storedSkill(),
-      post: (path) =>
-        path.endsWith("/preview") ? preview() : { skill: { ...storedSkill().skill, source: null } },
+      post: (path) => (path.endsWith("/preview") ? preview() : storedSkill()),
     });
 
-    const report = (await tool("update_skill_from_git").run(client, { skill_id: "skill_1" })) as {
-      source: { commitSha: string };
-    };
+    await expect(
+      tool("update_skill_from_git").run(client, { skill_id: "skill_1" })
+    ).rejects.toThrow(/unrecognized re-import result/);
+  });
 
-    expect(report.source.commitSha).toBe("c".repeat(40));
+  it("tolerates fields a newer control plane adds", async () => {
+    const { client } = fakeClient({
+      get: () => storedSkill({ pinned: true }),
+      post: (path) =>
+        path.endsWith("/preview")
+          ? preview({ provenanceNote: "new", warnings: [{ code: "future-code", message: "m" }] })
+          : { ...storedSkill(), revisionCreated: true, auditId: "a1" },
+    });
+
+    await expect(
+      tool("update_skill_from_git").run(client, { skill_id: "skill_1" })
+    ).resolves.toMatchObject({ revisionCreated: true, warnings: [{ code: "future-code" }] });
   });
 
   it("escapes the skill id into the path", async () => {
     const { client, get } = fakeClient({
       get: () => storedSkill(),
-      post: (path) => (path.endsWith("/preview") ? preview() : storedSkill()),
+      post: (path) =>
+        path.endsWith("/preview") ? preview() : { ...storedSkill(), revisionCreated: true },
     });
 
     await tool("update_skill_from_git").run(client, { skill_id: "skill/../1" });
