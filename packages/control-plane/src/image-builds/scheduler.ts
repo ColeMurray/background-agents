@@ -16,6 +16,7 @@ import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./work
 import { resolveImageBuildAdmission, resolveImageBuildProvider } from "./provider-policy";
 import { runMaintenanceTasks } from "./concurrency";
 import { repositoryIdentityKey } from "./provenance";
+import { parseTimeoutMsSetting } from "../sandbox/lifecycle/timeout-settings";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -41,6 +42,8 @@ export interface ImageBuildSchedulerStats {
   operationsReconciled: number;
   operationsRetained: number;
   scopesScanned: number;
+  /** Scopes whose branch check waited for the minimum rebuild interval. */
+  scopesDeferred: number;
   branchLookups: number;
   branchMatched: number;
   branchDrifted: number;
@@ -87,6 +90,7 @@ export class ImageBuildScheduler {
       operationsReconciled: 0,
       operationsRetained: 0,
       scopesScanned: 0,
+      scopesDeferred: 0,
       branchLookups: 0,
       branchMatched: 0,
       branchDrifted: 0,
@@ -239,6 +243,18 @@ export class ImageBuildScheduler {
     const provider = this.provider;
     const sourceControl = this.sourceControl;
     const scopes = await this.listScopes(this.db);
+    const { timeoutMs: minRebuildIntervalMs, rejectedValue } = parseTimeoutMsSetting(
+      this.env.IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS,
+      { defaultMs: 0, minMs: 1 }
+    );
+    if (rejectedValue !== null) {
+      logger.warn("image_build.scheduler_config_invalid", {
+        setting: "IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS",
+        rejected_value: rejectedValue,
+        min_rebuild_interval_ms: minRebuildIntervalMs,
+      });
+    }
+    const now = Date.now();
 
     for (const scope of scopes) {
       try {
@@ -251,8 +267,12 @@ export class ImageBuildScheduler {
             repositoriesFingerprint: target.repositoriesFingerprint,
           },
           rows,
-          provider
+          provider,
+          { now, minRebuildIntervalMs }
         );
+        if (decision.type === "skip" && decision.reason === "min_rebuild_interval") {
+          stats.scopesDeferred += 1;
+        }
 
         let rebuild = decision.type === "rebuild";
         if (decision.type === "check_branches") {

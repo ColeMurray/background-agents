@@ -145,6 +145,34 @@ Only one build runs per scope at a time; a trigger while a build is in flight is
 Daytona deployment every trigger above — the scheduler included — starts a build only while
 admission is open (see [Daytona prebuilds](#daytona-prebuilds)).
 
+#### Minimum rebuild interval
+
+When a build takes longer than the 30-minute schedule, or a base branch moves often, nearly every
+push starts a new build. To limit this, set `image_build_min_rebuild_interval_ms` in Terraform (the
+`IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS` Actions repository variable for CI deployments, or the
+environment variable of the same name on other hosts). While a scope's newest ready image is younger
+than this interval (in milliseconds), measured from the start of its build, the scheduler does not
+check that scope's branches, so new commits rebuild it at most once per interval. A missing image,
+an outdated runtime or malformed provenance still rebuilds on the next tick, and the immediate
+triggers above are not limited. Leaving it unset (or `0` in Terraform) rebuilds whenever a branch
+moves. The value must be a whole number of milliseconds; anything else is ignored with an
+`image_build.scheduler_config_invalid` warning, and the scheduler behaves as if it were unset.
+
+```hcl
+image_build_min_rebuild_interval_ms = 604800000 # 7 days: new commits rebuild an image at most once a week
+```
+
+Sessions still sync the newer commits at startup, but setup scripts do not re-run, so a dependency
+change can take up to one interval to reach the image. Use the manual rebuild button when it must
+land sooner.
+
+Any build that becomes ready restarts the interval, whatever started it: a manual rebuild, a build
+after saving an environment, or a runtime-floor rebuild. With a 7-day interval, for example, a
+manual rebuild on day 6 moves the next commit-driven rebuild to day 13. A build that fails does not
+restart the interval, but the scheduler also does not retry it while the previous ready image is
+still inside the interval; click manual rebuild again if it should not wait. The
+`image_build.scheduler_tick` log counts the scopes whose branch check waited as `scopesDeferred`.
+
 ### What Happens During a Build
 
 The build process runs the same setup steps that a normal session would:
@@ -482,7 +510,8 @@ Updating the shared sandbox toolchain does not automatically refresh prepared re
 environment images. Use the refresh button below after a dependency-only update when those images
 must pick up the new tools. Existing compatible saved sessions remain usable.
 
-Pre-built images are rebuilt every 30 minutes when new commits are detected. The image's
+Pre-built images are rebuilt every 30 minutes when new commits are detected, or at most once per
+[minimum rebuild interval](#minimum-rebuild-interval) when the deployment sets one. The image's
 [model catalog](#model-catalog) is as old as the image, so a newly published model reaches a quiet
 repository only on its next rebuild. If you just pushed code, or want a new model available
 immediately, trigger a manual rebuild — the refresh button next to the repository in Settings >

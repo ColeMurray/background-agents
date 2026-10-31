@@ -202,7 +202,10 @@ function harness(
   };
 }
 
-function mockReadyImages({ store, resolveTarget }: ReturnType<typeof harness>): void {
+function mockReadyImages(
+  { store, resolveTarget }: ReturnType<typeof harness>,
+  createdAt = 1
+): void {
   store.getReconciliationStatus.mockImplementation(async (scope: ImageBuildScope) => {
     const target = await resolveTarget({} as Env, {} as SqlDatabase, scope);
     return [
@@ -221,7 +224,7 @@ function mockReadyImages({ store, resolveTarget }: ReturnType<typeof harness>): 
         runtimeVersion: COMPATIBLE_RUNTIME_VERSION,
         buildDurationSeconds: 1,
         errorMessage: null,
-        createdAt: 1,
+        createdAt,
       },
     ];
   });
@@ -398,6 +401,67 @@ describe("ImageBuildScheduler", () => {
     );
     expect(stats.branchUnknown).toBe(1);
     expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it("leaves a moved branch alone while the ready image is within the minimum interval", async () => {
+    const getBranchHead = vi.fn(async () => "def456");
+    const h = harness({
+      env: createTestEnv({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "86400000" }),
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    mockReadyImages(h, Date.now() - 60 * 60 * 1000);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesScanned).toBe(1);
+    expect(stats.scopesDeferred).toBe(1);
+    expect(stats.branchLookups).toBe(0);
+    expect(getBranchHead).not.toHaveBeenCalled();
+    expect(h.workflow.triggerBuildWithTarget).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "1.5", " 3600000 ", "7d", "604800000ms", "0x10", "1e9"])(
+    "warns about a malformed minimum interval (%j) and checks branches as if unset",
+    async (value) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const getBranchHead = vi.fn(async () => "def456");
+      const h = harness({
+        env: createTestEnv({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: value }),
+        sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+      });
+      mockReadyImages(h, Date.now() - 60 * 60 * 1000);
+
+      const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+      expect(stats.scopesDeferred).toBe(0);
+      expect(stats.branchDrifted).toBe(1);
+      expect(stats.triggered).toBe(1);
+      const configWarnings = warn.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((entry) => entry.msg === "image_build.scheduler_config_invalid");
+      expect(configWarnings).toEqual([
+        expect.objectContaining({
+          setting: "IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS",
+          rejected_value: value,
+        }),
+      ]);
+      warn.mockRestore();
+    }
+  );
+
+  it("rebuilds a moved branch once the ready image is older than the minimum interval", async () => {
+    const getBranchHead = vi.fn(async () => "def456");
+    const h = harness({
+      env: createTestEnv({ IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS: "86400000" }),
+      sourceControl: { getBranchHead } as unknown as SourceControlProvider,
+    });
+    mockReadyImages(h, Date.now() - 25 * 60 * 60 * 1000);
+
+    const stats = await h.scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesDeferred).toBe(0);
+    expect(stats.branchDrifted).toBe(1);
+    expect(stats.triggered).toBe(1);
   });
 
   it("starts every required build found by the full scan", async () => {
