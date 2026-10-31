@@ -10,17 +10,27 @@ import { MIN_REBUILD_RUNTIME_GENERATION } from "../sandbox/runtime-manifest";
 export const MIN_REBUILD_RUNTIME_VERSION = MIN_REBUILD_RUNTIME_GENERATION;
 
 export type ImageBuildRebuildDecision =
-  | { type: "skip"; reason: "building" }
+  | { type: "skip"; reason: "building" | "min_rebuild_interval" }
   | {
       type: "rebuild";
       reason: "missing_image" | "runtime_incompatible" | "invalid_provenance";
     }
   | { type: "check_branches"; recordedShas: Map<string, string> };
 
+export interface ImageBuildRebuildClock {
+  now: number;
+  /**
+   * Skip the branch check while the ready image is younger than this, in ms.
+   * 0 disables the interval.
+   */
+  minRebuildIntervalMs: number;
+}
+
 export function evaluateImageBuildRebuildPolicy(
   unit: EnabledScopeUnit,
   rows: ImageBuildRecordView[],
-  provider: ImageBuildProvider
+  provider: ImageBuildProvider,
+  { now, minRebuildIntervalMs }: ImageBuildRebuildClock
 ): ImageBuildRebuildDecision {
   const providerRows = rows.filter((row) => row.provider === provider);
   if (providerRows.some((row) => row.status === "building")) {
@@ -52,6 +62,10 @@ export function evaluateImageBuildRebuildPolicy(
     unit.repositories.some((repository) => !recordedShas.has(repositoryIdentityKey(repository)))
   ) {
     return { type: "rebuild", reason: "invalid_provenance" };
+  }
+  // Checked last, so a missing, outdated or malformed image is never delayed.
+  if (minRebuildIntervalMs > 0 && now - ready.createdAt < minRebuildIntervalMs) {
+    return { type: "skip", reason: "min_rebuild_interval" };
   }
   return { type: "check_branches", recordedShas };
 }

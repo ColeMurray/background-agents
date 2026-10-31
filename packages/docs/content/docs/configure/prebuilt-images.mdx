@@ -4,7 +4,7 @@ description: Enable prebuilt images for a repository or an environment so sessio
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-02"
+lastReviewed: "2026-10-29"
 relatedCode:
   - docs/IMAGE_PREBUILD.md
   - docs/HOW_IT_WORKS.md
@@ -116,6 +116,8 @@ Every image records the ordered repositories and base branches it was built for,
 - there is no current image (just enabled, the repository set or a base branch was edited, or the previous build failed);
 - any repository's branch tip has moved since the ready image was built;
 - the image was built on a sandbox runtime older than the current rebuild floor.
+
+A deployment operator can set a minimum rebuild interval (`IMAGE_BUILD_MIN_REBUILD_INTERVAL_MS`). While the newest ready image is younger than the interval, a moved branch does not start a rebuild; the other two conditions still do.
 
 Builds also start immediately, outside the schedule, when you:
 

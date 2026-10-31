@@ -815,6 +815,21 @@ variable "sandbox_boot_timeout_ms" {
   }
 }
 
+variable "image_build_min_rebuild_interval_ms" {
+  description = "Minimum interval, in milliseconds, between image rebuilds caused only by new commits on a base branch (e.g. 604800000 for weekly). Missing or runtime-incompatible images still rebuild at once, and manual rebuilds are not limited. 0 rebuilds whenever the branch moves."
+  type        = number
+  default     = 0
+
+  validation {
+    condition = (
+      var.image_build_min_rebuild_interval_ms >= 0 &&
+      var.image_build_min_rebuild_interval_ms <= 9007199254740991 &&
+      floor(var.image_build_min_rebuild_interval_ms) == var.image_build_min_rebuild_interval_ms
+    )
+    error_message = "image_build_min_rebuild_interval_ms must be a whole number between 0 and 9007199254740991 ms (0 disables the interval), matching the control plane's safe-integer range."
+  }
+}
+
 variable "web_platform" {
   description = "Platform for the web app deployment: 'vercel' or 'cloudflare' (OpenNext)"
   type        = string
