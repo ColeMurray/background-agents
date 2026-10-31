@@ -4,43 +4,23 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 31, 2026
 
-**Personal access tokens and an MCP server.** **Settings › Access tokens** issues tokens that let a
-tool on your machine call Open-Inspect as you. Every token expires within a year and holds only the
-permissions you pick from those your role includes. Each request narrows it again to your role's
-current permissions, so it loses a permission when you do and stops working while you are suspended.
-Workspace administration permissions can't be granted, and a token can't create or revoke tokens. It
-works only on routes that accept tokens: reading sessions, automations, and skills, plus creating
-and running automations and importing skills. The new `packages/mcp-server` uses a token to give
-Claude Code or another MCP client 13 tools over those routes, and an automation it runs stays within
-the token's grant. Issuing, revoking, and using tokens is audited. Requires D1 migration 0096. See
+**Personal access tokens and an MCP server.** Issue tokens under **Settings › Access tokens** so
+local tools can call Open-Inspect as you. Each token expires, holds only the permissions you grant,
+and never exceeds your current role. The new `packages/mcp-server` uses a token to let Claude Code
+and other MCP clients work with sessions, automations, and skills. Requires D1 migration 0096. See
 the [MCP server README](packages/mcp-server/README.md).
 
-**Access token policy for administrators.** **Settings › Access token policy** can turn every
-personal access token off at once without revoking any, cap how long tokens last, and limit which
-permissions tokens may hold. Each rule applies to existing tokens as soon as it's saved, so a token
-older than the cap stops working. The same page lists every member's tokens and can revoke one token
-or all of a member's. It requires the new `workspace.personal_access_tokens.manage` permission,
-which Owners and Administrators hold and which can be added to a custom role; tokens can never hold
-it. Requires D1 migration 0097.
+**Access token policy.** Administrators can turn all tokens off, cap their lifetime, limit the
+permissions they may hold, and revoke any member's tokens under **Settings › Access token policy**.
+Requires the new `workspace.personal_access_tokens.manage` permission and D1 migration 0097.
 
 ## October 30, 2026
 
-**Managed MCP routing and personal OAuth connections.** A remote MCP server can now **Route through
-Open Inspect**, so the sandbox reaches it through the control plane with its own session token and
-never holds the upstream credential. The proxy forwards only to HTTPS hosts and limits each sandbox
-to 8 concurrent requests and 120 per minute. A server's **Authentication** can be none, shared
-service credentials, or each user's OAuth connection. With personal OAuth, people connect their own
-accounts under **Settings › Connections**, and each turn calls the server as the author of that
-turn's prompt, so a session several people prompt uses each author's account in turn. Personal
-servers work in OpenCode and Claude Agent sessions on runtime generation 80 or later; Codex sessions
-and older images leave them out and show a warning on the prompt, in the web and in Slack. The proxy
-authenticates the sandbox, not the process, so a process left running from an earlier turn can make
-personal calls during a later author's turn. Existing servers keep connecting directly until an
-admin turns on routing, and disabling a server stops its routing and delegation at once. While
-connections are live, the server can't be deleted and the user can't be merged or deleted: disable
-the server and revoke its connections, or have the user disconnect. Requires D1 migration 0095;
-runtime generation 80 rebuilds prebuilt images. See
-[Personal MCP Connections](packages/control-plane/README.md#personal-mcp-connections).
+**Managed MCP routing and personal OAuth.** Remote MCP servers can route through Open-Inspect so
+sandboxes never hold upstream credentials, and can use each user's own OAuth connection, set up
+under **Settings › Connections**. Personal servers work in OpenCode and Claude Agent sessions; Codex
+skips them with a warning. Requires D1 migration 0095; runtime generation 80 rebuilds prebuilt
+images. See [Personal MCP Connections](packages/control-plane/README.md#personal-mcp-connections).
 
 ## October 29, 2026
 
@@ -53,28 +33,17 @@ values are never returned to anyone. API clients can send `keepCredentialKeys` w
 `PUT /mcp-servers/:id` for the same per-name edits; without it, sent credentials still replace the
 saved set.
 
-**Automation pull requests come from the GitHub App.** A pull request opened by an automation run's
-own prompt, including a **Run now** run, is now created by the GitHub App instead of with the
-owner's GitHub OAuth token. Unattended work no longer looks like a PR the owner opened, and the
-owner can review and approve it. Commits are still attributed to the owner. Prompts a person sends
-into an automation-started session still open PRs as that person, and child sessions the run spawns
-still use the owner's OAuth. Because the App authored them, the review bot can only comment on these
-PRs, not approve or request changes, and GitHub event automations that match the owner's login no
-longer fire on them. `POST /sessions/:id/prompt` now rejects the internal `automation` and `agent`
-prompt sources. See [Creating Pull Requests](docs/HOW_IT_WORKS.md#creating-pull-requests).
+**Automation pull requests come from the GitHub App.** PRs opened by automation runs, including
+**Run now**, are now created by the GitHub App instead of the owner's account, so the owner can
+review them. The review bot can only comment on these PRs, and event automations matching the
+owner's login no longer fire on them. See
+[Creating Pull Requests](docs/HOW_IT_WORKS.md#creating-pull-requests).
 
 ## October 28, 2026
 
-**Sign-in allowlist in Settings.** Owners and Administrators can now edit who may sign in under
-**Settings › Workspace access › Who can sign in**, without redeploying. Type an email, domain, or
-GitHub name into one field; the editor infers the rule type and asks whether a bare name is a GitHub
-user or organization. These rules add to the deployment's `ALLOWED_*` variables and Terraform
-`allowed_*` inputs, which appear with a lock and stay read-only, and can never narrow them. Their
-email and domain rules also govern which new Slack and Linear users can be enrolled. The list holds
-up to 50 rules, and changes are reviewed before saving and recorded in the audit log. Removing a
-rule doesn't end existing sessions or remove bot accounts; suspend the member for that. Keep a
-recovery administrator's email in `allowed_emails`, since an empty deployment baseline isn't
-supported. Requires D1 migrations 0093 and 0094. See
+**Sign-in allowlist in Settings.** Owners and Administrators can edit who may sign in under
+**Settings › Workspace access** without redeploying. These rules add to the deployment's `ALLOWED_*`
+rules and can't narrow them. Requires D1 migrations 0093 and 0094. See
 [Sign-In Allowlist](docs/AUTH.md#sign-in-allowlist).
 
 **Session connections recover automatically.** Transient disconnects now retry without an attempt
@@ -88,19 +57,10 @@ presence while you use a separate editor or terminal. Session-expired connection
 credential, and temporary credential-service failures retry instead of showing an authentication
 error. Actual authentication failures and server-overload closes still require user action.
 
-**New bot users must pass sign-in admission.** The Slack, Linear, and GitHub bots used to create an
-active Member account for anyone they hadn't seen before, skipping the sign-in allowlist. A new bot
-user is now enrolled only if their email passes the same exact-email and domain rules as web
-sign-in; otherwise no account is created and Slack or Linear says why. Slack and Linear must be able
-to read the person's email, so the Slack app's `users:read.email` scope is required, and Slack users
-whose email the bot can't read, such as external Slack Connect users, can no longer start using the
-bot. Slack also enrolls a person with their email before anything else, so an existing user's first
-mention links to their account instead of creating a second one. Bots can't check GitHub username or
-organization rules: people admitted only by those must sign in on the web first and use their
-account's email in Slack or Linear, and new GitHub bot users must already be known unless unsafe
-allow-all is in effect. Known users and anyone whose email matches an existing account keep their
-role and suspension, and existing bot accounts are unaffected. See
-[Bot enrollment](docs/AUTH.md#bot-enrollment).
+**New bot users must pass sign-in admission.** The Slack, Linear, and GitHub bots no longer create
+accounts for people the sign-in allowlist doesn't admit. Slack needs the `users:read.email` scope,
+and Slack users whose email the bot can't read, such as external Slack Connect users, can't start
+using it. See [Bot enrollment](docs/AUTH.md#bot-enrollment).
 
 ## October 27, 2026
 
