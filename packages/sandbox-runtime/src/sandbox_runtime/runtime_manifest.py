@@ -15,10 +15,6 @@ class RuntimeManifest(TypedDict):
     # Per-harness floors for prebuilt-image selection: a harness whose runtime
     # support arrived later than the global floor names its own generation.
     harnessMinimumGeneration: dict[str, int]
-    # Per-model-provider floors for prebuilt-image selection: a provider the
-    # baked OpenCode model catalog gained later names the first generation
-    # whose images were all built with it.
-    modelProviderMinimumGeneration: dict[str, int]
 
 
 _MANIFEST_PATH = Path(__file__).with_name("runtime_manifest.json")

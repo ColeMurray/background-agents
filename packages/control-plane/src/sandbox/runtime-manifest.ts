@@ -14,6 +14,3 @@ export const MIN_REBUILD_RUNTIME_GENERATION = runtimeManifest.minimumRebuildGene
 /** Per-harness image floors; see minCompatibleRuntimeVersionFor in image-builds/model.ts. */
 export const HARNESS_MIN_RUNTIME_GENERATION: Readonly<Partial<Record<string, number>>> =
   runtimeManifest.harnessMinimumGeneration;
-/** Per-model-provider image floors for providers the baked model catalog gained later. */
-export const MODEL_PROVIDER_MIN_RUNTIME_GENERATION: Readonly<Partial<Record<string, number>>> =
-  runtimeManifest.modelProviderMinimumGeneration;

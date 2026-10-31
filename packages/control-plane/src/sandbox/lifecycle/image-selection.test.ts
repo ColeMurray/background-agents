@@ -44,34 +44,6 @@ describe("evaluateImageBuildForSpawn", () => {
     }
   );
 
-  it("rejects images whose model catalog predates the Kimi Coding Plan models", async () => {
-    const preKimiImage = await readyImage({ runtime_version: "v78-tunnel-environment-recovery" });
-    expect(
-      await evaluateImageBuildForSpawn(
-        preKimiImage,
-        SESSION_REPOSITORIES,
-        "opencode",
-        "kimi-code-plan-global"
-      )
-    ).toEqual({ outcome: "miss", reason: "runtime_below_floor", imageBuildId: "imgb-1" });
-    expect(
-      await evaluateImageBuildForSpawn(
-        preKimiImage,
-        SESSION_REPOSITORIES,
-        "opencode",
-        "zai-coding-plan"
-      )
-    ).toMatchObject({ outcome: "selected" });
-    expect(
-      await evaluateImageBuildForSpawn(
-        await readyImage({ runtime_version: "v79-persistent-model-prices" }),
-        SESSION_REPOSITORIES,
-        "opencode",
-        "kimi-code-plan-global"
-      )
-    ).toMatchObject({ outcome: "selected" });
-  });
-
   it.each(["claude", "opencode"] as const)(
     "rejects pre-memory v73 images for %s",
     async (harness) => {

@@ -202,11 +202,6 @@ Codex sessions price their token usage from the same file, so a model published 
 built has no price there: its turns are recorded as $0 with a timeline warning until the image is
 rebuilt.
 
-A model provider absent from older images' catalogs names its own spawn floor in the runtime
-manifest's `modelProviderMinimumGeneration`: sessions on that provider skip prebuilt images from
-earlier generations and boot from the base image instead, where OpenCode would otherwise report the
-model as not found.
-
 The control plane publishes finalization through its `Jobs` port. Cloudflare delivers it with a
 Queue and stores build state in D1; Node delivers it with the `jobs.db` poller and stores build
 state in `global.db`. Both hosts run the same finalization handler and retry contract.

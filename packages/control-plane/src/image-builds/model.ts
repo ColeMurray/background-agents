@@ -23,7 +23,6 @@ import { z } from "zod";
 import {
   HARNESS_MIN_RUNTIME_GENERATION,
   MIN_COMPATIBLE_RUNTIME_GENERATION,
-  MODEL_PROVIDER_MIN_RUNTIME_GENERATION,
 } from "../sandbox/runtime-manifest";
 
 export { IMAGE_BUILD_PROVIDER_IDS } from "@open-inspect/shared/types/image-builds";
@@ -94,19 +93,14 @@ export interface ImageBuildCallbackBuild {
 export const MIN_COMPATIBLE_RUNTIME_VERSION = MIN_COMPATIBLE_RUNTIME_GENERATION;
 
 /**
- * The image floor for a session on `harness` using `modelProvider`. The global
- * floor retires runtimes no session can boot any more; a harness whose runtime
- * support arrived later, or a model provider absent from older images' baked
- * model catalogs, names its own generation in the manifest, so its sessions
+ * The image floor for a session on `harness`. The global floor retires
+ * runtimes no session can boot any more; a harness whose runtime support
+ * arrived later names its own generation in the manifest, so its sessions
  * skip older images without retiring any other session's images or
  * snapshots.
  */
-export function minCompatibleRuntimeVersionFor(harness: HarnessId, modelProvider?: string): number {
-  return Math.max(
-    MIN_COMPATIBLE_RUNTIME_VERSION,
-    HARNESS_MIN_RUNTIME_GENERATION[harness] ?? 0,
-    modelProvider ? (MODEL_PROVIDER_MIN_RUNTIME_GENERATION[modelProvider] ?? 0) : 0
-  );
+export function minCompatibleRuntimeVersionFor(harness: HarnessId): number {
+  return Math.max(MIN_COMPATIBLE_RUNTIME_VERSION, HARNESS_MIN_RUNTIME_GENERATION[harness] ?? 0);
 }
 
 /**
