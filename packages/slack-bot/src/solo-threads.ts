@@ -195,60 +195,21 @@ export function toSoloThreadReply(event: {
 /** Why a solo thread stopped being solo. */
 export type SoloThreadBlockReason = "other_poster" | "other_poster_in_history";
 
-/** What to do with an untagged reply: continue the session, leave it, or end the solo thread. */
-export type SoloReplyDecision<Session> =
-  | { kind: "take"; session: Session }
-  | {
-      kind: "ignore";
-      reason:
-        | "not_solo"
-        | "blocked"
-        | "sent_to_channel"
-        | "mentions_bot"
-        | "addressed_to_teammate"
-        | "nothing_to_run"
-        | "no_open_session"
-        | "history_incomplete";
-    }
-  | { kind: "block"; reason: SoloThreadBlockReason };
-
-/** The reads `decideSoloThreadReply` needs, each run lazily. */
-export interface SoloReplyLookups<Session> {
-  record(): Promise<SoloThreadRecord | null>;
-  /** The thread's session when it can take a follow-up, checked without posting any notice. */
-  openSession(): Promise<Session | null>;
-  participation(): Promise<ThreadParticipation>;
-}
-
 /**
- * Decide an untagged reply, running each lookup only once the cheaper checks
- * pass. `actionable` says the reply has something to run, or a malformed flag
- * to report; any other reply from the owner is left alone.
+ * Sort an untagged reply by what is known without any Slack or control-plane
+ * read: `verify` an owner's reply that may be an instruction, `block` another
+ * person's reply in an owned thread, and `ignore` everything else.
  */
-export async function decideSoloThreadReply<Session>(
-  reply: Pick<SoloThreadReply, "user" | "text" | "sentToChannel"> & { actionable: boolean },
-  botUserId: string,
-  lookups: SoloReplyLookups<Session>
-): Promise<SoloReplyDecision<Session>> {
-  const record = await lookups.record();
-  if (!record) return { kind: "ignore", reason: "not_solo" };
-  if (record.kind === "blocked") return { kind: "ignore", reason: "blocked" };
-  if (record.ownerUserId !== reply.user) return { kind: "block", reason: "other_poster" };
-  if (reply.sentToChannel) return { kind: "ignore", reason: "sent_to_channel" };
-  // Slack also delivers a tagged reply as `app_mention`, which handles it.
-  if (mentionsUser(reply.text, botUserId)) return { kind: "ignore", reason: "mentions_bot" };
-  if (startsWithUserMention(reply.text)) {
-    return { kind: "ignore", reason: "addressed_to_teammate" };
-  }
-  if (!reply.actionable) return { kind: "ignore", reason: "nothing_to_run" };
-  const session = await lookups.openSession();
-  if (session === null) return { kind: "ignore", reason: "no_open_session" };
-  switch (await lookups.participation()) {
-    case "shared":
-      return { kind: "block", reason: "other_poster_in_history" };
-    case "unknown":
-      return { kind: "ignore", reason: "history_incomplete" };
-    case "solo":
-      return { kind: "take", session };
-  }
+export function screenSoloReply(
+  record: SoloThreadRecord | null,
+  reply: Pick<SoloThreadReply, "user" | "text" | "sentToChannel">,
+  botUserId: string
+): "verify" | "ignore" | "block" {
+  if (record?.kind !== "owned") return "ignore";
+  if (record.ownerUserId !== reply.user) return "block";
+  if (reply.sentToChannel) return "ignore";
+  // A tagged reply also arrives as `app_mention`, which handles it; one that opens on a
+  // teammate is meant for them.
+  if (mentionsUser(reply.text, botUserId) || startsWithUserMention(reply.text)) return "ignore";
+  return "verify";
 }

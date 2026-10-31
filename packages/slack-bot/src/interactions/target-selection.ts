@@ -8,15 +8,10 @@ import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { fetchInteractiveThreadContext } from "../interactive-thread-context";
-import { armSoloThread } from "../solo-threads";
 import { createLogger } from "../logger";
 import { resolveChannelBinding } from "../channel-bindings";
 import { lookupThreadSession, THREAD_CLOSED_MESSAGE } from "../sessions/thread-session-store";
-import {
-  buildWorkingMessage,
-  formatSessionDefaultsNotice,
-  scheduleStartingStatus,
-} from "../messages/blocks";
+import { buildWorkingMessage, scheduleStartingStatus } from "../messages/blocks";
 import { formatAttributedRequest } from "../messages/context";
 import {
   deleteLegacyPendingRequest,
@@ -25,6 +20,7 @@ import {
   getPendingRequest,
 } from "../pending-requests/pending-request-store";
 import {
+  announceLaunchedSession,
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
@@ -319,20 +315,11 @@ export async function handleTargetSelection(
   }
   await retireTargetClarificationPrompt(env, channel, messageTs, target, traceId);
   if (ackTs) {
-    const soloThreadHint = await armSoloThread(
+    await announceLaunchedSession(
       env,
-      { channel, threadTs: threadKey, ownerUserId: userId },
+      { channel, threadTs: threadKey, ackTs, ownerUserId: userId, session: sessionResult },
+      scheduleBackground,
       traceId
     );
-    const launched = buildWorkingMessage({
-      sessionId: sessionResult.sessionId,
-      webAppUrl: env.WEB_APP_URL,
-      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
-      soloThreadHint,
-    });
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
-      blocks: launched.blocks,
-    });
-    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
 }

@@ -3,7 +3,6 @@ import {
   getChannelInfo,
   getMessageDetails,
   postMessage,
-  updateMessage,
 } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ActorEnrollmentOutcome } from "@open-inspect/shared/types/actors";
@@ -33,7 +32,6 @@ import { fetchInteractiveThreadContext } from "../interactive-thread-context";
 import {
   buildWorkingMessage,
   formatHarnessModelRefusal,
-  formatSessionDefaultsNotice,
   scheduleStartingStatus,
 } from "../messages/blocks";
 import {
@@ -46,6 +44,7 @@ import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
 import { checkPublicationAccess, enrollActor } from "../sessions/control-plane-client";
 import {
+  announceLaunchedSession,
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
   type SlackLaunchSettings,
@@ -75,12 +74,10 @@ import {
 } from "../inline-flags";
 import { getAuthoritativeModels, MODEL_PREFERENCES_UNAVAILABLE_MESSAGE } from "../app-home/models";
 import {
-  armSoloThread,
   blockSoloThread,
-  decideSoloThreadReply,
   readThreadParticipation,
+  screenSoloReply,
   toSoloThreadReply,
-  type SoloReplyDecision,
   type SoloThreadReply,
 } from "../solo-threads";
 
@@ -139,7 +136,7 @@ function describeChannel(info: Awaited<ReturnType<typeof getChannelInfo>> | unde
 type ThreadSessionAdmission =
   | { kind: "launch" }
   | { kind: "followUp"; session: ThreadSession; threadTs: string }
-  | { kind: "stop" };
+  | { kind: "stop"; notice: string };
 
 interface IncomingMessageParams {
   content: IncomingMessageContent;
@@ -155,13 +152,12 @@ interface IncomingMessageParams {
   scheduleBackground: BackgroundTaskScheduler;
 }
 
-/** `quiet` drops a reply the thread cannot take without telling the thread why. */
+/** A `stop` carries the notice that tells the thread why; posting it is the caller's choice. */
 async function resolveThreadSessionAdmission(
   env: Env,
   channel: string,
   threadTs: string | undefined,
-  traceId?: string,
-  { quiet = false }: { quiet?: boolean } = {}
+  traceId?: string
 ): Promise<ThreadSessionAdmission> {
   if (!threadTs) return { kind: "launch" };
   let session = await lookupThreadSession(env, channel, threadTs);
@@ -173,12 +169,7 @@ async function resolveThreadSessionAdmission(
       channel,
       error: result.error,
     });
-    if (!quiet) {
-      await postMessage(env.SLACK_BOT_TOKEN, channel, CHANNEL_BINDING_UNAVAILABLE_MESSAGE, {
-        thread_ts: threadTs,
-      });
-    }
-    return { kind: "stop" };
+    return { kind: "stop", notice: CHANNEL_BINDING_UNAVAILABLE_MESSAGE };
   }
   // Legacy mappings predate team ownership and represent workspace sessions.
   const bindingMatches =
@@ -200,14 +191,7 @@ async function resolveThreadSessionAdmission(
       thread_ts: threadTs,
     });
   }
-  if (session.closed) {
-    if (!quiet) {
-      await postMessage(env.SLACK_BOT_TOKEN, channel, THREAD_CLOSED_MESSAGE, {
-        thread_ts: threadTs,
-      });
-    }
-    return { kind: "stop" };
-  }
+  if (session.closed) return { kind: "stop", notice: THREAD_CLOSED_MESSAGE };
   return { kind: "followUp", session, threadTs };
 }
 
@@ -597,21 +581,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   if (!sessionResult) return;
   if (ackTs) {
-    const soloThreadHint = await armSoloThread(
+    await announceLaunchedSession(
       env,
-      { channel, threadTs: threadKey, ownerUserId: user },
+      { channel, threadTs: threadKey, ackTs, ownerUserId: user, session: sessionResult },
+      scheduleBackground,
       traceId
     );
-    const launched = buildWorkingMessage({
-      sessionId: sessionResult.sessionId,
-      webAppUrl: env.WEB_APP_URL,
-      sessionDefaultsNotice: formatSessionDefaultsNotice(sessionResult),
-      soloThreadHint,
-    });
-    await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
-      blocks: launched.blocks,
-    });
-    scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
   }
 }
 
@@ -642,7 +617,12 @@ export async function handleAppMention(
     event.thread_ts,
     traceId
   );
-  if (admission.kind === "stop") return;
+  if (admission.kind === "stop") {
+    await postMessage(env.SLACK_BOT_TOKEN, event.channel, admission.notice, {
+      thread_ts: event.thread_ts,
+    });
+    return;
+  }
   const parsedFlags = parseInlinePromptFlags(stripMentions(event.text));
   const messageText = parsedFlags.ok ? parsedFlags.text : "";
   const threadKey = event.thread_ts || event.ts;
@@ -746,7 +726,12 @@ export async function handleDirectMessage(
     event.thread_ts,
     traceId
   );
-  if (admission.kind === "stop") return;
+  if (admission.kind === "stop") {
+    await postMessage(env.SLACK_BOT_TOKEN, event.channel, admission.notice, {
+      thread_ts: event.thread_ts,
+    });
+    return;
+  }
   const content = parseMessageEventContent(event, traceId);
   if (showsStartingStatusNow(content)) {
     scheduleStartingStatus(
@@ -772,39 +757,56 @@ export async function handleDirectMessage(
 
 type FollowUpAdmission = Extract<ThreadSessionAdmission, { kind: "followUp" }>;
 
-async function decideUntaggedThreadReply(
+/**
+ * Admit an untagged reply as a follow-up on its solo thread's session, or
+ * return null when it is not one. Each step runs only once the cheaper ones
+ * pass: the stored record and the owner, then the reply's own content, then the
+ * session, and last the thread's history. Another person in the thread ends it
+ * as a solo thread. Errors propagate.
+ */
+async function admitSoloThreadReply(
   reply: SoloThreadReply,
-  content: IncomingMessageContent,
   env: Env,
   traceId: string | undefined
-): Promise<SoloReplyDecision<FollowUpAdmission> | null> {
+): Promise<{ admission: FollowUpAdmission; content: IncomingMessageContent } | null> {
   const { channel, threadTs, user } = reply;
-  try {
-    const botUserId = (await getBotIdentity(env, traceId))?.userId;
-    if (!botUserId) return null;
-    const actionable = hasRunnableContent(content) || Boolean(content.inlineFlagError);
-    const decision = await decideSoloThreadReply({ ...reply, actionable }, botUserId, {
-      record: () => lookupSoloThread(env, channel, threadTs),
-      openSession: async () => {
-        const admission = await resolveThreadSessionAdmission(env, channel, threadTs, traceId, {
-          quiet: true,
-        });
-        return admission.kind === "followUp" ? admission : null;
-      },
-      participation: () => readThreadParticipation(env, channel, threadTs, user, traceId),
-    });
-    if (decision.kind === "block") {
-      await blockSoloThread(env, { channel, threadTs, botUserId }, decision.reason, traceId);
-    }
-    return decision;
-  } catch (error) {
-    log.error("solo_thread.reply_check_failed", {
+  const botUserId = (await getBotIdentity(env, traceId))?.userId;
+  if (!botUserId) return null;
+  const thread = { channel, threadTs, botUserId };
+  const screen = screenSoloReply(await lookupSoloThread(env, channel, threadTs), reply, botUserId);
+  if (screen === "block") await blockSoloThread(env, thread, "other_poster", traceId);
+  if (screen !== "verify") return null;
+
+  const decided = (
+    outcome: "nothing_to_run" | "no_open_session" | "history_incomplete" | "taken"
+  ) =>
+    log.info("solo_thread.reply_decided", {
       trace_id: traceId,
       channel,
       thread_ts: threadTs,
-      error: error instanceof Error ? error : new Error(String(error)),
+      message_ts: reply.ts,
+      outcome,
     });
+  const content = parseMessageEventContent(reply, traceId);
+  if (!hasRunnableContent(content) && !content.inlineFlagError) {
+    decided("nothing_to_run");
     return null;
+  }
+  const admission = await resolveThreadSessionAdmission(env, channel, threadTs, traceId);
+  if (admission.kind !== "followUp") {
+    decided("no_open_session");
+    return null;
+  }
+  switch (await readThreadParticipation(env, channel, threadTs, user, traceId)) {
+    case "shared":
+      await blockSoloThread(env, thread, "other_poster_in_history", traceId);
+      return null;
+    case "unknown":
+      decided("history_incomplete");
+      return null;
+    case "solo":
+      decided("taken");
+      return { admission, content };
   }
 }
 
@@ -823,10 +825,18 @@ export async function handleUntaggedThreadReply(
 ): Promise<boolean> {
   const reply = toSoloThreadReply(event);
   if (!reply) return false;
-  const content = parseMessageEventContent(reply, traceId);
-  const decision = await decideUntaggedThreadReply(reply, content, env, traceId);
-  if (decision?.kind !== "take") return false;
+  const admitted = await admitSoloThreadReply(reply, env, traceId).catch((error: unknown) => {
+    log.error("solo_thread.reply_check_failed", {
+      trace_id: traceId,
+      channel: reply.channel,
+      thread_ts: reply.threadTs,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  });
+  if (!admitted) return false;
 
+  const { admission, content } = admitted;
   if (showsStartingStatusNow(content)) {
     scheduleStartingStatus(scheduleBackground, env, reply.channel, reply.threadTs, traceId);
   }
@@ -835,7 +845,7 @@ export async function handleUntaggedThreadReply(
   );
   await handleIncomingMessage({
     content,
-    admission: decision.session,
+    admission,
     user: reply.user,
     channel: reply.channel,
     ts: reply.ts,

@@ -1,11 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SoloThreadRecord } from "./sessions/solo-thread-store";
-import {
-  decideSoloThreadReply,
-  judgeThreadParticipation,
-  toSoloThreadReply,
-  type ThreadParticipation,
-} from "./solo-threads";
+import { judgeThreadParticipation, screenSoloReply, toSoloThreadReply } from "./solo-threads";
 
 const OWNER = "U123";
 const ROOT_TS = "1.000";
@@ -83,83 +78,24 @@ describe("toSoloThreadReply", () => {
   });
 });
 
-describe("decideSoloThreadReply", () => {
-  function lookups(
-    record: SoloThreadRecord | null,
-    openSession: string | null = "session",
-    participation: ThreadParticipation = "solo"
-  ) {
-    return {
-      record: vi.fn(async () => record),
-      openSession: vi.fn(async () => openSession),
-      participation: vi.fn(async () => participation),
-    };
-  }
-  const reply = { user: OWNER, text: "also this", sentToChannel: false, actionable: true };
-
-  it("takes the owner's reply once the history confirms the thread is solo", async () => {
-    await expect(decideSoloThreadReply(reply, "UBOT", lookups(owned))).resolves.toEqual({
-      kind: "take",
-      session: "session",
-    });
-  });
+describe("screenSoloReply", () => {
+  const reply = { user: OWNER, text: "also this", sentToChannel: false };
 
   it.each([
-    ["an unrecorded thread", null, {}, { kind: "ignore", reason: "not_solo" }],
-    ["a blocked thread", { kind: "blocked" }, {}, { kind: "ignore", reason: "blocked" }],
-    ["another person's reply", owned, { user: "U999" }, { kind: "block", reason: "other_poster" }],
+    ["the owner's reply", owned, {}, "verify"],
+    ["an unrecorded thread", null, {}, "ignore"],
+    ["a blocked thread", { kind: "blocked" }, {}, "ignore"],
+    ["another person's reply", owned, { user: "U999" }, "block"],
     [
       "another person's reply also sent to the channel",
       owned,
       { user: "U999", sentToChannel: true },
-      { kind: "block", reason: "other_poster" },
+      "block",
     ],
-    [
-      "the owner's reply also sent to the channel",
-      owned,
-      { sentToChannel: true },
-      { kind: "ignore", reason: "sent_to_channel" },
-    ],
-    [
-      "the owner's reply with nothing to run",
-      owned,
-      { actionable: false },
-      { kind: "ignore", reason: "nothing_to_run" },
-    ],
-    ["a tagged reply", owned, { text: "<@UBOT> also" }, { kind: "ignore", reason: "mentions_bot" }],
-    [
-      "a reply addressed to a teammate",
-      owned,
-      { text: "<@U555> can you check?" },
-      { kind: "ignore", reason: "addressed_to_teammate" },
-    ],
-  ] as const)(
-    "decides %s before any session or history lookup",
-    async (_label, record, overrides, expected) => {
-      const deps = lookups(record);
-      await expect(
-        decideSoloThreadReply({ ...reply, ...overrides }, "UBOT", deps)
-      ).resolves.toEqual(expected);
-      expect(deps.openSession).not.toHaveBeenCalled();
-      expect(deps.participation).not.toHaveBeenCalled();
-    }
-  );
-
-  it("ignores a reply in a thread with no open session without reading the history", async () => {
-    const deps = lookups(owned, null);
-    await expect(decideSoloThreadReply(reply, "UBOT", deps)).resolves.toEqual({
-      kind: "ignore",
-      reason: "no_open_session",
-    });
-    expect(deps.participation).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["shared", { kind: "block", reason: "other_poster_in_history" }],
-    ["unknown", { kind: "ignore", reason: "history_incomplete" }],
-  ] as const)("does not take a reply when the history is %s", async (participation, expected) => {
-    await expect(
-      decideSoloThreadReply(reply, "UBOT", lookups(owned, "session", participation))
-    ).resolves.toEqual(expected);
+    ["the owner's reply also sent to the channel", owned, { sentToChannel: true }, "ignore"],
+    ["a tagged reply", owned, { text: "<@UBOT> also" }, "ignore"],
+    ["a reply addressed to a teammate", owned, { text: "<@U555> can you check?" }, "ignore"],
+  ] as const)("screens %s as %s", (_label, record, overrides, expected) => {
+    expect(screenSoloReply(record, { ...reply, ...overrides }, "UBOT")).toBe(expected);
   });
 });

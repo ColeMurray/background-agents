@@ -1,4 +1,13 @@
-import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+  beforeEach,
+  afterEach,
+  type Mock,
+  type MockInstance,
+} from "vitest";
 import type { Env } from "./types";
 import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { ControlPlaneFetcher } from "@open-inspect/shared/service-auth";
@@ -4522,6 +4531,7 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
   type SessionResponses = Parameters<typeof makeSessionEnv>[1];
   type KvPut = Mock<(key: string, value: string) => Promise<void>>;
   let current: { env: ReturnType<typeof makeEnv>; slackFetch: ReturnType<typeof mockSlackFetch> };
+  let consoleSpies: Array<MockInstance<typeof console.log>>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -4530,6 +4540,9 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
     clearEnvironmentsLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+    consoleSpies = (["log", "warn", "error"] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => {})
+    );
   });
 
   afterEach(() => {
@@ -4538,8 +4551,22 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
       expectSoloThreadInvariant(env, slackFetch);
     } finally {
       slackFetch.mockRestore();
+      for (const spy of consoleSpies) spy.mockRestore();
     }
   });
+
+  /** The structured log lines the bot wrote, parsed. */
+  function logged(): Array<Record<string, unknown>> {
+    return consoleSpies.flatMap((spy) =>
+      spy.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+    );
+  }
+
+  function soloReplyOutcomes() {
+    return logged()
+      .filter((line) => line.msg === "solo_thread.reply_decided")
+      .map((line) => line.outcome);
+  }
 
   function setup(slackOptions: SlackFetchOptions = {}, responses: SessionResponses = {}) {
     current = { env: makeSessionEnv([], responses), slackFetch: mockSlackFetch([], slackOptions) };
@@ -4940,6 +4967,7 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
       ]);
       expect(startingStatusBodies(slackFetch)).not.toHaveLength(0);
       expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([]);
+      expect(soloReplyOutcomes()).toEqual(["taken"]);
     });
 
     it.each([
@@ -5005,6 +5033,22 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
       expect(automationLookups(env)).toEqual([]);
     });
 
+    it("does not read the files of a reply in a thread that was never armed", async () => {
+      const { env } = setup({ threadMessages: [rootMessage, ownerReply] });
+      await seedThread(env, null);
+      const externalImage = {
+        id: "F1",
+        name: "screenshot.png",
+        mimetype: "image/png",
+        mode: "external",
+        url_private: "https://example.com/screenshot.png",
+      };
+      await send(env, threadReply({ subtype: "file_share", files: [externalImage] }));
+      expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
+      expect(logged().map((line) => line.msg)).not.toContain("slack.attachment.untrusted_url");
+      expect(soloReplyOutcomes()).toEqual([]);
+    });
+
     it("ignores untagged replies in a thread that was never armed", async () => {
       const { env, slackFetch } = setup({ threadMessages: [rootMessage, ownerReply] });
       await seedThread(env, null);
@@ -5048,13 +5092,16 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
       expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual([]);
       expect(await soloRecord(env)).toEqual(OWNED);
       expect(automationLookups(env)).toHaveLength(1);
+      expect(soloReplyOutcomes()).toEqual(["history_incomplete"]);
     });
 
-    it("never starts a session from an untagged reply", async () => {
+    it("never starts a session from an untagged reply, nor reads the thread for one", async () => {
       const { env, slackFetch } = setup({ threadMessages: [rootMessage, ownerReply] });
       const classify = vi.spyOn(RepoClassifier.prototype, "classify");
       await seedThread(env, OWNED, null);
       await send(env, threadReply());
+      expect(threadReads(slackFetch)).toBe(0);
+      expect(soloReplyOutcomes()).toEqual(["no_open_session"]);
       expect(classify).not.toHaveBeenCalled();
       expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
       expect(promptFetchBodies(env.CONTROL_PLANE.fetch)).toEqual([]);
