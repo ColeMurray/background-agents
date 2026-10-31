@@ -195,7 +195,9 @@ runtime the same way Open-Inspect does on every other provider:
    (`/tmp/openinspect-launch`), so the runtime starts neither before the sandbox is known private
    nor before its tunnel file exists. Boat holds a write to a sandbox that is still starting until
    the sandbox is ready, so the tunnel file lands in the workspace, which snapshots keep, while the
-   marker, under `/tmp`, exists only for this machine's launch. A port the create could not route is
+   marker, under `/tmp`, exists only for this machine's launch. The hold lasts at most a minute: a
+   write to a sandbox still starting by then answers `409 sandbox_starting`, and the control plane
+   waits for the sandbox to be ready before writing again. A port the create could not route is
    hosted again with its own call
 3. the launcher links `/workspace` and `/app` into the home directory, waits for the restored
    toolchain, takes a single-instance lock in `/tmp`, and execs the supervisor
@@ -349,6 +351,13 @@ printed.
 
 Boat limits sandbox starts per minute, hour and day, and concurrent sandboxes, per plan. Stopped
 sandboxes do not count as concurrent. Raise the plan or pace session creation.
+
+### Spawns Fail With `did not become ready`
+
+A new sandbox's runtime launches only once Boat reports the sandbox ready. A sandbox still starting
+when the control plane stops waiting is deleted, and the spawn fails as a transient error, which
+does not count toward the spawn circuit breaker. Boat decides how long a start takes, so check
+Boat's status page, then retry the session.
 
 ### A Resumed Session Starts From a Fresh Checkout
 

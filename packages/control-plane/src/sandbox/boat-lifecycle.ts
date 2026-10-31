@@ -87,8 +87,9 @@ export const BOAT_LAUNCH_MARKER_PATH = "/tmp/openinspect-launch";
  * Where the runtime reads its tunnel URLs: `/workspace/.tunnels.env`, through
  * the `/workspace` link the launcher keeps into the home directory. Boat's
  * file API writes under `/home/user` and `/tmp`, and a write to a sandbox that
- * is still starting waits until it is ready, so even a create's write lands on
- * the disk the sandbox keeps.
+ * is still starting lands only once it is ready
+ * ({@link BoatSandboxLifecycle.writeFileWhenReady}), so even a create's write
+ * lands on the disk the sandbox keeps.
  */
 export const BOAT_TUNNEL_ENV_FILE_PATH = "/home/user/workspace/.tunnels.env";
 /**
@@ -128,8 +129,8 @@ const BOAT_DASHBOARD_URL = "https://boat.dev/dashboard";
 
 /** Idempotent create attempts after a lost response. */
 const CREATE_ATTEMPTS = 3;
-/** Tries for the launch-marker write before a create gives up. */
-const LAUNCH_RELEASE_ATTEMPTS = 3;
+/** Tries for a file the runtime needs before it starts, before a create gives up. */
+const LAUNCH_FILE_WRITE_ATTEMPTS = 3;
 
 /** How long a flow waits, and how often it looks, at each step of a sandbox's life. */
 export interface BoatLifecycleTimings {
@@ -531,31 +532,54 @@ export class BoatSandboxLifecycle {
   }
 
   /**
-   * Let a create-time launch proceed: write the marker the setup script waits
-   * for. Called once the sandbox is known private and its tunnel env file is
-   * in the workspace. Boat holds a write to a sandbox that is still starting
-   * until it is ready, so the marker lands about when the machine comes up. A
-   * write that fails after a few tries fails the create, so the runtime never
-   * starts without it.
+   * Write a file the runtime reads when it starts, into a sandbox that may
+   * still be starting. Boat holds such a write until the sandbox is ready, for
+   * at most BOAT_START_WAIT_MS (boat-rest-client.ts), and answers 409
+   * `sandbox_starting` when the sandbox is still starting by then; the next try
+   * then follows a wait for readiness ({@link waitForReady}, on its budget)
+   * rather than a pause, so a slow start fails only where waitForReady would
+   * fail it. A write that still fails after a few tries is thrown before any
+   * launch, so the runtime never starts without the file.
    */
-  async releaseLaunch(boatSandboxId: string): Promise<void> {
+  async writeFileWhenReady(
+    boatSandboxId: string,
+    file: { path: string; content: string }
+  ): Promise<void> {
     for (let attempt = 1; ; attempt++) {
       try {
-        await this.client.writeFile(boatSandboxId, {
-          path: BOAT_LAUNCH_MARKER_PATH,
-          content: "released\n",
-        });
+        await this.client.writeFile(boatSandboxId, file);
         return;
       } catch (error) {
-        if (attempt >= LAUNCH_RELEASE_ATTEMPTS) throw error;
-        log.warn("boat.launch_release_retry", {
+        if (attempt >= LAUNCH_FILE_WRITE_ATTEMPTS) throw error;
+        const stillStarting =
+          error instanceof BoatConflictError && error.code === "sandbox_starting";
+        log.warn("boat.file_write_retry", {
           sandbox_id: boatSandboxId,
+          path: file.path,
           attempt,
+          still_starting: stillStarting,
           error: error instanceof Error ? error.message : String(error),
         });
-        await delayUnlessCancelled(this.timings.createRetryDelayMs);
+        // A failed wait is not retried: it throws from this catch block, which
+        // the try above does not cover.
+        if (stillStarting) await this.waitForReady(boatSandboxId);
+        else await delayUnlessCancelled(this.timings.createRetryDelayMs);
       }
     }
+  }
+
+  /**
+   * Let a create-time launch proceed: write the marker the setup script waits
+   * for. Called once the sandbox is known private and its tunnel env file is
+   * in the workspace. The marker lands about when the machine comes up
+   * ({@link writeFileWhenReady}), and a create that cannot write it fails, so
+   * the runtime never starts without it.
+   */
+  async releaseLaunch(boatSandboxId: string): Promise<void> {
+    await this.writeFileWhenReady(boatSandboxId, {
+      path: BOAT_LAUNCH_MARKER_PATH,
+      content: "released\n",
+    });
   }
 
   /**

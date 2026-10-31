@@ -51,7 +51,8 @@ export type BoatSandboxState = (typeof BOAT_SANDBOX_STATES)[number];
 /**
  * The longest Boat holds a request for a sandbox that is still starting: a
  * create that hosts ports waits this long for the sandbox's machine, and a
- * file write this long for the sandbox to be ready.
+ * file write this long for the sandbox to be ready, answering 409
+ * `sandbox_starting` if it is still starting then.
  */
 const BOAT_START_WAIT_MS = 60_000;
 // A create that hosts ports answers only once the sandbox's machine is there.

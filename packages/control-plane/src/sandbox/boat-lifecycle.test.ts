@@ -10,7 +10,7 @@ import {
   resolveBoatMachineType,
   resolveBoatTtlSeconds,
 } from "./boat-lifecycle";
-import { BoatApiError, BoatNotFoundError } from "./boat-rest-client";
+import { BoatApiError, BoatConflictError, BoatNotFoundError } from "./boat-rest-client";
 import { SandboxProviderError } from "./provider";
 import { boatSandbox, fastTimings, mockClient } from "./providers/boat-provider.test-helpers";
 
@@ -80,6 +80,43 @@ describe("BoatSandboxLifecycle archive", () => {
     await expect(
       new BoatSandboxLifecycle(refused, fastTimings).archive("bx_abcdefgh")
     ).rejects.toBeInstanceOf(BoatApiError);
+  });
+});
+
+describe("BoatSandboxLifecycle writeFileWhenReady", () => {
+  const marker = { path: BOAT_LAUNCH_MARKER_PATH, content: "released\n" };
+  const stillStarting = () =>
+    new BoatConflictError("Sandbox is still starting", "sandbox_starting");
+
+  it("follows a write that outlasted Boat's hold with a wait for readiness, not a pause", async () => {
+    let writes = 0;
+    let reads = 0;
+    const client = mockClient({
+      writeFile: vi.fn(async () => {
+        if (++writes === 1) throw stillStarting();
+      }),
+      getSandbox: vi.fn(async () => boatSandbox({ state: ++reads < 3 ? "provisioned" : "ready" })),
+    });
+    await new BoatSandboxLifecycle(client, fastTimings).releaseLaunch("bx_abcdefgh");
+    expect(client.writeFile).toHaveBeenCalledTimes(2);
+    expect(client.writeFile).toHaveBeenLastCalledWith("bx_abcdefgh", marker);
+    expect(client.getSandbox).toHaveBeenCalledTimes(3);
+  });
+
+  it("ends the write with the wait's verdict on a sandbox that failed to start", async () => {
+    const client = mockClient({
+      writeFile: vi.fn(async () => {
+        throw stillStarting();
+      }),
+      getSandbox: vi.fn(async () => boatSandbox({ state: "error", error: "no capacity" })),
+    });
+    const error = await new BoatSandboxLifecycle(client, fastTimings)
+      .writeFileWhenReady("bx_abcdefgh", marker)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SandboxProviderError);
+    expect((error as SandboxProviderError).errorType).toBe("permanent");
+    expect((error as SandboxProviderError).message).toContain("no capacity");
+    expect(client.writeFile).toHaveBeenCalledOnce();
   });
 });
 

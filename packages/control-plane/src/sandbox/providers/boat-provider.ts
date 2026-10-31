@@ -246,9 +246,8 @@ export class BoatSandboxProvider implements SandboxProvider {
       await this.lifecycle.ensurePrivate(created.sandbox);
 
       // A port the create could not host is hosted on its own, and the tunnel
-      // env file goes straight into the workspace: Boat holds a write to a
-      // starting sandbox until it is ready, so it lands on the disk the
-      // sandbox keeps.
+      // env file goes straight into the workspace: a write to a starting
+      // sandbox lands once it is ready, on the disk the sandbox keeps.
       const access = await this.exposeAccess(
         boatSandboxId,
         config.sandboxId,
@@ -630,7 +629,7 @@ export class BoatSandboxProvider implements SandboxProvider {
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([port, url]) => `TUNNEL_${port}=${url}`),
     ];
-    await this.client.writeFile(boatSandboxId, {
+    await this.lifecycle.writeFileWhenReady(boatSandboxId, {
       path: BOAT_TUNNEL_ENV_FILE_PATH,
       content: lines.join("\n") + "\n",
     });

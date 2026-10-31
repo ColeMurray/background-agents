@@ -213,6 +213,59 @@ describe("BoatSandboxProvider", () => {
       });
     });
 
+    it("waits for a sandbox still starting when Boat's write hold runs out, then writes again", async () => {
+      let tunnelWrites = 0;
+      let reads = 0;
+      const client = mockClient({
+        writeFile: vi.fn(async (_id: string, file: { path: string }) => {
+          if (file.path === BOAT_TUNNEL_ENV_FILE_PATH && ++tunnelWrites === 1) {
+            throw new BoatConflictError("Sandbox is still starting", "sandbox_starting");
+          }
+        }),
+        getSandbox: vi.fn(async () =>
+          boatSandbox({ state: ++reads < 3 ? "provisioned" : "ready" })
+        ),
+      });
+      const result = await createProvider(client, providerConfig).createSandbox({
+        ...baseCreateConfig,
+        sandboxSettings: { tunnelPorts: [3000] },
+      });
+      expect(result.tunnelUrls).toEqual({
+        "3000": "https://sub-3000.on.boat.dev?_token=tok3000",
+      });
+      const writes = vi.mocked(client.writeFile).mock;
+      expect(writes.calls.map(([, file]) => file.path)).toEqual([
+        BOAT_TUNNEL_ENV_FILE_PATH,
+        BOAT_TUNNEL_ENV_FILE_PATH,
+        BOAT_LAUNCH_MARKER_PATH,
+      ]);
+      // The write is made again only once a read finds the sandbox ready, and
+      // the launch is released after it.
+      const readyRead = vi.mocked(client.getSandbox).mock.invocationCallOrder[2];
+      expect(readyRead).toBeLessThan(writes.invocationCallOrder[1]);
+      expect(client.deleteSandbox).not.toHaveBeenCalled();
+    });
+
+    it("fails a create transiently when the sandbox is still starting at the end of the readiness budget", async () => {
+      const client = mockClient({
+        writeFile: vi.fn(async () => {
+          throw new BoatConflictError("Sandbox is still starting", "sandbox_starting");
+        }),
+        getSandbox: vi.fn(async () => boatSandbox({ state: "provisioned" })),
+      });
+      const error = await createProvider(client, providerConfig)
+        .createSandbox({ ...baseCreateConfig, sandboxSettings: { tunnelPorts: [3000] } })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      // A slow start is Boat's moment, not a broken deployment, so it stays
+      // off the circuit breaker.
+      expect((error as SandboxProviderError).errorType).toBe("transient");
+      expect((error as SandboxProviderError).message).toContain("did not become ready");
+      // One hold and one wait: a wait that gave up is not tried again.
+      expect(client.writeFile).toHaveBeenCalledOnce();
+      expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+    });
+
     it("asks for a private sandbox and makes one the create answered as shared private before use", async () => {
       const personal = mockClient();
       await createProvider(personal).createSandbox(baseCreateConfig);
@@ -266,7 +319,9 @@ describe("BoatSandboxProvider", () => {
         .createSandbox({ ...baseCreateConfig, sandboxSettings: { tunnelPorts: [3000] } })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(SandboxProviderError);
-      // The launch is never released, so no runtime starts without its URLs.
+      // A few tries, as for the launch marker, and then the launch is never
+      // released, so no runtime starts without its URLs.
+      expect(client.writeFile).toHaveBeenCalledTimes(3);
       expect(client.writeFile).not.toHaveBeenCalledWith(
         "bx_abcdefgh",
         expect.objectContaining({ path: BOAT_LAUNCH_MARKER_PATH })
