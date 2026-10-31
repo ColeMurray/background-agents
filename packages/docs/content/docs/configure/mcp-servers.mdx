@@ -120,7 +120,7 @@ In a session, the server acts as the person whose prompt is running. Only prompt
 
 Personal servers work only in OpenCode and Claude Agent sessions whose sandbox image is at runtime generation 80 or later. In a Codex session, or on an older image or snapshot, they are left out of the agent's configuration, and each prompt records an `mcp` warning naming them, shown in the session and in Slack completions. Other MCP servers remain available.
 
-Changing a server's URL, authentication, OAuth issuer or resource, routing, headers, or repository scope marks existing connections **Reconnect required**, and routed calls from sessions that are already running stop working. Renaming a server does not.
+Changing a server's URL, authentication, OAuth issuer or resource, routing, headers, or repository scope marks existing connections **Reconnect required**, and routed calls from sessions that are already running stop working. Renaming a server does not. To use the server again, reconnect, then start a new session.
 
 While a person has a live connection, their account cannot be merged into another or deleted; see [Merging duplicate accounts](/administration/workspace-access#merging-duplicate-accounts).
 
@@ -166,10 +166,13 @@ See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/con
 </Accordion>
   <Accordion title="A personal server is missing, or the session shows an MCP warning">
     Cause: the session runs on Codex, or on a sandbox image or snapshot older than runtime
-    generation 80; you have not connected your account, or the connection needs reconnecting after
-    the server changed; or the turn was started by an automation, GitHub, or Linear rather than by
-    a person on the web or in Slack. Fix: read the warning, connect or reconnect under Settings ›
-    Connections, and prompt from an OpenCode or Claude Agent session on a current image.
+    generation 80; you have not connected your account, or your connection needs reconnecting; the
+    server's settings changed after the session's sandbox started; or the turn was started by an
+    automation, GitHub, or Linear rather than by a person on the web or in Slack. Fix: read the
+    warning, connect or reconnect under Settings › Connections, and prompt from an OpenCode or
+    Claude Agent session on a current image. If the server's settings changed, reconnecting is not
+    enough on its own: a running session keeps the server definition it started with, so reconnect
+    and then start a new session.
 
 </Accordion>
   <Accordion title="Deleting a server fails because users are still connected">
