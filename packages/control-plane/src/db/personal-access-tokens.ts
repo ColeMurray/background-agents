@@ -309,8 +309,9 @@ export class PersonalAccessTokenStore {
   /**
    * Revokes every token `userId` holds, recording each revocation and who made it. Each pass
    * audits and deletes the tokens it listed in one transaction, and passes repeat until one finds
-   * none, so a token issued while this runs is revoked too. `complete` is false only when the
-   * member kept issuing tokens through every pass; suspending the member stops that.
+   * none, so a token issued before that last pass is revoked too; one issued after it is not.
+   * `complete` is false only when the member kept issuing tokens through every pass; suspending the
+   * member stops that.
    */
   async revokeAll(
     input: Omit<RevokePersonalAccessTokenInput, "tokenId">

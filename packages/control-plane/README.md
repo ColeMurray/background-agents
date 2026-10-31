@@ -363,9 +363,10 @@ default, delegable to custom roles) and a human browser session:
 | `/settings/personal-access-tokens/:id`   | DELETE | Revoke any member's token                                       |
 | `/members/:id/personal-access-tokens`    | DELETE | Revoke every token one member holds → `{ revoked }`             |
 
-Revoke-all repeats until a pass finds no token, so a token the member issues while it runs is
-revoked too. If the member keeps issuing through every pass, it answers `409 revoke_all_incomplete`
-with the count revoked; suspend the member and revoke again.
+Revoke-all repeats until a pass finds no token, so a token the member issues before that last pass
+is revoked too. One issued after it is not: only suspension stops a member issuing. If the member
+keeps issuing through every pass, it answers `409 revoke_all_incomplete` with the count revoked;
+suspend the member and revoke again.
 
 The policy (`enabled`, `maxLifetimeDays`, `allowedPermissions`) is checked at authentication, so it
 applies to existing tokens at once: disabled refuses every token with `401`, a lower lifetime cap

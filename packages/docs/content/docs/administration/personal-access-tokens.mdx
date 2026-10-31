@@ -35,6 +35,6 @@ Turning tokens off is the fastest response to a suspected leak when you do not k
 The same page lists every member's tokens, newest first, with each token's owner, permissions, last use, and expiry. It never shows a token's value; OpenInspect stores only a hash.
 
 - **Revoke** stops one token immediately.
-- **Revoke all of a member's tokens** stops every token that member holds, for example when a laptop is lost. A token the member creates while this runs is revoked too. If someone is still creating tokens as the member, suspend the member first.
+- **Revoke all of a member's tokens** stops every token that member holds, for example when a laptop is lost. It checks again until no token is left, so tokens created while it runs are revoked too, but one created after its last check is not. If someone may still be creating tokens as the member, suspend the member first.
 
 Revocations are recorded in the audit log with you as the actor and the member as the target. A member's tokens are also refused while the member is suspended, and deleted with the member's account.
