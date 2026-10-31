@@ -441,7 +441,7 @@ enable_service_bindings = false
 # membership). Set at least one unless you intentionally opt into open access
 # with unsafe_allow_all_users = true.
 # These are deployment baseline rules, additive with SQL-managed rules in
-# Settings > Workspace access > Sign-in allowlist. The UI cannot narrow this
+# Settings > Workspace access > Who can sign in. The UI cannot narrow this
 # baseline, and Terraform changes do not remove managed grants. Keep a compatible
 # deployment baseline for every enabled provider; managed rules do not satisfy
 # Terraform safety checks. Prefer a known valid recovery admin email below.

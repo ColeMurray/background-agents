@@ -4,7 +4,7 @@ description: The vocabulary the rest of the documentation uses, one short sectio
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/types/session-access.ts
   - packages/control-plane/src/session/session-target-secrets.ts
@@ -82,7 +82,7 @@ Learn more: [Automations](/automations).
 
 ## Integration
 
-Integrations connect OpenInspect to the tools where work already happens. Slack starts sessions from mentions and messages and posts results back. GitHub reviews pull requests, answers @mentions, and can feed pull request feedback back into the session that opened it. Linear starts sessions from issue activity. Sessions created this way are the same sessions you see on the web.
+Integrations connect OpenInspect to the tools where work already happens. Slack starts sessions from mentions and messages and posts results back. GitHub reviews pull requests, answers @mentions, and can feed pull request feedback back into the session that opened it. Linear starts sessions from issue activity. Sessions created this way are the same sessions you see on the web. The [MCP server](/integrations/mcp-server) works the other way: it lets your own MCP client read sessions and automation runs through a [personal access token](/integrations/personal-access-tokens).
 
 Learn more: [Integrations](/integrations).
 
@@ -94,7 +94,7 @@ Learn more: [Reviewing changes](/sessions/reviewing-changes).
 
 ## Participant and attribution
 
-A participant is anyone who has joined a session. Every prompt is tagged with its author. Commits use that person's source-control identity when available; otherwise they use the configured git user, or the signing account if commit signing is enabled. With signing enabled, the signing account is the committer. A GitHub pull request is created as the prompting user when their OAuth token is resolved, or as the App when no token is returned. Participation records who contributed; it does not grant or remove access.
+A participant is anyone who has joined a session. Every prompt is tagged with its author. Commits use that person's source-control identity when available; otherwise they use the configured git user, or the signing account if commit signing is enabled. With signing enabled, the signing account is the committer. A GitHub pull request is created as the prompting user when their OAuth token is resolved, or as the App when no token is returned. A pull request opened by an automation run's own prompt is always created as the App. Participation records who contributed; it does not grant or remove access.
 
 Learn more: [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
 

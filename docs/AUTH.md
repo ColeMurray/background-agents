@@ -180,6 +180,7 @@ Open-Inspect includes four built-in roles.
 | View workspace members                            |  Yes  |      Yes      |   No   |   No   |
 | Manage workspace members                          |  Yes  |      Yes      |   No   |   No   |
 | Merge duplicate member accounts                   |  Yes  |      Yes      |   No   |   No   |
+| Govern personal access tokens                     |  Yes  |      Yes      |   No   |   No   |
 | Transfer workspace ownership                      |  Yes  |      No       |   No   |   No   |
 | View analytics                                    |  Yes  |      Yes      |  Yes   |  Yes   |
 | View provider accounts                            |  Yes  |      Yes      |  Yes   |   No   |
@@ -199,9 +200,10 @@ cannot accidentally lose all ownership.
 ### Administrator
 
 Administrators can operate the workspace day to day. They can manage members, permitted sessions,
-automations, repositories, environments, provider accounts, integrations, and secrets. They cannot
-access another person's private session unless added as a collaborator. They cannot transfer
-ownership, change who holds the Owner role, or suspend and restore an Owner.
+automations, repositories, environments, provider accounts, integrations, secrets, and the
+[personal access token](#personal-access-tokens) policy. They cannot access another person's private
+session unless added as a collaborator. They cannot transfer ownership, change who holds the Owner
+role, or suspend and restore an Owner.
 
 ### Member
 
@@ -466,10 +468,13 @@ fails, the run does not start.
 
 ### Manual Runs
 
-A manual run executes under the authority of the person who clicked **Run**, even when an
+A manual run executes under the authority of the person who clicked **Trigger Now**, even when an
 Administrator or Owner triggers someone else's automation. The requester must be allowed both to
 trigger that automation and to create the resulting session with its selected resources. Their
-identity and linked source-control credentials are used for that run.
+identity is used for that run, including commit attribution. A pull request the run's own prompt
+opens is created by the GitHub App, not with the requester's OAuth token. When the trigger comes
+through a [personal access token](#personal-access-tokens), the run also needs `sessions.create` and
+the targets' use permissions within the token's grant.
 
 See [Automations](AUTOMATIONS.md) for trigger setup and run behavior.
 
@@ -518,6 +523,34 @@ workspace-owned; use a team-owned GitHub Event automation instead. See
 [GitHub](integrations/GITHUB.md), including
 [upgrade steps](integrations/GITHUB.md#upgrading-to-repository-id-routing) for existing deployments.
 
+## Personal Access Tokens
+
+A member can issue personal access tokens under **Settings > Access tokens** so a local tool, such
+as the [MCP server](../packages/mcp-server/README.md), can call the control plane as them. A token
+(`oi_pat_…`, sent as `Authorization: Bearer`) acts as its owner within the RBAC permissions granted
+when it was issued. On every request its permissions are the overlap of the owner's current
+permissions, the token's grant, and the workspace policy, so a token loses a permission as soon as
+its owner does, and a suspended owner's tokens are refused.
+
+- Only routes that explicitly accept tokens admit one; other user routes answer
+  `403 personal_access_token_not_accepted`. Today they cover what the MCP server's tools need:
+  listing sessions and reading their events, messages, and diffs; reading automations and skills;
+  creating and triggering automations; and importing skills.
+- Workspace management permissions (members, roles, secrets, integrations, and settings) are
+  withheld from tokens, and the token routes accept only a browser session, so a token can never
+  issue or revoke tokens. A token's `skills.manage` also needs `skills.read`.
+- Holders of `workspace.personal_access_tokens.manage` (Owners and Administrators by default; it can
+  be added to a custom role) set the workspace token policy under **Settings > Access token
+  policy**: turn tokens off, cap their lifetime, or limit the permissions they may hold. The policy
+  applies to existing tokens at once. They can also list and revoke any member's tokens.
+- Issuing and revoking write `personal_access_token.created` and `personal_access_token.revoked`
+  audit events, and a policy change writes `workspace.personal_access_token_policy_updated`. Audited
+  requests made with a token are recorded with principal kind `personal-access-token` and the owner
+  as the actor.
+
+See [Personal Access Tokens](../packages/control-plane/README.md#personal-access-tokens) for the
+API.
+
 ## Suspension
 
 Suspending a member disables their workspace access without deleting their account or historical
@@ -525,7 +558,7 @@ attribution.
 
 After suspension:
 
-- New browser and bot operations are denied.
+- New browser, bot, and personal access token requests are denied.
 - Existing browser sign-in sessions are invalidated.
 - Live browser session connections close within five minutes.
 - Scheduled and event-driven automations using the member as executor no longer pass run
@@ -571,11 +604,30 @@ deployment PAT. Files written during a build can persist in prebuilt images; see
 A user's role determines whether they may read or use workspace repositories, but Open-Inspect does
 not compare that role with the user's personal GitHub access for each repository. Linked GitHub
 credentials can be used for actions such as attributed pull-request creation; when no suitable user
-credential is available, supported operations may use the shared App identity.
+credential is available, supported operations may use the shared App identity. A pull request opened
+by an automation run's own prompt always uses the App identity.
 
 Secrets and provider credentials are not made visible through role-based read access. Administrative
 permissions control who can configure them, and saved secret values are not returned to the browser.
 See [Secrets Management](SECRETS.md) for details.
+
+### Personal MCP Connections
+
+A remote MCP server set to use each user's OAuth connection acts as the person whose prompt is being
+processed. Only prompts a person sends from the web or Slack, and child sessions their turns spawn,
+can use personal connections; automation, GitHub, and Linear turns cannot. Users connect their
+accounts under **Settings > Connections**. Their OAuth tokens are encrypted in the control plane and
+never reach the sandbox: the sandbox calls the server through the control-plane proxy with its own
+session token. Before forwarding a call, the control plane rechecks that the turn's author is not
+suspended and can still read and collaborate in the session. In a session where several people
+prompt, each turn delegates as its own author, and a child session inherits delegation only when the
+parent's own sandbox spawns it. The proxy authenticates the sandbox, not the process inside it, so a
+process left running from an earlier turn can make personal MCP calls during the active author's
+turn.
+
+While a user has a live personal connection, deleting or merging that user is refused; the user
+disconnects first, or an MCP server manager disables the server and revokes its connections. See
+[Personal MCP Connections](../packages/control-plane/README.md#personal-mcp-connections).
 
 ## Workspace Administration
 

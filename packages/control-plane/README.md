@@ -65,13 +65,14 @@ not pass through Hono.
 
 ### Personal MCP Connections
 
-| Endpoint                              | Method | Description                                           |
-| ------------------------------------- | ------ | ----------------------------------------------------- |
-| `/mcp-connections`                    | GET    | List the authenticated user's connection status       |
-| `/mcp-connections/:serverId/connect`  | POST   | Begin personal OAuth consent                          |
-| `/mcp-connections/oauth/callback`     | POST   | Redeem consent bound to the same browser session      |
-| `/mcp-connections/:serverId`          | DELETE | Disconnect the authenticated user's grant             |
-| `/mcp-servers/:id/revoke-connections` | POST   | Revoke every personal grant for a disabled definition |
+| Endpoint                              | Method            | Description                                                    |
+| ------------------------------------- | ----------------- | -------------------------------------------------------------- |
+| `/mcp-connections`                    | GET               | List the authenticated user's connection status                |
+| `/mcp-connections/:serverId/connect`  | POST              | Begin personal OAuth consent                                   |
+| `/mcp-connections/oauth/callback`     | POST              | Redeem consent bound to the same browser session               |
+| `/mcp-connections/:serverId`          | DELETE            | Disconnect the authenticated user's grant                      |
+| `/mcp-servers/:id/revoke-connections` | POST              | Revoke every personal grant for a disabled definition          |
+| `/sessions/:id/mcp/:serverId`         | GET, POST, DELETE | Sandbox-authenticated Streamable HTTP proxy to a routed server |
 
 For offboarding or definition deletion, a human with `mcp_servers.manage` first disables the
 definition, then calls `POST /mcp-servers/:id/revoke-connections`, then deletes the definition.
@@ -80,9 +81,10 @@ removes consent attempts, increments grant revisions, clears credentials and ref
 fences callbacks/refreshes already in flight. It works for suspended owners without reactivating
 them. It does not revoke tokens at the external OAuth provider. The ordinary authorization audit
 records the acting user, route, request ID, and HTTP outcome; the correlated
-`mcp_server.connections_revoked` log records completion. Ownership/deletion safety triggers remain
-in force. The endpoint uses the same signed web-service plus browser-session authentication as other
-human settings operations; a bare service credential cannot invoke it.
+`mcp_server.connections_revoked` log records completion. The ownership and deletion safety triggers
+(see [D1 Schema](#d1-schema-sessions-environments-automations)) remain in force. The endpoint uses
+the same signed web-service plus browser-session authentication as other human settings operations;
+a bare service credential cannot invoke it.
 
 Consent is ephemeral: each connection retains at most its current pending/claimed attempt after
 publication. Settlement, failure, supersession, and disconnect delete verifier material.
@@ -137,14 +139,16 @@ Linear's catalog reads are actorless and session creation carries its actor's em
 authors try enrollment without profile claims first; only `actor_email_required` triggers a profile
 lookup and retry. Stops go directly to the control plane and use the same fallback when needed.
 
-Before creating a new canonical user, bot enrollment applies the same deployment admission policy as
-web sign-in. An attested Slack or Linear email must match `ALLOWED_EMAILS` or
-`ALLOWED_EMAIL_DOMAINS`; otherwise the response is 403 `actor_admission_denied`, with no user,
-identity, or default role written. `UNSAFE_ALLOW_ALL_USERS` permits new users only when all
-allowlists are empty, as on the web. GitHub bot profile emails are not attested and cannot admit a
-new user. Bots cannot prove GitHub username or organization admission: on deployments using only
-`ALLOWED_USERS` or `ALLOWED_GITHUB_ORGS`, people must sign in on the web first, then use the bot
-with that account's email (or its GitHub identity).
+Before creating a new canonical user, bot enrollment applies the same effective admission policy as
+web sign-in: the deployment's `ALLOWED_*` lists plus the rules managed through
+[`/settings/admission-policy`](#sign-in-rules). An attested Slack or Linear email must match an
+exact-email or email-domain rule from either source; otherwise the response is 403
+`actor_admission_denied`, with no user, identity, or default role written. `UNSAFE_ALLOW_ALL_USERS`
+permits new users only when every deployment and managed list is empty, as on the web. If the
+managed policy cannot be read, enrollment fails closed. GitHub bot profile emails are not attested
+and cannot admit a new user. Bots cannot prove GitHub username or organization admission: when the
+only rules are GitHub usernames or organizations, people must sign in on the web first, then use the
+bot with that account's email (or its GitHub identity).
 
 Existing actors and new actors linking by attested email to an existing account do not repeat
 admission. Their existing role and suspension still apply. Newly admitted users retain the Member
@@ -173,6 +177,15 @@ separate accounts remain possible and require an administrator to merge them.
 | `/sessions/:id/archive`         | POST      | Archive session                      |
 | `/sessions/:id/unarchive`       | POST      | Unarchive session                    |
 | `/sessions/batch-archive`       | POST      | Archive explicitly selected sessions |
+
+### Prompt Payload
+
+`POST /sessions/:id/prompt` takes `content` (which may be blank only when `attachments` are sent)
+and optional `source`, `model`, `reasoningEffort`, and `attachments`. `source` defaults to `web`;
+callers may send `web`, `slack`, `linear`, `extension`, or `github`. `automation` and `agent` are
+minted only on internal paths and are rejected with 400, because a prompt's source decides who opens
+its pull request: the GitHub App for an `automation` prompt, otherwise the prompting user's OAuth
+identity when available, falling back to the App.
 
 ### Create PR Payload
 
@@ -327,6 +340,23 @@ session:
 paused, or execution was denied before admission). A retry with the same `idempotencyKey` returns
 the original firing's ID, even while it is still running. The status endpoint serves only
 invocations this webhook caused, and never exposes session content.
+
+### Sign-in Rules
+
+| Endpoint                     | Method | Description                                                                      |
+| ---------------------------- | ------ | -------------------------------------------------------------------------------- |
+| `/settings/admission-policy` | GET    | Deployment, managed, and effective rules (`ETag: "admission-<revision>-<hash>"`) |
+| `/settings/admission-policy` | PUT    | Replace the managed rules; requires `If-Match` with the ETag (`428` without it)  |
+
+These routes need a human browser session and an active built-in Owner or Administrator (custom
+roles are refused even with `workspace.members.manage`). Managed rules add to the deployment's
+`ALLOWED_*` lists and cannot narrow them. A PUT is refused with `412 admission_policy_conflict` when
+the revision or the deployment's configuration changed since the read, and with
+`409 admission_policy_unsafe_allow_all` while `UNSAFE_ALLOW_ALL_USERS` is set. Managed rules are
+limited to 50, and a save that adds GitHub organizations is refused with
+`409 admission_policy_organization_limit` once deployment and managed organizations together exceed
+10 (or the deployment's own count, if higher). A save writes `workspace.admission_policy_updated` in
+the same transaction. See [Sign-In Allowlist](../../docs/AUTH.md#sign-in-allowlist).
 
 ### Personal Access Tokens
 
@@ -532,6 +562,23 @@ Automations:
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
 
+Sign-in rules:
+
+- `workspace_admission_policy`: the single row of managed sign-in rules (`rules_json`, `revision`,
+  `updated_at`, `updated_by_user_id_snapshot`), added in migration 0093. Migration 0094 dropped its
+  `writes_frozen` column.
+
+Managed MCP (migration 0095):
+
+- `mcp_servers` gains `auth_mode` (`none`, `service_credentials`, or `user_oauth`; existing rows
+  default to `service_credentials`), `managed_routing`, `oauth_profile`, and `auth_revision`.
+- `mcp_oauth_clients`: the public OAuth client registered for a `user_oauth` server.
+- `mcp_connections`: one personal connection per user and server, with its encrypted grant and
+  status (`connected`, `disconnected`, `reconnect_required`).
+- `mcp_oauth_transactions`: in-flight consent attempts and their encrypted PKCE verifiers.
+- Triggers refuse deleting a server, deleting or merging a user, or moving an identity between users
+  while a live personal connection or consent is involved, and a connection can never change owner.
+
 Personal access tokens:
 
 - `personal_access_tokens`: one row per unrevoked token: owner, name, SHA-256 `token_hash` (unique),
@@ -613,7 +660,10 @@ them as interchangeable during an incident:
   ```
 
   Rotating it invalidates SCM credentials already copied into sessions. New sessions resolve current
-  GitHub credentials through Better Auth.
+  GitHub credentials through Better Auth. The same secret also protects personal MCP connection
+  credentials and consent verifiers, through a key derived for that purpose; after rotating it,
+  existing personal MCP connections fail until each owner clicks **Reconnect**, although Settings ›
+  Connections still shows them as connected.
 
 - **`BROWSER_AUTH_SECRET`** — Better Auth's secret. It signs browser session cookies **and**
   encrypts the sign-in OAuth credential columns on `user_identities` (`access_token`,

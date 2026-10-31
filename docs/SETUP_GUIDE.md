@@ -236,7 +236,8 @@ Your GitHub callback URL does not exactly match the running app URL.
 Check `allowed_users`, `allowed_email_domains`, `allowed_emails`, and `allowed_github_orgs` in the
 control plane's Terraform configuration. If `allowed_github_orgs` is set, make sure your GitHub App
 has Organization permissions: Members read-only and that the updated permission was republished and
-approved for the installation.
+approved for the installation. Owners and Administrators can also add the person under **Settings >
+Workspace access > Who can sign in**; those rules add to the Terraform lists.
 
 ### Web can load, but session APIs return 401
 

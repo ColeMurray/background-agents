@@ -4,7 +4,7 @@ description: How Slack, GitHub, Linear, and inbound automations start and contin
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-08"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/CLAUDE_AGENT.md
   - docs/integrations/SLACK.md
@@ -12,6 +12,8 @@ relatedCode:
   - docs/integrations/LINEAR.md
   - docs/HOW_IT_WORKS.md
   - docs/AUTH.md
+  - packages/control-plane/src/routing/service-actor-finalization.ts
+  - packages/mcp-server/README.md
   - packages/control-plane/src/routes/channel-bindings.ts
   - packages/control-plane/src/routes/github-route.ts
   - packages/control-plane/src/routes/team-ownership.ts
@@ -19,6 +21,8 @@ relatedCode:
 ---
 
 OpenInspect sessions can be started from Slack, from a GitHub pull request, from a Linear issue, or by an automation, and every one of them is the same kind of session you would start from the web app.
+
+You can also work with OpenInspect from your own tools. The [MCP server](/integrations/mcp-server) lets an MCP client such as Claude Code read your sessions and automation runs, and optionally create and run automations, with a [personal access token](/integrations/personal-access-tokens).
 
 ![Settings, Integrations: GitHub Bot, Linear Agent, Code Server, VNC Desktop, and Slack entries](/images/integrations/integrations-list.webp "Settings › Integrations. Open an entry to configure its connection and behavior.")
 
@@ -43,6 +47,7 @@ Slack channels and Linear teams can be bound to an OpenInspect team; GitHub ment
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Installation scope is the outer boundary   | The source-control installation limits available repositories. Team repository grants and scoped catalogs further constrain team-owned work; these are not per-user GitHub repository lists.                                                                                                                                                                                                         | Install the App only on intended repositories and configure team grants. GitHub and Linear **Repository Scope** settings add integration-level filters. |
 | Trigger gates do not grant team membership | GitHub checks repository permission or an explicit user list. Slack channel membership and Linear workspace access alone do not grant OpenInspect team membership. Team-owned session creation checks the acting identity and target grants as well as workspace permissions.                                                                                                                        | Manage trigger settings, team membership, grants, and [workspace access](/administration/workspace-access) separately.                                  |
+| Bots act only for admitted people          | Slack and Linear link a new person to an account by their profile email and create one only if that email passes the workspace's sign-in rules; without a readable email they cannot use the bot. The GitHub bot acts only for people the workspace already knows, typically from a web sign-in with GitHub.                                                                                         | Sign in on the web with your bot profile's email, or ask an administrator; see [Workspace access](/administration/workspace-access).                    |
 | External text is marked untrusted          | The text that invokes the bot is the request and the agent acts on it: the Slack message or forwarded message, the GitHub comment that mentions the bot, or the Linear issue. Surrounding context, such as earlier thread messages and PR titles and descriptions, is passed as background and wrapped as untrusted input. See [Security](/administration/security#untrusted-input-in-integrations). | Do not put secrets in issues, comments, or Slack messages: their text reaches the agent.                                                                |
 | The web session is the source of truth     | Slack, GitHub, and Linear show acknowledgements, short completion summaries, and links. Live output, tool calls, file changes, artifacts, and the option to take over live in the [session page](/sessions/session-page).                                                                                                                                                                            | Open the session in the web app to follow progress or step in.                                                                                          |
 | Harness depends on the entry point         | Slack, GitHub, and Linear sessions run on the harness chosen in their integration settings, OpenCode by default; Slack users can also pick their own in App Home. All three preserve that harness: if it cannot run the resolved model, the bot replies with an explanation and creates no session. Automations run on the harness chosen on the automation.                                         | Choose a compatible model or change the integration harness under Settings › Integrations. For other triggers, use an [automation](/automations).       |
@@ -69,6 +74,16 @@ Slack channels and Linear teams can be bound to an OpenInspect team; GitHub ment
     title="Inbound webhooks"
     href="/automations/inbound-webhooks"
     description="Start sessions from any system that can send an HTTP request."
+  />
+  <Card
+    title="Personal access tokens"
+    href="/integrations/personal-access-tokens"
+    description="Issue tokens that let your own tools call the API as you, limited to the permissions you grant."
+  />
+  <Card
+    title="MCP server"
+    href="/integrations/mcp-server"
+    description="Let Claude Code or another MCP client read sessions and automation runs, and optionally create and run automations."
   />
 </Cards>
 

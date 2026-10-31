@@ -86,6 +86,12 @@ Automations can run with zero, one, or several repositories:
   Event-driven triggers stay limited to one repository for now — an event arrives scoped to a
   repository, and fanning it out to unrelated repositories has no defined semantics yet.
 
+A pull request a run opens from its own prompt is created by the GitHub App, not with the executor's
+or requester's OAuth token; commits are still attributed to that person. Pull requests opened by
+child sessions the run's agent spawns, or by someone prompting into the run's session, use the
+prompting person's OAuth; an open pull request on the same branch is updated and keeps its author.
+See [Creating Pull Requests](HOW_IT_WORKS.md#creating-pull-requests).
+
 You can change the repository selection at any time, including while runs are in flight: history
 always shows the repositories a run actually used, in-flight runs are unaffected, and the next
 firing uses the new selection.
@@ -298,6 +304,10 @@ event you pick — pull requests offer branch, target branch, label, and actor; 
 actor; comments offer actor. PR opened and PR updated also offer **Draft**. Changing the event type
 removes conditions the new one cannot answer, and the form says which. GitHub webhook payloads carry
 no file list, so path-pattern filtering is not offered for any GitHub event.
+
+A pull request that an automation run's own prompt opens is authored by the GitHub App, so its PR
+opened event carries the App bot login (for example `my-app[bot]`) as actor, not the executor's; an
+actor condition that names the executor no longer matches that event.
 
 ---
 
@@ -533,10 +543,10 @@ triggers follow the same concurrency rules as all other runs: if a run is alread
 trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
 before resuming.
 
-Manual runs use the requester's authority and linked source-control credentials, not the stored
-executor's. In addition to trigger permission, the requester must pass runtime session/target checks
-and be a current member of the active owning team for a team automation, even if they are a
-workspace Owner or Administrator.
+Manual runs use the requester's authority and identity, not the stored executor's; pull requests the
+run's own prompt opens are created by the GitHub App. In addition to trigger permission, the
+requester must pass runtime session/target checks and be a current member of the active owning team
+for a team automation, even if they are a workspace Owner or Administrator.
 
 No automation run, scheduled, event-driven or manual, loads anyone's personal memories or personal
 skill profiles: personal memory serves its owner's own prompts, and nobody prompts an automation

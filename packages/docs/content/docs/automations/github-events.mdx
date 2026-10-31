@@ -4,7 +4,7 @@ description: Start a session when a pull request, issue, comment, check suite, o
 audience: team-owner
 owner: control-plane
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/AUTOMATIONS.md
   - docs/integrations/GITHUB.md
@@ -93,6 +93,8 @@ Conditions are optional. When you add any, every condition must pass before a ru
 | Draft         | **Not draft** skips draft pull requests, **Draft only** skips the rest.                                                                            |
 
 Every list-type condition needs at least one entry; an empty one blocks saving.
+
+A pull request that an automation run's own prompt opened is authored by the GitHub App, so its **PR Opened** event has the App bot login (for example `my-app[bot]`) as actor. An **Actor** condition that names the automation's executor does not match that event.
 
 ### Draft pull requests
 

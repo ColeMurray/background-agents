@@ -4,7 +4,7 @@ description: Symptom-keyed fixes for starting sessions, running them, reviewing 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
@@ -28,7 +28,7 @@ Cause: your account is outside the workspace allowlist, or your membership was s
 
 Check, in order:
 
-1. Ask a workspace Owner or Administrator whether your user, email, email domain, or GitHub organization is allowed.
+1. Ask a workspace Owner or Administrator whether your user, email, email domain, or GitHub organization is allowed. They can add it under Settings › Workspace access › **Who can sign in**.
 2. If the deployment allows by GitHub organization, the operator must also grant the GitHub App the organization Members read permission and approve it on the installation.
 3. Ask whether your membership was suspended. Existing sessions and authorship remain intact; only access is removed.
 
@@ -149,13 +149,14 @@ See [Managed skills](/configure/managed-skills).
 </Accordion>
 
 <Accordion title="MCP server tools are missing">
-Cause: the server is disabled, scoped to other repositories, or its local package could not be prepared.
+Cause: the server is disabled or scoped to other repositories, its local package could not be prepared, or a personal server cannot be used in this session.
 
 Check, in order:
 
 1. Under Settings › MCP Servers, confirm the server is **Enabled** and its scope is "All repositories" or includes this session's repository.
 2. For local servers started with `npx`, unversioned packages are refreshed on every sandbox boot; a failed install is retried on the next boot. Pin an exact version in the command and in `.openinspect/setup.sh`, then rebuild the image to preinstall it.
 3. MCP settings are not baked into prebuilt images; a changed pinned version installs at boot until the image is rebuilt.
+4. For a server that uses each user's OAuth connection, connect your account under Settings › Connections, and prompt from the web or Slack in an OpenCode or Claude Agent session on a current image. Turns started by automations, GitHub, or Linear cannot use it. A session that cannot use it shows an `mcp` warning naming the server.
 
 See [MCP servers](/configure/mcp-servers).
 
@@ -179,7 +180,7 @@ See [Reviewing changes](/sessions/reviewing-changes).
 </Accordion>
 
 <Accordion title="The pull request was not created as expected">
-Cause: the PR is created with your GitHub OAuth identity when you signed in with GitHub; otherwise it is created as the GitHub App. A second call from the same branch updates the existing PR instead of opening another.
+Cause: the PR is created with your GitHub OAuth identity when you signed in with GitHub; otherwise it is created as the GitHub App. A pull request an automation run opens from its own prompt is always created as the App. A second call from the same branch updates the existing PR instead of opening another.
 
 Check, in order:
 

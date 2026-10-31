@@ -1,10 +1,10 @@
 ---
 title: MCP servers
-description: Give agents extra tools by registering local or remote MCP servers, scoping them to repositories, and keeping local servers fast to start.
+description: Give agents extra tools by registering local or remote MCP servers, routing remote ones through OpenInspect with shared or per-user credentials, scoping them to repositories, and keeping local servers fast to start.
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-29"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/types/integrations.ts
   - packages/web/src/components/settings/mcp-servers-settings.tsx
@@ -12,6 +12,11 @@ relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/CLAUDE_AGENT.md
   - packages/sandbox-runtime/src/sandbox_runtime/harness/codex/env.py
+  - packages/web/src/components/settings/mcp-connections-settings.tsx
+  - packages/control-plane/src/mcp/runtime-config.ts
+  - packages/control-plane/src/mcp/destination.ts
+  - packages/control-plane/src/mcp/oauth.ts
+  - packages/control-plane/src/routes/mcp-proxy.ts
 ---
 
 MCP servers add tools to the agent (a browser, a documentation index, an internal API) that OpenInspect starts or connects to inside each session.
@@ -20,7 +25,7 @@ MCP servers add tools to the agent (a browser, a documentation index, an interna
 
 ## Prerequisites
 
-- The `mcp_servers.manage` permission to add, edit, enable, disable, or delete servers and to see the names of saved credentials. Users with only `mcp_servers.read` can view the list, but not credential names.
+- The `mcp_servers.manage` permission to add, edit, enable, disable, or delete servers, revoke users' personal connections, and see the names of saved credentials. Users with only `mcp_servers.read` can view the list, but not credential names.
 - For repository-scoped servers, at least one connected repository. The form shows "No repositories available. Connect a GitHub integration first." otherwise; see [GitHub](/integrations/github).
 
 ## Adding a server
@@ -43,7 +48,7 @@ Enter a name (for example `playwright` or `context7`) and choose Local or Remote
 
 For a local server, enter the command as a space-separated command and arguments, such as `npx -y @playwright/mcp`. Use quotes for arguments that contain spaces. Optionally add Environment Variables as key and value rows.
 
-For a remote server, enter the URL, such as `https://mcp.example.com/sse`. Optionally add HTTP Headers as name and value rows.
+For a remote server, enter the URL, such as `https://mcp.example.com/sse`, choose its **Authentication**, and decide whether to **Route through Open Inspect** (see [Authentication and routing](#authentication-and-routing)). With **Shared service credentials**, optionally add HTTP Headers as name and value rows.
 
 </Step>
 <Step>
@@ -56,14 +61,30 @@ Choose "All repositories" (available in every agent session) or "Selected reposi
 
 ## Server types
 
-| Type   | You provide                                                        | OpenInspect does                                                                    |
-| ------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Local  | A command as an argument list, plus optional environment variables | Prepares the package (for `npx` commands) and starts the process inside the sandbox |
-| Remote | A URL, plus optional headers                                       | Connects the agent to the URL from inside the sandbox                               |
+| Type   | You provide                                                        | OpenInspect does                                                                          |
+| ------ | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Local  | A command as an argument list, plus optional environment variables | Prepares the package (for `npx` commands) and starts the process inside the sandbox       |
+| Remote | A URL, an authentication mode, plus optional headers               | Connects the agent to the URL from inside the sandbox, or through OpenInspect when routed |
+
+## Authentication and routing
+
+A remote server uses one of three authentication modes, chosen under **Authentication**:
+
+| Authentication               | API `authMode`        | What the server receives                                                                                                                |
+| ---------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| No upstream authentication   | `none`                | No credentials.                                                                                                                         |
+| Shared service credentials   | `service_credentials` | The server's saved headers, the same for every session. The default, and the mode of remote servers created before these modes existed. |
+| Each user's OAuth connection | `user_oauth`          | The OAuth connection of the person whose prompt is running; see [Personal connections](#personal-connections). Always routed.           |
+
+**Route through Open Inspect** sends the agent's requests to the server through the OpenInspect control plane instead of straight from the sandbox. The sandbox authenticates to OpenInspect with its own session token and never holds the upstream credential: a routed server's headers stay in the control plane, which adds them to each request it forwards. Existing remote servers keep connecting directly until you turn routing on. Disabling a routed server stops it at once, including in running sessions.
+
+A routed server must speak Streamable HTTP at a public HTTPS URL: no IP address, single-label or `localhost`, `.local`, or `.internal` hostname, credentials in the URL, fragment, or port other than 443. The hostname is checked as written; OpenInspect does not check the addresses it resolves to. Routed requests have per-sandbox rate and size limits; see [Limits](/reference/limits#mcp-servers).
+
+For **Each user's OAuth connection**, also enter the **OAuth issuer**. Leave **OAuth resource** blank: it defaults to the server URL, and connecting fails for any other value. When you change an existing server's URL, clear **OAuth resource** or set it to the new URL. The server must publish OAuth metadata that names that issuer and resource exactly, keep its authorization, token, and registration endpoints on the issuer's origin, and support dynamic client registration for a public client with S256 PKCE.
 
 ## Saved credentials
 
-Environment variables and headers are credentials: they are stored encrypted on the server side and injected into the session when the server is prepared. They are write-only. After you save a value, neither the settings page nor the API returns it to anyone.
+Environment variables and headers are credentials: they are stored encrypted on the server side. A local server's environment variables and an unrouted remote server's headers are injected into the session when the server is prepared; a routed server's headers stay in the control plane. They are write-only. After you save a value, neither the settings page nor the API returns it to anyone.
 
 When someone with `mcp_servers.manage` edits a server, the form lists each saved environment variable or header by name, with its value hidden. Names are locked. Users with only `mcp_servers.read` see neither names nor values.
 
@@ -75,7 +96,7 @@ When someone with `mcp_servers.manage` edits a server, the form lists each saved
 | Rename a credential | Remove its row, then click + Add and enter the new name with its value. |
 | Add a credential    | Click + Add and enter a name and value.                                 |
 
-Nothing changes until you click Save Changes. Header names match without regard to case, so a new `authorization` row replaces a saved `Authorization` header. Environment variable names are case-sensitive. Switching between Local and Remote hides the saved rows, because headers and environment variables are not interchangeable. Switching back before saving restores them, but saving under the other type deletes the saved credentials.
+Nothing changes until you click Save Changes. Header names match without regard to case, so a new `authorization` row replaces a saved `Authorization` header. Environment variable names are case-sensitive. Switching between Local and Remote hides the saved rows, because headers and environment variables are not interchangeable. Switching back before saving restores them, but saving under the other type deletes the saved credentials. The same applies to headers when you switch a remote server's **Authentication** away from **Shared service credentials**: only that mode accepts headers.
 
 API clients make the same per-name edits by sending `keepCredentialKeys` with `PUT /mcp-servers/:id`. Listed names keep their saved values, names sent in `env` or `headers` take the new values, and saved names that are neither kept nor sent are deleted. Without `keepCredentialKeys`, the credentials sent replace the whole saved set. If the saved credentials cannot be decrypted, for example after the encryption key changed, a request with `keepCredentialKeys` is refused with `409` and nothing changes; send the full set without it to replace them.
 
@@ -89,13 +110,27 @@ API clients make the same per-name edits by sending `keepCredentialKeys` with `P
 
 Edit a server from the list to change any field and click Save Changes; see [Saved credentials](#saved-credentials) for environment variables and headers. Deleting a server cannot be undone.
 
+A server cannot be deleted while users have personal connections to it. Turn it off, click **Revoke connections** on its row and confirm, then delete it. Revoking disconnects every user's personal connection to that server; it does not revoke their accounts at the external service. **Revoke connections** appears on every disabled remote server, because connections made under an earlier **Each user's OAuth connection** setting still block deletion after the mode changes.
+
+## Personal connections
+
+When a server uses **Each user's OAuth connection**, each person connects their own account under Settings › Connections (**Your MCP connections**). Click **Connect** and approve access at the service. **Reconnect** keeps the current connection working until the new approval completes. **Disconnect** stops use through OpenInspect but does not revoke the account at the external service. Connecting requires the web app to be served over HTTPS.
+
+In a session, the server acts as the person whose prompt is running. Only prompts a person sends from the web or Slack can use personal connections; turns started by automations, GitHub, or Linear cannot. Before forwarding each call, OpenInspect checks that this person is not suspended and can still read and collaborate in the session. When several people prompt one session, each turn uses its own author's connection. A child session uses the connection only when the parent session's own agent spawned it.
+
+Personal servers work only in OpenCode and Claude Agent sessions whose sandbox image is at runtime generation 80 or later. In a Codex session, or on an older image or snapshot, they are left out of the agent's configuration, and each prompt records an `mcp` warning naming them, shown in the session and in Slack completions. Other MCP servers remain available.
+
+Changing a server's URL, authentication, OAuth issuer or resource, routing, headers, or repository scope marks existing connections **Reconnect required**, and routed calls from sessions that are already running stop working. Renaming a server does not.
+
+While a person has a live connection, their account cannot be merged into another or deleted; see [Merging duplicate accounts](/administration/workspace-access#merging-duplicate-accounts).
+
 ## How servers reach the agent
 
-- OpenCode: enabled servers in scope are written into the session's OpenCode configuration when the agent starts.
-- Claude Agent: the same servers are passed through unchanged to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register.
-- Codex: the same servers are translated to Codex's own server configuration. A server named `oi`, or a remote server whose URL carries credentials, a query string, or a fragment, is refused, so put credentials in headers. OpenInspect's own tools reach Codex as built-in tools in an `oi` namespace.
+- OpenCode: enabled servers in scope are written into the session's OpenCode configuration when the agent starts. Personal servers are connected only for the turns that may use them and disconnected afterwards.
+- Claude Agent: the same servers are passed to the harness. OpenInspect's own tools reach Claude Agent through a built-in server named `oi`, separate from the servers you register. A turn that may use personal servers restarts the agent process with them.
+- Codex: the same servers are translated to Codex's own server configuration. A server named `oi`, or a remote server whose URL carries credentials, a query string, or a fragment, is refused, so put credentials in headers. OpenInspect's own tools reach Codex as built-in tools in an `oi` namespace. Personal servers are not loaded.
 
-Server commands, arguments, and credentials are passed through as configured. Changes apply to new sessions; a running session keeps the server set it started with.
+Local servers' commands, arguments, and environment variables, and unrouted remote servers' URLs and headers, are passed through as configured. A routed server reaches the agent as an OpenInspect URL that authenticates with the sandbox's own token. Changes apply to new sessions; a running session keeps the server set it started with, though a routed server stops working in it once it is disabled or its connection settings change.
 
 ## Startup cost of local servers
 
@@ -129,6 +164,30 @@ See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/con
     Availability setting under Settings › MCP Servers, then start a new session.
 
 </Accordion>
+  <Accordion title="A personal server is missing, or the session shows an MCP warning">
+    Cause: the session runs on Codex, or on a sandbox image or snapshot older than runtime
+    generation 80; you have not connected your account, or the connection needs reconnecting after
+    the server changed; or the turn was started by an automation, GitHub, or Linear rather than by
+    a person on the web or in Slack. Fix: read the warning, connect or reconnect under Settings ›
+    Connections, and prompt from an OpenCode or Claude Agent session on a current image.
+
+</Accordion>
+  <Accordion title="Deleting a server fails because users are still connected">
+    The message reads "Users are still connected to this server. Disable it and revoke its
+    connections, then delete it." Fix: turn the server off, click **Revoke connections**, confirm,
+    then delete it.
+
+</Accordion>
+  <Accordion title="Connecting an account fails">
+    If clicking **Connect** shows "Connection unavailable. Try again or contact your
+    administrator.", the server's OAuth metadata does not name the configured issuer and resource
+    exactly, the server does not support dynamic client registration with PKCE, or the web app is
+    not served over HTTPS. Check the **OAuth issuer** against the server's metadata, leave **OAuth
+    resource** blank, and confirm the server supports public-client OAuth. If returning from the
+    service shows "Connection was not completed. Please try connecting again.", the approval was
+    declined or expired, or the token exchange failed; connect again.
+
+</Accordion>
   <Accordion title="A local server is slow to start or its package could not be installed">
     Cause: the package is installed at boot because it is not in the image, or a previous install
     failed and is being retried. Fix: pin the version in both the command and `setup.sh`, rebuild
@@ -151,8 +210,10 @@ See [lifecycle scripts](/configure/lifecycle-scripts) and [prebuilt images](/con
 </Accordion>
   <Accordion title="Save fails with a validation error">
     Cause: the name is empty, a remote server has no URL, a local server has no command, or
-    "Selected repositories only" has no repository ticked. Fix: fill in the missing field or switch
-    to "All repositories".
+    "Selected repositories only" has no repository ticked. A routed server is also refused with
+    "Managed MCP requires public HTTPS endpoints" when its URL, issuer, or resource is not a public
+    HTTPS address. Fix: fill in the missing field, switch to "All repositories", or use a public
+    HTTPS URL.
 
 </Accordion>
 </Accordions>

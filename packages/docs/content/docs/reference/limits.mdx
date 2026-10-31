@@ -4,7 +4,7 @@ description: Every documented limit, cap, and default in OpenInspect, grouped by
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/types/repositories.ts
   - packages/shared/src/types/session-attachments.ts
@@ -19,6 +19,10 @@ relatedCode:
   - packages/control-plane/src/scheduler/scheduler.ts
   - packages/control-plane/src/types.ts
   - packages/linear-bot/src/kv-store.ts
+  - packages/shared/src/admission-settings.ts
+  - packages/shared/src/types/personal-access-tokens.ts
+  - packages/control-plane/src/mcp/relay.ts
+  - packages/control-plane/src/session/mcp-context.ts
   - docs/HOW_IT_WORKS.md
   - docs/SECRETS.md
   - docs/MANAGED_SKILLS.md
@@ -145,6 +149,30 @@ This page collects the limits and defaults that OpenInspect enforces. Values mar
 | Limit      | Value                                    | Where it applies   |
 | ---------- | ---------------------------------------- | ------------------ |
 | Time range | 7, 14, 30, or 90 days; 30 is the default | The Analytics page |
+
+## Sign-in rules
+
+| Limit                   | Value                                                                   | Where it applies                                                                          |
+| ----------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Rules added in Settings | 50; GitHub organizations at most 10 in total, counting the deployment's | Settings › Workspace access › Who can sign in; deployment rules don't count toward the 50 |
+
+## Personal access tokens
+
+| Limit             | Value                                                            | Where it applies                                                         |
+| ----------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Token lifetime    | 1 to 365 days; Settings offers 7, 30, 90, or 180 days, or 1 year | Settings › Access tokens; a workspace lifetime cap can lower the maximum |
+| Tokens per member | 50                                                               | Expired tokens count until they are revoked                              |
+| Token name        | 100 characters                                                   | Settings › Access tokens                                                 |
+| Last use          | Recorded at most once a minute                                   | The last-used time shown for each token                                  |
+
+## MCP servers
+
+| Limit                       | Value                       | Where it applies                                                    |
+| --------------------------- | --------------------------- | ------------------------------------------------------------------- |
+| Routed requests per sandbox | 8 at a time, 120 per minute | Remote servers routed through OpenInspect; further requests get 429 |
+| Routed request body         | 1 MiB                       | Each request the agent sends to a routed server                     |
+| Routed response start       | 5 minutes                   | The upstream server must start responding within this time          |
+| Routed stream               | 30 minutes                  | A streamed response from a routed server                            |
 
 ## Next steps
 

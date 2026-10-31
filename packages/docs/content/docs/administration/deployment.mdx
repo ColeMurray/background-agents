@@ -4,7 +4,7 @@ description: What an OpenInspect deployment consists of, what the operator confi
 audience: operator
 owner: platform
 status: published
-lastReviewed: "2026-10-04"
+lastReviewed: "2026-10-31"
 relatedCode:
   - README.md
   - docs/GETTING_STARTED.md
@@ -74,6 +74,8 @@ Provider differences that users notice (which resource and timeout settings appl
 | Teams enforcement            | Terraform `teams_enforcement`, exposed to the control plane as `TEAMS_ENFORCEMENT`: `off`, `shadow` (default), or `on`. This is a session authorization rollout setting, not a switch disabling all team restrictions.                                                              |
 
 Web branding values are inlined at build time, so a rebrand needs a fresh web build; the bot and control-plane workers read the name at request time.
+
+The admission allowlists are the deployment's baseline. Owners and Administrators can add rules later under Settings › Workspace access › **Who can sign in**; those rules add to the deployment's lists and cannot remove anything from them. Keep an exact recovery administrator email in the deployment's lists. See [Workspace access](/administration/workspace-access#managing-who-can-sign-in).
 
 For the Cloudflare/Vercel path, update the relevant configuration or secrets and apply Terraform. On AWS, changing an SSM secret requires `systemctl restart open-inspect` to load it into the running service; changing a `config` entry requires `terraform apply` and then that restart. `EXECUTION_TIMEOUT_MS` is set in the control plane's environment.
 

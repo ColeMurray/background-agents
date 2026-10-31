@@ -4,7 +4,7 @@ description: Start OpenInspect sessions by mentioning or assigning the Linear Ag
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-27"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/integrations/LINEAR.md
   - packages/shared/src/types/integrations.ts
@@ -194,6 +194,7 @@ Claude Agent sessions started from Linear are automated sessions: they use the d
 - **Repository Scope** controls which resolved repositories can receive Linear-started sessions.
 - Issue titles, descriptions, comments, and agent prompts are sent to the agent. Do not put secrets in them.
 - Linear-started sessions never use anyone's personal memories, because their replies post where others read them. Repository and environment memories still apply.
+- OpenInspect links each Linear user to an account by their Linear email. A new user whose email the bot can't read, or whose email matches no account and isn't allowed by the workspace's [sign-in rules](/administration/workspace-access#joining-through-a-bot), gets an error activity and no session. People the workspace admits only by GitHub username or organization should sign in on the web first with their Linear email.
 
 ## Troubleshooting
 

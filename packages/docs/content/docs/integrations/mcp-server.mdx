@@ -47,7 +47,7 @@ The control plane URL must use `https://`; plain `http://` is accepted only for 
 | `trigger_automation`                                                                                       | **Run your automations** or **Run any automation**, **Create sessions**, and use of its targets |
 | `import_skill_from_git`, `update_skill_from_git`                                                           | **Manage skills** (administrators), which always comes with **Read skills**                     |
 
-A token without a tool's permission gets an error naming the missing permission. The token never exceeds your own role, and nothing it does can delete or pause an automation, delete a skill, or reach secrets or workspace settings. A run started with `trigger_automation` uses only what the token was granted, even where your role allows more.
+A token without a tool's permission gets an error, which usually names the missing permission or points to the tool's description, where the needed grant is stated. The token never exceeds your own role or your workspace's [token policy](/administration/personal-access-tokens), and nothing it does can delete or pause an automation, delete a skill, or reach secrets or workspace settings. A run started with `trigger_automation` uses only what the token was granted, even where your role allows more.
 
 ## Keep the assistant in check
 

@@ -18,6 +18,9 @@ presents tools:
   personal access tokens. Every other route refuses one, whatever it was granted. A token cannot
   create, list, or revoke tokens, so a leaked one cannot issue itself a successor.
 - **You can revoke it immediately** under Settings › Access tokens. No deploy is involved.
+- **Your workspace's token policy also applies.** An administrator can turn tokens off, cap their
+  lifetime, limit the permissions they may hold, or revoke any member's token, and each change
+  applies to existing tokens at once.
 
 The control plane stores only a SHA-256 hash of the token. The token itself sits in plaintext in
 your MCP client's configuration, like any local API key, so grant it only what you will use, and
@@ -33,7 +36,7 @@ give it the shortest lifetime that works.
 | Also import and update skills            | add `skills.manage` (the picker adds `skills.read` with it)                                   |
 
 The **Read-only** button in the token picker selects the first row and every other read permission
-your role has.
+your role has and your workspace allows.
 
 ### Prompt injection
 
@@ -93,8 +96,9 @@ cannot send the token anywhere else.
 
 When a tool fails, its output says why:
 
-- A `401` means the token was mistyped, revoked, or expired. Issue a new one and update the client
-  configuration.
+- A `401` means the token was mistyped, revoked, or expired, or that your workspace has turned
+  tokens off or capped their lifetime below the token's age. Issue a new one, if tokens are on, and
+  update the client configuration.
 - A `403` with `permission_required` names the permission the token was not granted, or that your
   role no longer has.
 

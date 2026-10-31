@@ -597,8 +597,15 @@ The core path uses GitHub sign-in. To add or switch to Google, see
 > grants access. Use `allowed_emails` for individual users on shared domains (e.g. a specific
 > `person@gmail.com`) where `allowed_email_domains` would admit too many. `allowed_github_orgs`
 > checks membership at sign-in only with the signing-in user's OAuth token; existing sessions last
-> until session expiry. The `read:org` OAuth scope is requested only when org access is configured,
-> and GitHub Apps using org access need Organization permissions: Members read-only.
+> until session expiry. Org rules request no new OAuth scopes or `read:org`; GitHub Apps using org
+> rules need Organization permissions: Members read-only. After deployment, Owners and
+> Administrators can add rules under **Settings > Workspace access > Who can sign in**; those rules
+> add to these lists and cannot remove anything from them. See
+> [Sign-In Allowlist](AUTH.md#sign-in-allowlist). The same rules decide whether the Slack and Linear
+> bots may create an account for someone new, and they can match only exact-email and domain rules;
+> the GitHub bot acts only for people already known, unless unsafe allow-all is in effect. Where
+> people are admitted by GitHub username or organization alone, they sign in on the web first; see
+> [Bot enrollment](AUTH.md#bot-enrollment).
 
 ---
 

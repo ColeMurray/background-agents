@@ -4,7 +4,7 @@ description: Ask the agent for a pull request, understand how OpenInspect create
 audience: user
 owner: control-plane
 status: published
-lastReviewed: "2026-09-28"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/git.ts
   - packages/control-plane/src/session/pull-request-service.ts
@@ -61,7 +61,7 @@ The agent uses a built-in `create-pull-request` tool. The sandbox's `gh` wrapper
 
 1. The tool reads the current branch in the repository and sends the title, body, optional base branch, optional target repository (for multi-repository sessions), and the draft flag to the control plane.
 2. The control plane pushes the branch with the GitHub App's push credentials. If the session has no named branch yet, it generates one from the session ID (`open-inspect/<session id>`), so every session's work lands on its own branch.
-3. The control plane creates the pull request with the prompting user's GitHub OAuth identity when it resolves a token, falling back to the App if none is resolved. It does not retry with the App if GitHub rejects a resolved token. A PR authored by you cannot be approved by you.
+3. The control plane creates the pull request with the prompting user's GitHub OAuth identity when it resolves a token, falling back to the App if none is resolved. It does not retry with the App if GitHub rejects a resolved token. A PR authored by you cannot be approved by you. A prompt from an automation run is the exception: its pull request is always created by the App.
 4. The body gets a footer, "Created with" followed by the deployment's app name, linking back to the session.
 5. The pull request is recorded as a session artifact and appears in the sidebar.
 
@@ -157,7 +157,8 @@ Branch protection, required reviews, and required status checks apply exactly as
   <Accordion title="The pull request is authored by the GitHub App instead of me">
     The prompting user had no usable GitHub OAuth token when the PR was created, even if they signed
     in with GitHub. Check the GitHub connection before requesting another PR; existing pull requests
-    keep their author. Commit attribution is separate from the PR author.
+    keep their author. If an automation run opened it, including a run you started with **Trigger
+    Now**, the App author is expected. Commit attribution is separate from the PR author.
 
 </Accordion>
 </Accordions>

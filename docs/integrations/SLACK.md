@@ -332,6 +332,7 @@ When the agent finishes, Slack receives a completion reply with:
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
 - The final status, model, session target, and reasoning effort when available
+- Any personal MCP server warnings for the prompt, with a **Your MCP Connections** button
 - A **View Session** button
 
 If the agent created a manual-PR branch and no PR artifact is already present, Slack may also show a
@@ -553,6 +554,11 @@ access, and Slack publication gates are not a promise that every team read is en
 - The source-control installation is the outer repository boundary, not a per-Slack-user GitHub
   permission list. Team bindings, memberships, and repository grants further constrain team work.
 - Invite the bot only into trusted channels; identity linking does not itself grant team membership.
+- The first time someone messages the bot, Open-Inspect links them to an account by their Slack
+  profile email, which is why the app needs `users:read.email`. A new user whose email the bot
+  cannot read, typically an external Slack Connect user, cannot use the bot, and a new account is
+  created only when the email passes the workspace's sign-in rules (see
+  [Bot enrollment](../AUTH.md#bot-enrollment)). People the bot already knows keep working.
 - Bot messages are ignored so the Slack bot does not respond to itself.
 - Agent notifications require bot membership and the publication checks described above.
 - Accepted notification text is sanitized and shortened to fit Slack block limits; extremely large
@@ -575,6 +581,15 @@ If setup was just changed, confirm the Slack app event subscriptions and interac
 
 The Slack app needs the direct message event subscription configured. Once that is set up, send the
 bot a plain DM with your request. No `@mention` is required.
+
+### The bot can't link or admit a new user
+
+"I couldn't read the email on your Slack profile" means the bot could not read the person's profile
+email: Slack can briefly fail to return it, Slack Connect users often hide it, or the app lacks the
+`users:read.email` scope (reinstall the app after adding it). "Your account is not authorized to
+join this Open-Inspect workspace" means no account has that email and it is not allowed by an email
+or domain sign-in rule; the person can sign in on the web with that email, or an Owner or
+Administrator can add it under **Settings > Workspace access > Who can sign in**.
 
 ### Open-Inspect asks which target to use
 

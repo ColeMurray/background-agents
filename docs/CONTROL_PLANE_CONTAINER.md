@@ -87,8 +87,8 @@ Then `npm run dev -w @open-inspect/web`. The container's `WEB_APP_URL` must be t
 
 Browser sign-in and new bot-account admission combine the deployment's `ALLOWED_*` baseline with
 rules stored in `global.db`. Active built-in Owners/Administrators manage the latter in **Settings >
-Workspace access > Sign-in allowlist**. The UI cannot narrow deployment grants; changing `.env` or
-AWS SSM configuration cannot subtract managed grants. Keep a provider-compatible recovery baseline,
+Workspace access > Who can sign in**. The UI cannot narrow deployment grants; changing `.env` or AWS
+SSM configuration cannot subtract managed grants. Keep a provider-compatible recovery baseline,
 preferably an exact verified administrator email in `ALLOWED_EMAILS`, with unsafe mode disabled.
 Google needs an email/domain baseline; GitHub also accepts usernames/organizations. SQL rules cannot
 rescue an empty/incompatible baseline.

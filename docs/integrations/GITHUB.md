@@ -70,7 +70,9 @@ The agent can submit a general review comment, approve the PR, request changes, 
 comments when useful.
 
 An explicitly allowed App bot can trigger review of its own PR, but that self-review can only
-comment, not approve or request changes.
+comment, not approve or request changes. Pull requests that an automation run's own prompt opens are
+authored by the App (see [Commit Signing](#commit-signing)), so auto-review skips them by default,
+and any review the bot submits on them can only comment.
 
 ---
 
@@ -203,7 +205,10 @@ GitHub Bot workflows are disabled. If **Only specific users** is selected and th
 empty, no one can trigger direct bot workflows for that scope.
 
 These settings do not gate GitHub event automations. Automations are matched separately by their
-repository, event type, enabled state, and trigger conditions.
+repository, event type, enabled state, and trigger conditions. A pull request that an automation
+run's own prompt opens is authored by the GitHub App, so its PR Opened event carries the App bot
+login (for example `my-app[bot]`) as actor, not the automation's executor; an **Actor** condition
+that names the executor no longer matches that event.
 
 Event automations match the numeric GitHub repository ID, not just `owner/name`, and retain the
 automation's saved owning team rather than using the mention sender's team. A team-owned automation
@@ -247,12 +252,12 @@ harness, in which case the bot refuses the launch.
 Open-Inspect can sign normal agent-created commits with one deployment-wide OpenSSH Ed25519 key. The
 identities remain deliberately separate:
 
-| Git/GitHub role      | Identity                                                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect                                                                               |
-| Committer and signer | The dedicated Open-Inspect signing account                                                                                                              |
-| Branch pusher        | The existing GitHub App                                                                                                                                 |
-| Pull request author  | The GitHub App for an automation run's own prompts (not its child sessions); otherwise the prompting user's OAuth identity when available, else the App |
+| Git/GitHub role      | Identity                                                                                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Commit author        | The trusted prompting GitHub user, when available; otherwise Open-Inspect                                                                                      |
+| Committer and signer | The dedicated Open-Inspect signing account                                                                                                                     |
+| Branch pusher        | The existing GitHub App                                                                                                                                        |
+| Pull request author  | The GitHub App for an automation run's own prompts (not sessions its agent spawns); otherwise the prompting user's OAuth identity when available, else the App |
 
 This makes the signature an attestation by the Open-Inspect deployment, not a cryptographic claim
 that the attributed user personally signed the commit. GitHub repository rules remain the
@@ -374,6 +379,13 @@ GitHub issues are ignored. Use the bot's full GitHub username, including `[bot]`
 The eyes reaction means the bot accepted the request. GitHub completion output is posted by the
 agent, not by a managed bot callback. The session may still be running, or the agent may have failed
 after the request was accepted. Open the Open-Inspect web app to inspect the session.
+
+If no session exists, check that the person who triggered the bot (the commenter, review requester,
+or PR opener) is already known to Open-Inspect. The bot cannot create an account from a GitHub
+profile, so unless unsafe allow-all is in effect, the control plane refuses requests from someone
+who has never signed in on the web with GitHub; the refusal is logged and nothing is posted to the
+PR. Sign in once on the web, then mention the bot again. See
+[Bot enrollment](../AUTH.md#bot-enrollment).
 
 ### The wrong model or instructions were used
 

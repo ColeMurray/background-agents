@@ -4,7 +4,7 @@ description: Start OpenInspect sessions from Slack channels and DMs, continue th
 audience: user
 owner: integrations
 status: published
-lastReviewed: "2026-10-27"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/integrations/SLACK.md
   - docs/CLAUDE_AGENT.md
@@ -196,6 +196,7 @@ When a request is accepted, OpenInspect posts a working reply in the thread and 
 - Created artifacts such as pull requests or branches
 - A few key tool actions, such as edits or commands
 - The final status, model, session target, and reasoning effort when available
+- Any [personal MCP server](/configure/mcp-servers#personal-connections) warnings for the prompt, with a **Your MCP Connections** button
 - A **View Session** button
 
 If the agent created a branch but no pull request, Slack may also show a **Create PR** button. Detailed event logs stay in the web session.
@@ -331,7 +332,7 @@ An automation can start a session when someone posts a matching message in a wat
 - Slack requests are verified before OpenInspect acts on them.
 - The source-control installation is the outer repository boundary, not a per-Slack-user GitHub permission list. Team bindings, memberships, and repository grants further constrain team work.
 - Invite the bot only into trusted channels. Identity linking does not itself grant team membership.
-- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails, so new ones can't start using the bot yet; people the bot already knows keep working.
+- The first time someone messages the bot, OpenInspect links them to the account with their Slack profile email. The bot won't act for a new user whose email it can't read, which is why the app needs `users:read.email`. External users in Slack Connect channels often have hidden emails, so new ones can't start using the bot yet; people the bot already knows keep working. If no account has that email, a new one is created only when the email passes the workspace's [sign-in rules](/administration/workspace-access#joining-through-a-bot).
 - Bot messages are ignored, so the bot does not respond to itself.
 - Notification text is sanitized and shortened to fit Slack block limits; extremely large raw inputs are rejected.
 
@@ -357,6 +358,12 @@ An automation can start a session when someone posts a matching message in a wat
     workspace, an operator should confirm the app has the `users:read.email` scope and was
     reinstalled after it was added. If the bot instead says it couldn't verify your account,
     OpenInspect was briefly unreachable; send the message again.
+
+</Accordion>
+  <Accordion title="The bot says your account is not authorized to join">
+    Your Slack profile email belongs to no existing account and is not allowed by the workspace's
+    email or domain sign-in rules. Sign in on the web with the email on your Slack profile, or ask
+    an administrator to add it under Settings › Workspace access › **Who can sign in**.
 
 </Accordion>
   <Accordion title="OpenInspect asks which target to use">

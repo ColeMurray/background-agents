@@ -66,7 +66,7 @@ npm run test -w @open-inspect/control-plane -- --maxWorkers=1
 npm run test:integration -w @open-inspect/control-plane -- --maxWorkers=1 test/integration/managed-mcp-conformance.test.ts test/integration/managed-mcp-proxy.test.ts test/integration/mcp-servers.test.ts
 npm run test -w @open-inspect/shared -- --maxWorkers=1
 npm run test -w @open-inspect/slack-bot -- --maxWorkers=1 src/completion
-npm run test -w @open-inspect/web -- --maxWorkers=1 src/components/settings/mcp-connections-settings.test.tsx src/components/settings/mcp-servers-settings.test.tsx src/components/settings/settings-registry.test.ts src/app/api/mcp-connections/oauth/callback/route.test.ts src/components/sidebar/metadata-section.test.tsx
+npm run test -w @open-inspect/web -- --maxWorkers=1 src/components/settings/mcp-connections-settings.test.tsx src/components/settings/mcp-servers-settings.test.tsx src/components/settings/settings-nav.test.tsx src/app/api/mcp-connections/route.test.ts src/app/api/mcp-connections/oauth/callback/route.test.ts src/components/sidebar/metadata-section.test.tsx
 .venv-managed-mcp/bin/python -m pytest packages/sandbox-runtime/tests -q --basetemp "$(mktemp -d /tmp/mcp-py.XXXXXX)"
 ```
 

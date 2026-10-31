@@ -4,7 +4,7 @@ description: Compare the three agent harnesses, choose one when you create a ses
 audience: team-owner
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/harnesses.ts
   - packages/shared/src/models.ts
@@ -55,6 +55,7 @@ All three harnesses emit the same session events (tokens, tool calls, steps, war
 | Sub-agents                     | The `task` tool; the timeline groups a sub-agent's activity under it | The `Agent` tool; returns only when the sub-agent has finished, grouped in the timeline the same way | None (Codex's multi-agent feature is disabled); [child sessions](/sessions/child-sessions) still work |
 | Follow-up prompts              | Queue until the running turn completes                               | Queue until the running turn completes                                                               | Queue until the running turn completes                                                                |
 | Resume after a sandbox restore | By session id                                                        | By session id                                                                                        | By Codex thread id                                                                                    |
+| Personal MCP servers           | On runtime generation 80 or later                                    | On runtime generation 80 or later                                                                    | Not loaded; each prompt records an `mcp` warning naming them                                          |
 
 <Callout type="info" title="Installation default Anthropic account">
   A default Claude account set under Settings › Accounts (provider accounts) takes effect only on
@@ -103,7 +104,7 @@ OpenInspect's own tools are served to Claude Agent in-process as the `oi` MCP se
 | `create-pull-request`                                                                        | When the session has a repository                       |
 | `slack-notify`                                                                               | When agent notifications are enabled for the repository |
 
-Session MCP servers configured under Settings › MCP Servers are passed through unchanged.
+Session MCP servers configured under Settings › MCP Servers are passed through, except that a routed server points at OpenInspect's proxy. A turn that may use [personal MCP servers](/configure/mcp-servers#personal-connections) restarts the agent process with them.
 
 ### Sub-agents
 
@@ -150,7 +151,7 @@ Codex never swaps a selection it cannot honor for a default. A model it cannot r
 ### Tools, MCP servers, and skills
 
 - Codex gets the same OpenInspect tools as Claude Agent (child session tools, `upload-media`, `create-pull-request`, `slack-notify`), under the same conditions, as Codex tools in an `oi` namespace.
-- Session MCP servers configured under Settings › MCP Servers are translated to Codex's own server configuration. A server named `oi`, or a remote server whose URL carries credentials, a query string, or a fragment, is refused; put credentials in headers instead.
+- Session MCP servers configured under Settings › MCP Servers are translated to Codex's own server configuration. A server named `oi`, or a remote server whose URL carries credentials, a query string, or a fragment, is refused; put credentials in headers instead. [Personal MCP servers](/configure/mcp-servers#personal-connections) are not loaded, because Codex binds MCP servers once per thread; each prompt records an `mcp` warning naming them.
 - Managed skills and the bundled skills are staged under the per-sandbox Codex directory (`~/.openinspect/codex/skills`), and Codex reads the repository's `AGENTS.md` natively.
 - A repository `.codex/config.toml` is not supported, because it can reroute credentials and register hooks: Codex refuses to run in a repository that has one. Move MCP servers to Settings › MCP Servers and instructions to `AGENTS.md`.
 - Codex's own hooks, plugins, apps, memories, and multi-agent features are disabled, as are its analytics, feedback, update checks, and history file.

@@ -4,7 +4,7 @@ description: Short definitions of the terms used across OpenInspect, each linked
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/HOW_IT_WORKS.md
   - docs/AUTOMATIONS.md
@@ -53,7 +53,7 @@ The sidebar view of your sessions grouped into Needs attention, In progress, and
 Reusable instructions and supporting files stored in OpenInspect and installed into a session before the agent starts. Skills are assigned globally or to repositories and environments, and the revisions are pinned when the session is created. See [Managed skills](/configure/managed-skills).
 
 **MCP server**
-A Model Context Protocol server the agent can call as a tool source, configured under Settings › MCP Servers as a local command or a remote URL, for all repositories or selected ones. See [MCP servers](/configure/mcp-servers).
+A Model Context Protocol server the agent can call as a tool source, configured under Settings › MCP Servers as a local command or a remote URL, for all repositories or selected ones. A remote server can be routed through OpenInspect and use shared credentials or each user's own connection from Settings › Connections. See [MCP servers](/configure/mcp-servers). Not to be confused with the [OpenInspect MCP server](/integrations/mcp-server), which lets your own MCP client call OpenInspect.
 
 **Memory**
 A fact or directive that carries knowledge between sessions, scoped to you personally, a repository, or an environment. Active memories are pinned into new sessions; agent-written memories usually wait for approval under Settings › Memories or Settings › Shared memories. See [Memories](/configure/memories).
@@ -63,6 +63,9 @@ A session whose sandbox holds several repositories cloned side by side under `/w
 
 **Participant**
 A user who has joined a session. Participants see the same event stream, and each prompt is attributed to the participant who sent it. Participant labels record who contributed; they are not an access list. See [Multiplayer and sharing](/sessions/multiplayer-and-sharing).
+
+**Personal access token**
+A token (`oi_pat_…`) you issue yourself under Settings › Access tokens so a tool such as the OpenInspect MCP server can call the API as you, limited to the permissions you grant it, your current role, and the workspace token policy. See [Personal access tokens](/integrations/personal-access-tokens).
 
 **Prebuilt image**
 A provider image built ahead of time for a repository or environment with the clone and `setup.sh` already done. Sessions that match its fingerprint boot from it and skip setup. Rebuilt on a 30-minute schedule when commits land. See [Prebuilt images](/configure/prebuilt-images).

@@ -4,7 +4,7 @@ description: Keep facts and standing instructions between sessions, review what 
 audience: user
 owner: platform
 status: published
-lastReviewed: "2026-10-28"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/MEMORY.md
   - packages/shared/src/types/memories.ts
@@ -223,16 +223,17 @@ The server accepts up to 8 memories per request. The page sends larger selection
   <Accordion title="A memory is not loaded in a new session">
     Check that it is Active, not Proposed or Archived; that the session includes its repository
     or environment; and, for personal memories, that **Use my personal memories in my sessions**
-    is on and that you started the session on the web or in a Slack direct message. If the
-    sidebar shows records "omitted for budget", the session held more memories than fit; shorten
-    or archive directives, or tighten fact descriptions.
+    is on, that your role has `memories.manage_own`, and that you started the session on the web
+    or in a Slack direct message. If the sidebar shows records "omitted for budget", the session
+    held more memories than fit; shorten or archive directives, or tighten fact descriptions.
 
 </Accordion>
   <Accordion title="The agent says personal memory is unavailable">
     Cause: the agent is working on someone else's prompt; someone else has prompted the session,
     or one that started it; the session was started by an automation or an integration other than
-    a Slack direct message; or your personal memory switch is off. Fix: turn the switch on if it's
-    off, then start a new session and prompt it yourself.
+    a Slack direct message; your personal memory switch is off; or your role lacks
+    `memories.manage_own`. Fix: turn the switch on if it's off, or ask an administrator for the
+    permission, then start a new session and prompt it yourself.
 
 </Accordion>
 </Accordions>

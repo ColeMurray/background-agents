@@ -247,6 +247,9 @@ can make HTTP requests and maintain WebSocket connections can participate.
   attachments, classifies repos, and posts results
 - **GitHub**: Bot that reviews PRs and responds to PR `@mentions`
 - **Linear**: Agent workflow that starts sessions from Linear issue activity
+- **MCP server**: Local stdio server (`packages/mcp-server`) that lets Claude Code or another MCP
+  client read sessions and automation runs, create and trigger automations, and import skills over
+  HTTP with a personal access token
 
 All clients see the same session state. Send a prompt from Slack or GitHub, watch the results on
 web. This works because state lives in the control plane, not the client.
@@ -400,8 +403,8 @@ baked into images. Changing a pinned version causes an install until the image i
 
 Unversioned packages and tags such as `latest` are refreshed once per sandbox boot. Successful
 installs are reused across OpenCode process restarts within that boot, but not across snapshot
-restores. Remote MCP servers are unaffected, and server commands, arguments, and credentials are
-passed through unchanged. Unsupported `npx` option forms are left to `npx` without eager
+restores. Remote MCP servers are unaffected, and this optimization does not change server commands,
+arguments, or credentials. Unsupported `npx` option forms are left to `npx` without eager
 installation.
 
 The `mcp.package_cache` event reports hit/miss counts and lookup time; `mcp.packages_installed`
@@ -597,16 +600,19 @@ When you ask the agent to create a PR:
 4. PR appears as created by you, not a bot
 
 If you signed in another way (e.g. Google) you have no GitHub OAuth token, so the control plane
-pushes the branch with the shared GitHub App credentials and returns a manual `pull/new` URL — the
-PR is attributed to the App bot rather than to you.
+opens the PR with the shared GitHub App credentials — the PR is attributed to the App bot rather
+than to you.
 
 This maintains proper code review workflows—you can't approve your own PRs.
 
-A PR opened while processing an automation run's own prompt (scheduled, webhook-triggered, or
-manually triggered with **Run now**) is created with the GitHub App, even though the prompt carries
-the owner's or requester's identity for commit attribution: unattended work is the App's, so that
-person can review and approve it. PRs opened from child sessions the run's agent spawns still use
-the prompting identity's OAuth.
+A PR opened while processing an automation run's own prompt (from any trigger, or manually triggered
+with **Trigger Now**) is created with the GitHub App, even though the prompt carries the owner's or
+requester's identity for commit attribution: unattended work is the App's, so that person can review
+and approve it. PRs opened from child sessions the run's agent spawns, or by a person prompting into
+the run's session, still use the prompting identity's OAuth; an open PR on the same branch is
+updated and keeps its author. Because the App authors these PRs, the GitHub bot can only comment
+when it reviews them, and the PR Opened event for them carries the App bot as actor, so an event
+automation's **Actor** condition that names the owner no longer matches it.
 
 ---
 

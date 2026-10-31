@@ -4,7 +4,7 @@ description: Sign in to an existing OpenInspect deployment, start a session agai
 audience: user
 owner: web
 status: published
-lastReviewed: "2026-10-26"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/web/src/hooks/use-prompt-draft.ts
   - packages/web/src/lib/prompt-drafts.ts
@@ -34,7 +34,7 @@ This page takes you from signing in to reading the agent's first result in one s
 ## Prerequisites
 
 - Your team already runs an OpenInspect deployment and you have its URL.
-- You have been admitted to the workspace. Admission is configured by the operator (allowed GitHub users, email addresses, email domains, or GitHub organization membership).
+- You have been admitted to the workspace. Admission is configured by the operator, and by workspace Owners and Administrators under Settings › Workspace access › **Who can sign in** (allowed GitHub users, email addresses, email domains, or GitHub organization membership).
 - Your role is Member or higher. Viewers can read sessions they have access to but cannot create or prompt them. Workspace roles and team membership are separate; see [Workspace access](/administration/workspace-access).
 - For a GitHub-backed deployment, the GitHub App is installed on the repository you want to work in. If it is not, the repository does not appear in the picker. Other source-control providers use their configured repository access.
 - For a team-owned session, you are a current member of an active team and that team has grants for every selected repository. A newly created team starts without repository grants; ask a team lead or workspace administrator to configure them under [Teams](/administration/teams).
@@ -46,7 +46,7 @@ This page takes you from signing in to reading the agent's first result in one s
 
 Open the deployment URL. The sign-in page shows only the providers the operator configured: GitHub, Google, or both.
 
-Sign-in has two stages. First your identity provider verifies who you are. Then the deployment's admission rules decide whether you may join the workspace. If you land on the **Access Denied** page ("Your account is not authorized to use this application."), your identity was verified but admission failed. Contact an administrator of the deployment; there is nothing to fix on your side.
+Sign-in has two stages. First your identity provider verifies who you are. Then the workspace's admission rules decide whether you may join the workspace. If you land on the **Access Denied** page ("Your account is not authorized to use this application."), your identity was verified but admission failed. Contact an administrator of the deployment; there is nothing to fix on your side.
 
 New users receive the Member role. For GitHub pull requests, signing in with GitHub lets them be authored as you when your OAuth token is available at creation time (see [Your first pull request](/getting-started/first-pull-request)).
 
@@ -178,7 +178,7 @@ If the result is not what you wanted, send a follow-up in the same session. The 
 
 | Symptom                                                                 | Cause                                                                                             | Fix                                                                                                                  |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Access Denied** page after signing in                                 | Your identity was verified but the deployment's admission rules did not include you.              | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again. |
+| **Access Denied** page after signing in                                 | Your identity was verified but the workspace's admission rules did not include you.               | Ask a workspace Owner or Administrator to add you (GitHub user, email, domain, or organization), then sign in again. |
 | "You don't have permission to create sessions."                         | Your role is Viewer.                                                                              | Ask a workspace Owner or Administrator to change your role under Settings › Workspace access.                        |
 | "No repositories found."                                                | The selected team lacks grants, or the source-control integration has no accessible repositories. | Check team context and ask a lead or administrator to check grants; ask the operator to check installation access.   |
 | "Join a team to create a session." or `team_required`                   | Workspace policy requires an owning team.                                                         | Join an eligible team or ask its lead to add you, then choose it in the composer.                                    |

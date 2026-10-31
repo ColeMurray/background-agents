@@ -4,7 +4,7 @@ description: Issue tokens that let tools such as the OpenInspect MCP server call
 audience: user
 owner: security
 status: published
-lastReviewed: "2026-10-30"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/shared/src/types/personal-access-tokens.ts
   - packages/control-plane/src/routes/personal-access-tokens.ts
@@ -12,6 +12,8 @@ relatedCode:
   - packages/control-plane/src/auth/personal-access-token.ts
   - packages/web/src/components/settings/personal-access-tokens-settings.tsx
   - packages/web/src/lib/personal-access-token-permissions.ts
+  - packages/web/src/components/settings/personal-access-token-permission-picker.tsx
+  - packages/control-plane/src/db/personal-access-token-policy.ts
 ---
 
 A personal access token is a credential you issue to yourself so a tool on your machine, such as the OpenInspect MCP server or a script, can call the OpenInspect API as you. Each token carries the permissions you grant it and nothing more.
@@ -20,8 +22,8 @@ A personal access token is a credential you issue to yourself so a tool on your 
 
 1. Open **Settings › Access tokens** and select **New token**.
 2. Name the token after the tool or machine that will use it, for example `Work laptop MCP server`.
-3. Choose when it expires: 7, 30, 90, or 180 days, or 1 year. Every token expires.
-4. Select its permissions. **Read-only** selects every read permission your role includes. Grant only what the tool needs.
+3. Choose when it expires: 7, 30, 90, or 180 days, or 1 year. Choices longer than your workspace's lifetime cap are left out, and a cap that isn't one of these is offered too. Every token expires.
+4. Select its permissions. **Read-only** selects every read permission your role includes and your workspace allows. Grant only what the tool needs.
 5. Select **Create token** and copy the token from the dialog.
 
 The token is shown once. OpenInspect stores only a hash of it, so nobody, including administrators, can show it to you again. If you lose it, revoke it and create another.
@@ -34,15 +36,26 @@ A token's permissions are always the overlap of the permissions you granted it a
 
 - If your role loses a permission, every token you hold loses it at the same moment.
 - If your account is suspended, your tokens stop working.
-- The picker lists only permissions your role includes. Workspace administration permissions, such as managing members, roles, secrets, and integrations, can never be granted to a token.
+- The picker lists only permissions your role includes and your workspace allows. Workspace administration permissions, such as managing members, roles, secrets, and integrations, can never be granted to a token.
+- **Manage skills** works only alongside **Read skills**, so selecting it selects **Read skills** too.
 
-A token also reaches only the parts of the API that accept tokens. Everything else refuses it, whatever it was granted. A token can never create, list, or revoke tokens, so a leaked token cannot issue itself a replacement.
+A token also reaches only the parts of the API that accept tokens: today, the session, automation, and skill routes the [MCP server](/integrations/mcp-server) uses. Everything else refuses it, whatever it was granted. A token can never create, list, or revoke tokens, so a leaked token cannot issue itself a replacement.
 
 Within a granted permission, your role still decides what you see. For example, an administrator's token with **Read sessions** can read the sessions that administrator can read.
 
+## Workspace policy
+
+Administrators can set a [workspace policy](/administration/personal-access-tokens) for tokens. It applies to tokens you already hold, not only to new ones:
+
+- When tokens are turned off, every token stops working and **New token** is hidden. Your tokens are not revoked; they work again once tokens are turned back on.
+- A lifetime cap ends a token once it is older than the cap, even if you created it for longer.
+- A permission limit narrows every token's permissions and what the picker offers.
+
+Administrators can also revoke any member's tokens.
+
 ## Manage your tokens
 
-**Settings › Access tokens** lists each token's name, the first characters of its value, its permissions, when it was last used, and when it expires. Last use is recorded to the minute.
+**Settings › Access tokens** lists each token's name, the first characters of its value, its permissions, when it was last used, and when it stops working, including an earlier end set by a workspace lifetime cap. Last use is recorded to the minute.
 
 Select **Revoke** to stop a token immediately. Revoking deletes the token; anything still using it gets `401 Unauthorized`.
 

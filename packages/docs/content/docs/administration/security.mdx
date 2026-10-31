@@ -4,7 +4,7 @@ description: The trust boundaries of an OpenInspect deployment, which tokens exi
 audience: admin
 owner: security
 status: published
-lastReviewed: "2026-10-04"
+lastReviewed: "2026-10-31"
 relatedCode:
   - packages/sandbox-runtime/src/sandbox_runtime/credentials/git_credential_helper.py
   - packages/sandbox-images/src/sandbox_images/configuration.py
@@ -27,6 +27,8 @@ relatedCode:
   - packages/control-plane/src/routes/team-secrets.ts
   - packages/control-plane/src/session/participant-service.ts
   - packages/sandbox-runtime/src/sandbox_runtime/gh-wrapper.sh
+  - packages/control-plane/src/auth/personal-access-token.ts
+  - packages/control-plane/src/mcp/authorization.ts
 ---
 
 This page summarizes the trust boundaries and operator decisions for an OpenInspect deployment. [Authentication and Authorization](https://github.com/ColeMurray/background-agents/blob/main/docs/AUTH.md) is the canonical guide to security, resource access, and credential boundaries.
@@ -43,7 +45,7 @@ Teams add internal access boundaries, not tenant isolation. A new team has no re
 
 ## Identity and admission
 
-Sign-in is GitHub, Google, or both. After the provider verifies identity and email, the deployment's admission rules decide whether the person joins: by GitHub username, verified email, verified email domain, or active membership in an allowed GitHub organization. Creating a new account through a bot also requires admission using the evidence the bot can attest. Existing bot actors and actors linking to an existing account keep that account's restrictions without repeating admission. Suspension is the immediate revocation tool. Details are in [Workspace access and roles](/administration/workspace-access).
+Sign-in is GitHub, Google, or both. After the provider verifies identity and email, admission rules from the deployment configuration and from Settings › Workspace access › **Who can sign in** decide whether the person joins: by GitHub username, verified email, verified email domain, or active membership in an allowed GitHub organization. Creating a new account through a bot also requires admission using the evidence the bot can attest. Existing bot actors and actors linking to an existing account keep that account's restrictions without repeating admission. Suspension is the immediate revocation tool. Details are in [Workspace access and roles](/administration/workspace-access).
 
 ## Roles are product capabilities
 
@@ -61,6 +63,8 @@ Being able to read a session does not grant sandbox or collaboration access. Pro
 | Sandbox auth token            | Authenticates sandbox-to-control-plane calls        | A single session                                                                              |
 | WebSocket token               | Authenticates a client's live connection            | A single session                                                                              |
 | Managed LLM token             | Short-lived OpenAI or xAI model access              | The provider account pinned to the session                                                    |
+| Personal MCP connection       | Lets the agent call a remote MCP server as the user | Kept in the control plane and added to that user's proxied calls; never in the sandbox        |
+| Personal access token         | Lets a member's local tool call the API as them     | Routes that accept tokens, within its grant, the owner's role, and workspace policy           |
 
 Where each credential lives, and what crosses each boundary:
 
@@ -121,7 +125,7 @@ Grant removal changes subsequent credential resolution, not immediate revocation
 Content that arrives from outside the workspace is treated as data, not instructions:
 
 - **GitHub.** Webhooks are verified and duplicate deliveries are deduplicated. Review prompts wrap the PR title, author, branches, and description as untrusted; comment-triggered prompts wrap the triggering comment. Review-thread file and diff context, and GitHub content the agent later reads itself, are not separately transformed. The bot ignores comments from its own configured login, not all bot-authored comments, and by default requires write, maintain, or admin repository access from the triggering user, or an explicit user allowlist.
-- **Slack.** Requests are verified. Bot tokens stay server-side and never reach sandboxes. Slack identity linking is best-effort and is not used to approve repository access. Channel message triggers mean any member of a watched channel can start a run, and the message text reaches the agent; prefer a Slack user allowlist and small, trusted channels.
+- **Slack.** Requests are verified. Bot tokens stay server-side and never reach sandboxes. Before acting for a Slack user, the bot links them to an account by their Slack profile email; a new user needs a readable email that passes admission. Linking is not used to approve repository access. Channel message triggers mean any member of a watched channel can start a run, and the message text reaches the agent; prefer a Slack user allowlist and small, trusted channels.
 - **Linear.** Webhooks are verified; client credentials and runtime tokens stay server-side. Issue titles, descriptions, comments, and agent prompts are sent to the coding agent, so do not put secrets in them.
 - **Inbound webhooks and PR feedback.** Automation webhook payloads and autofix feedback are wrapped as untrusted data before they reach the agent. See [Inbound webhooks](/automations/inbound-webhooks) and [GitHub](/integrations/github).
 

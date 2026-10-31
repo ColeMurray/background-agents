@@ -4,7 +4,7 @@ description: Automatic pull request reviews, @mention actions, PR Feedback Autof
 audience: team-owner
 owner: integrations
 status: published
-lastReviewed: "2026-10-27"
+lastReviewed: "2026-10-31"
 relatedCode:
   - docs/integrations/GITHUB.md
   - packages/shared/src/types/integrations.ts
@@ -242,7 +242,7 @@ OpenInspect can sign agent-created commits with one deployment-wide OpenSSH Ed25
 - **Commit author:** the prompting user, or OpenInspect when unavailable.
 - **Committer and signer:** a dedicated signing account.
 - **Branch push:** the GitHub App.
-- **PR author:** the prompting user's OAuth identity when available.
+- **PR author:** the GitHub App for an automation run's own prompts; otherwise the prompting user's OAuth identity when available, else the App.
 - **What the signature proves:** it attests to the deployment, not to the attributed user, so GitHub vigilant mode shows such commits as **Partially verified**.
 - **Key handling:** private keys never reach a sandbox.
 
@@ -283,7 +283,9 @@ Setup, rotation, and limitations are covered in [Source control](/configure/sour
   <Accordion title="I see an eyes reaction but no follow-up">
     The reaction means the request was accepted. Output is posted by the agent, not by a callback,
     so the session may still be running or may have failed after acceptance. Open the web app to
-    inspect it.
+    inspect it. If no session exists, the person who triggered the bot may be unknown to
+    OpenInspect: the bot acts only for people who have already signed in on the web with GitHub, so
+    sign in once, then mention the bot again.
 
 </Accordion>
   <Accordion title="Review feedback did not resume the session">
