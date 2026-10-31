@@ -91,6 +91,15 @@ async function handleReplacePolicy(
     requestId: ctx.request_id,
     now: Date.now(),
   });
+  if (result.status === "actor_authorization_changed") {
+    return json(
+      {
+        error: "Actor authorization changed; reload and retry",
+        code: "actor_authorization_changed",
+      },
+      403
+    );
+  }
   if (result.status === "conflict") {
     const response = json(
       { error: "The policy changed; reload and retry", code: "policy_conflict" },
