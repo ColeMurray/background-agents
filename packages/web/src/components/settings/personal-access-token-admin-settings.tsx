@@ -120,7 +120,7 @@ function PolicySection() {
 
   async function save() {
     if (!editing) return;
-    if (editing.draft.allowedPermissions?.length === 0) {
+    if (editing.draft.enabled && editing.draft.allowedPermissions?.length === 0) {
       toast.error("Allow at least one permission, or turn tokens off instead");
       return;
     }

@@ -2,7 +2,11 @@ import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
 import type { BackgroundTaskScheduler, Env } from "../types";
-import { handleAppMention, handleDirectMessage } from "./message-handler";
+import {
+  handleAppMention,
+  handleDirectMessage,
+  handleUntaggedThreadReply,
+} from "./message-handler";
 import type { SlackEventPayload } from "./payload";
 
 /**
@@ -68,5 +72,7 @@ export async function handleSlackEvent(
     );
     return;
   }
-  if (event.type === "message") await handleChannelTrigger(event, env, traceId);
+  if (event.type !== "message") return;
+  if (await handleUntaggedThreadReply(event, env, traceId, scheduleBackground)) return;
+  await handleChannelTrigger(event, env, traceId);
 }

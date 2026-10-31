@@ -615,16 +615,17 @@ export class SessionMessageQueue {
         }
         return;
       }
+      if (this.messageRepository.getMessageStatus(message.id) !== "processing") return;
+      const currentTarget = this.wsManager.getSandboxCommandTarget();
       if (
         !this.mayDispatch() ||
-        this.messageRepository.getMessageStatus(message.id) !== "processing"
-      )
-        return;
-      const currentTarget = this.wsManager.getSandboxCommandTarget();
-      if (currentTarget.kind !== "dispatch" || currentTarget.socket !== sandboxWs) {
+        currentTarget.kind !== "dispatch" ||
+        currentTarget.socket !== sandboxWs
+      ) {
         // Preparation yields to bridge replacement and lifecycle changes.
         // Retry the unsent claim with fresh MCP context; never send on a
         // superseded socket or terminate its healthy replacement on failure.
+        // A checkpoint hold stops the pump until its lifecycle notification.
         this.messageRepository.updateMessageToPending(message.id);
         this.broadcastPromptQueue();
         await this.processMessageQueue();

@@ -44,9 +44,9 @@ export function createServer(client: ControlPlaneClient): McpServer {
           openWorldHint: true,
         },
       },
-      async (args: Record<string, unknown>) => {
+      async (args: Record<string, unknown>, extra) => {
         try {
-          const result = await tool.run(client, args);
+          const result = await tool.run(client.withSignal(extra.signal), args);
           return {
             content: [
               {

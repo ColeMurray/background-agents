@@ -783,11 +783,11 @@ operators may remove legacy keys after legacy-bound sessions are no longer neede
 > into Modal session sandboxes; a global secret of the same name takes precedence over it, and the
 > other providers read only the secret store.
 >
-> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Z.AI Coding Plan models
-> require `ZHIPU_API_KEY`, and OpenCode Zen and OpenCode Go models require `OPENCODE_API_KEY` (Go
-> also needs an active Go subscription on that key), as a global secret with any sandbox provider.
-> SuperGrok models require an xAI provider account or `XAI_API_KEY` mode and must be enabled under
-> **Settings > Models**.
+> **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, Kimi Coding Plan models
+> require `KIMI_API_KEY`, Z.AI Coding Plan models require `ZHIPU_API_KEY`, and OpenCode Zen and
+> OpenCode Go models require `OPENCODE_API_KEY` (Go also needs an active Go subscription on that
+> key), as a global secret with any sandbox provider. SuperGrok models require an xAI provider
+> account or `XAI_API_KEY` mode and must be enabled under **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

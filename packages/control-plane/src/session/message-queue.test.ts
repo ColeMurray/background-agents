@@ -431,6 +431,88 @@ describe("SessionMessageQueue", () => {
     }
   );
 
+  it.each([false, true])(
+    "releases only a still-owned claim after a temporary hold during MCP preparation (terminalized=%s)",
+    async (terminalized) => {
+      let dispatchAllowed = true;
+      const message = createMessage();
+      const entered = deferred<void>();
+      const prepared = deferred<ManagedMcpExecution>();
+      const prepare = vi.fn().mockImplementationOnce(() => {
+        entered.resolve();
+        return prepared.promise;
+      });
+      prepare.mockResolvedValue({
+        messageId: message.id,
+        revision: 2,
+        servers: [],
+        unavailable: [],
+      });
+      const h = buildQueue(() => dispatchAllowed, undefined, prepare);
+      const socket = { readyState: 1 } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(socket);
+      h.repository.getNextPendingMessage.mockImplementation(() =>
+        message.status === "pending" ? message : null
+      );
+      h.repository.getProcessingMessage.mockImplementation(() =>
+        message.status === "processing" ? { id: message.id } : null
+      );
+      h.repository.getMessageStatus.mockImplementation(() => message.status);
+      h.repository.startMessageProcessing.mockImplementation(() => {
+        if (message.status !== "pending") return false;
+        message.status = "processing";
+        return true;
+      });
+      h.repository.updateMessageToPending.mockImplementation(() => {
+        if (message.status === "processing") message.status = "pending";
+      });
+
+      const dispatch = h.queue.processMessageQueue();
+      await entered.promise;
+      expect(message.status).toBe("processing");
+      dispatchAllowed = false;
+      if (terminalized) message.status = "failed";
+      prepared.resolve({ messageId: message.id, revision: 1, servers: ["old"], unavailable: [] });
+      await dispatch;
+
+      expect(message.status).toBe(terminalized ? "failed" : "pending");
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledTimes(terminalized ? 0 : 1);
+      expect(h.broadcast).toHaveBeenCalledTimes(terminalized ? 0 : 1);
+      if (!terminalized)
+        expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.setAlarm).not.toHaveBeenCalled();
+      expect(h.broadcast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "sandbox_event" })
+      );
+      expect(h.broadcast).not.toHaveBeenCalledWith({
+        type: "processing_status",
+        isProcessing: true,
+      });
+
+      dispatchAllowed = true;
+      await h.queue.processMessageQueue();
+
+      if (terminalized) {
+        expect(message.status).toBe("failed");
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(h.wsManager.send).not.toHaveBeenCalled();
+      } else {
+        expect(message.status).toBe("processing");
+        expect(prepare).toHaveBeenCalledTimes(2);
+        expect(h.wsManager.send).toHaveBeenCalledExactlyOnceWith(
+          socket,
+          expect.objectContaining({ type: "prompt", messageId: message.id })
+        );
+        expect(h.wsManager.send.mock.calls[0][1]).not.toHaveProperty("managedMcp");
+        expect(h.setAlarm).toHaveBeenCalledOnce();
+      }
+      expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    }
+  );
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(

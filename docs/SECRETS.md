@@ -79,6 +79,7 @@ The most common example:
 | ------------------- | ----------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY` | Required for Claude models, unless the deployment configured a fleet-wide key (see below) |
 | `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                    |
+| `KIMI_API_KEY`      | Required for Kimi Coding Plan models with any sandbox provider                            |
 | `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                        |
 | `OPENCODE_API_KEY`  | Required for OpenCode Zen and OpenCode Go models with any sandbox provider                |
 
@@ -262,6 +263,7 @@ image as no less sensitive than the scope's secrets.
 | `OPENAI_API_KEY`             | Global                  | OpenAI API access when a session selects API-key mode                          |
 | `XAI_API_KEY`                | Global                  | xAI API access when a session selects API-key mode                             |
 | `DEEPSEEK_API_KEY`           | Global                  | DeepSeek API access                                                            |
+| `KIMI_API_KEY`               | Global                  | Kimi Coding Plan membership access                                             |
 | `ZHIPU_API_KEY`              | Global                  | Z.AI Coding Plan GLM access                                                    |
 | `OPENCODE_API_KEY`           | Global                  | OpenCode Zen and OpenCode Go access                                            |
 | `OPENAI_OAUTH_REFRESH_TOKEN` | Global/repo/environment | Legacy OpenAI Codex via ChatGPT subscription ([setup guide](OPENAI_MODELS.md)) |
@@ -280,10 +282,10 @@ image as no less sensitive than the scope's secrets.
 If you see "Model not found" errors, verify the selected provider authentication mode first. For
 provider-account mode, verify the account and model entitlement. For API-key mode, add the required
 key to the session's secret scope. OpenAI uses `OPENAI_API_KEY`; xAI uses `XAI_API_KEY`; Claude uses
-`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Z.AI Coding Plan uses `ZHIPU_API_KEY`;
-OpenCode Zen and OpenCode Go both use `OPENCODE_API_KEY`, and an `opencode-go/*` model additionally
-needs an active Go subscription on that key. For subscription authentication, follow the
-provider-account setup guidance in [OpenAI models](OPENAI_MODELS.md) or
+`ANTHROPIC_API_KEY`; DeepSeek uses `DEEPSEEK_API_KEY`; Kimi Coding Plan uses `KIMI_API_KEY`; Z.AI
+Coding Plan uses `ZHIPU_API_KEY`; OpenCode Zen and OpenCode Go both use `OPENCODE_API_KEY`, and an
+`opencode-go/*` model additionally needs an active Go subscription on that key. For subscription
+authentication, follow the provider-account setup guidance in [OpenAI models](OPENAI_MODELS.md) or
 [Grok models](GROK_MODELS.md).
 
 ### Secret not appearing in sandbox

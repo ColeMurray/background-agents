@@ -78,7 +78,8 @@ function fakeClient(handlers: {
   const post = vi.fn(async (path: string, body?: unknown, options?: unknown) =>
     handlers.post?.(path, body, options)
   );
-  return { client: { get, post } as unknown as ControlPlaneClient, get, post };
+  const client = { get, post, withSignal: () => client } as unknown as ControlPlaneClient;
+  return { client, get, post };
 }
 
 describe("tool surface", () => {

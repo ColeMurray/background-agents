@@ -280,6 +280,75 @@ describe("managed MCP transparent, single-attempt relay", () => {
       vi.useRealTimers();
     }
   });
+  it.each([
+    {
+      name: "revalidates authority after slow upstream headers before forwarding any JSON bytes",
+      headersDelayMs: MCP_STREAM_REVALIDATE_INTERVAL_MS + 1,
+      authorityEnds: true,
+      validations: 2,
+    },
+    {
+      name: "forwards JSON after slow upstream headers when authority is still active",
+      headersDelayMs: MCP_STREAM_REVALIDATE_INTERVAL_MS + 1,
+      authorityEnds: false,
+      validations: 2,
+    },
+    {
+      name: "does not revalidate JSON within the authority freshness interval",
+      headersDelayMs: MCP_STREAM_REVALIDATE_INTERVAL_MS - 1,
+      authorityEnds: true,
+      validations: 1,
+    },
+  ])("$name", async ({ headersDelayMs, authorityEnds, validations }) => {
+    vi.useFakeTimers();
+    const complete = vi.fn();
+    const revalidate = vi.fn(async () => {});
+    let upstreamSignal: AbortSignal | undefined;
+    let resolveHeaders!: (response: Response) => void;
+    const headers = new Promise<Response>((resolve) => {
+      resolveHeaders = resolve;
+    });
+    let enterFetch!: () => void;
+    const fetchEntered = new Promise<void>((resolve) => {
+      enterFetch = resolve;
+    });
+    const fetcher = vi.fn(async (request: Request) => {
+      upstreamSignal = request.signal;
+      enterFetch();
+      return headers;
+    });
+    try {
+      const pending = relayMcpRequest(req(), {
+        ...options(),
+        revalidate,
+        fetcher,
+        onComplete: complete,
+      });
+      await fetchEntered;
+      expect(revalidate).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(headersDelayMs);
+      if (authorityEnds) revalidate.mockRejectedValue(new McpError("mcp_execution_inactive"));
+      resolveHeaders(
+        new Response('{"result":{}}', { headers: { "Content-Type": "application/json" } })
+      );
+      const response = await pending;
+      const reader = response.body!.getReader();
+      if (authorityEnds && validations === 2) {
+        await expect(reader.read()).rejects.toThrow("MCP stream authority ended");
+        expect(upstreamSignal?.aborted).toBe(true);
+      } else {
+        expect(new TextDecoder().decode((await reader.read()).value)).toBe('{"result":{}}');
+        expect(await reader.read()).toMatchObject({ done: true });
+        expect(upstreamSignal?.aborted).toBe(false);
+      }
+      expect(revalidate).toHaveBeenCalledTimes(validations);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("rejects a body its deadline cut off even while the clock lags the timer", async () => {
     // Only the timer is fake, so the wall clock has not reached the deadline when
     // cancellation resolves the pending read as done.

@@ -57,8 +57,13 @@ export function isDmDispatchable(event: {
  * bare `<@U…>` and piped `<@U…|display-name>` renderings. Slack user IDs are
  * `[A-Z0-9]+`, so the id is safe to splice into the pattern verbatim.
  */
-function mentionsUser(text: string, userId: string): boolean {
+export function mentionsUser(text: string, userId: string): boolean {
   return new RegExp(`<@${userId}(?:\\|[^>]*)?>`).test(text);
+}
+
+/** Returns true when `text` opens with a user mention, i.e. is addressed to that person. */
+export function startsWithUserMention(text: string): boolean {
+  return /^\s*<@[A-Z0-9]+(?:\|[^>]*)?>/.test(text);
 }
 
 /**

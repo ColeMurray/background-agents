@@ -1766,8 +1766,9 @@ that set no fleet-wide key in Terraform supply model credentials as secrets inst
 1. Go to **Settings > Secrets** in the web app
 2. Select **All Repositories (Global)** from the scope dropdown
 3. Add the key for your chosen provider (e.g., `ANTHROPIC_API_KEY` for Claude models or
-   `DEEPSEEK_API_KEY` for DeepSeek models, `ZHIPU_API_KEY` for Z.AI Coding Plan models, or
-   `OPENCODE_API_KEY` for OpenCode Zen and OpenCode Go models)
+   `DEEPSEEK_API_KEY` for DeepSeek models, `KIMI_API_KEY` for Kimi Coding Plan models,
+   `ZHIPU_API_KEY` for Z.AI Coding Plan models, or `OPENCODE_API_KEY` for OpenCode Zen and OpenCode
+   Go models)
 4. Click **Save**
 
 See [Secrets Management](SECRETS.md) for more on global and repository secrets.

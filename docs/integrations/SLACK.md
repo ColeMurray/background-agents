@@ -292,9 +292,54 @@ A top-level Slack request starts a new Slack thread. Reply in that thread to sen
 to the same Open-Inspect session. This applies in both channels and DMs: in a direct message, the
 follow-up still needs to be a thread reply, not a fresh top-level DM.
 
-Image attachments on interactive channel follow-ups must accompany an `@mention` of the bot. In a DM
-thread, no mention is needed. Watched-channel automation threads are text-only, as described in
-[Channel Message Triggers](#channel-message-triggers).
+In a channel thread, a follow-up and its images need an `@mention` of the bot, unless the thread is
+a [solo thread](#solo-threads). In a DM thread, no mention is needed. Watched-channel automation
+threads are text-only, as described in [Channel Message Triggers](#channel-message-triggers).
+
+### Solo threads
+
+A channel thread becomes a solo thread when your `@mention` of the bot starts its session and the
+bot's acknowledgement says: "You can reply without mentioning me while you are the only person in
+this thread." The bot adds that line only when it reads the thread as the session starts and finds
+that only you and bots have posted. In a solo thread, your replies send an instruction to this
+session without an `@mention`, including replies with images or forwarded messages.
+
+| Thread                                                     | Does a reply need an `@mention` to send an instruction? |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| Solo thread, reply from the person who started the session | No                                                      |
+| Another person has posted in the thread                    | Yes, for everyone, from then on                         |
+| Another person posted before the session started           | Yes; the acknowledgement has no solo line               |
+| DM thread                                                  | No                                                      |
+
+The bot reads the thread when the session starts, after any target choice, so a person who replied
+before then counts, even in a thread your mention started. When the bot notices another person in a
+solo thread, from their post or from the thread it reads for your next unmentioned reply, it posts a
+message in the thread for everyone: "This thread now has multiple people. From now on, mention @bot
+to send an instruction to this session." In rare cases, such as two people posting at the same
+moment, that message can appear twice. The thread then needs an `@mention` for the rest of its life,
+even if that person deletes their message. Other bots and Slackbot do not count as people.
+
+An unmentioned reply sends an instruction to the session only when all of these hold:
+
+- The thread has an open session. An unmentioned reply never starts a session.
+- The reply has something to run: text, an image, or a forwarded message. A reply with only flags or
+  only a file that is not an image is not sent.
+- The reply does not open by mentioning a teammate, as in `@alice can you check this?`.
+- The reply is a new message. Edits and replies also sent to the channel are not sent.
+- The bot can read the whole thread from Slack and sees no other person in it. The bot reads the
+  thread on every unmentioned reply. If Slack does not return the whole thread, the reply is not
+  sent.
+
+A reply that is sent gets the same :eyes: reaction as a mentioned follow-up and works the same way:
+`!model` and `!reasoning` apply, and delivery problems are reported in the thread. It does not also
+run channel message triggers. A reply that is not sent gets no response from the bot, except the
+message above when the thread shows another person, or the error for a malformed `!model` or
+`!reasoning` flag. It can still reach the session as thread context with your next instruction, and
+it can still match a [channel message trigger](#channel-message-triggers).
+
+Solo threads use the `message.channels` and `message.groups` event subscriptions and the
+`channels:history` and `groups:history` scopes that the bundled app manifest already includes. A
+thread stays solo for about 7 days after its session starts; after that, mention the bot again.
 
 Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
 that mapping expires, or if you reply outside the thread, the bot may start target selection again
@@ -605,8 +650,8 @@ days, so older threads may need a fresh request.
 
 Confirm the Slack app has the `files:read` bot scope and was reinstalled after that scope was added.
 Use PNG, JPEG, WebP, or GIF images no larger than 10 MiB, with at most six images in one message.
-For a channel request or interactive channel follow-up, `@mention` the bot; DMs do not need a
-mention.
+For a channel request or interactive channel follow-up, `@mention` the bot unless the thread is a
+[solo thread](#solo-threads); DMs do not need a mention.
 
 The bot may also need `channels:history` for public-channel messages or `groups:history` for
 private-channel messages so it can recover file details that Slack omits from `app_mention` events.

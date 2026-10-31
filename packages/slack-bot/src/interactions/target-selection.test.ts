@@ -14,6 +14,7 @@ import {
   type PendingRequest,
 } from "../pending-requests/pending-request-store";
 import {
+  announceLaunchedSession,
   loadAuthoritativeSlackLaunchSettings,
   startSessionAndSendPrompt,
 } from "../sessions/session-launcher";
@@ -52,6 +53,7 @@ vi.mock("../pending-requests/pending-request-store", () => ({
 }));
 
 vi.mock("../sessions/session-launcher", () => ({
+  announceLaunchedSession: vi.fn(async () => {}),
   loadAuthoritativeSlackLaunchSettings: vi.fn(),
   startSessionAndSendPrompt: vi.fn(async () => ({
     sessionId: "session-1",
@@ -412,6 +414,19 @@ describe("handleTargetSelection", () => {
     // let a concurrent click launch a second session.
     expect(vi.mocked(deletePendingRequest).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(updateMessage).mock.invocationCallOrder[0]
+    );
+    // The acknowledgement is announced for the person who made the request.
+    expect(announceLaunchedSession).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        channel: "C123",
+        threadTs: "111.222",
+        ackTs: "222.333",
+        ownerUserId: "U123",
+        session: expect.objectContaining({ sessionId: "session-1" }),
+      },
+      expect.any(Function),
+      "trace-1"
     );
   });
 

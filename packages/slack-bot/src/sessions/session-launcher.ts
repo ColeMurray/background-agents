@@ -1,4 +1,4 @@
-import { escapeMrkdwnText, postMessage } from "@open-inspect/shared/slack";
+import { escapeMrkdwnText, postMessage, updateMessage } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { ValidModel } from "@open-inspect/shared/models";
 import { checkHarnessCompatibility } from "@open-inspect/shared/harnesses";
@@ -10,14 +10,18 @@ import {
 } from "../attachments";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import {
+  buildWorkingMessage,
   formatDisabledModelLaunchRefusal,
   formatHarnessLaunchRefusal,
+  formatSessionDefaultsNotice,
+  scheduleStartingStatus,
   type LaunchModelSource,
 } from "../messages/blocks";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
-import type { Env } from "../types";
+import { armSoloThread } from "../solo-threads";
+import type { BackgroundTaskScheduler, Env } from "../types";
 import type { SlackActorIdentity } from "../user-identity";
 import {
   getAuthoritativeUserPreferences,
@@ -282,4 +286,35 @@ export async function startSessionAndSendPrompt(
     buildThreadSession(session.sessionId, target, model, reasoningEffort, messageTs, teamId)
   );
   return { sessionId: session.sessionId, sessionDefaults, differsFromUserDefaults };
+}
+
+/**
+ * Turn a launch's acknowledgement into its launched form. The thread is armed
+ * as a solo thread for the person who launched the session first, so the
+ * update carries the solo hint exactly when the thread was armed.
+ */
+export async function announceLaunchedSession(
+  env: Env,
+  launch: {
+    channel: string;
+    threadTs: string;
+    ackTs: string;
+    ownerUserId: string;
+    session: StartSessionResult;
+  },
+  scheduleBackground: BackgroundTaskScheduler,
+  traceId?: string
+): Promise<void> {
+  const { channel, threadTs, ackTs, ownerUserId, session } = launch;
+  const soloThreadHint = await armSoloThread(env, { channel, threadTs, ownerUserId }, traceId);
+  const launched = buildWorkingMessage({
+    sessionId: session.sessionId,
+    webAppUrl: env.WEB_APP_URL,
+    sessionDefaultsNotice: formatSessionDefaultsNotice(session),
+    soloThreadHint,
+  });
+  await updateMessage(env.SLACK_BOT_TOKEN, channel, ackTs, launched.text, {
+    blocks: launched.blocks,
+  });
+  scheduleStartingStatus(scheduleBackground, env, channel, threadTs, traceId);
 }
