@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   isPersonalAccessTokenGrantable,
@@ -25,6 +25,7 @@ import {
   personalAccessTokenPermissionLabel,
 } from "@/lib/personal-access-token-permissions";
 import { copyToClipboard } from "@/lib/format";
+import { useAuthSession } from "@/lib/auth-session";
 import {
   formatLastUsed,
   formatTokenDate,
@@ -80,7 +81,7 @@ function lifetimeLabel(days: number): string {
 /**
  * Where issuing a token stands. The phases exclude one another: a pending request cannot be
  * cancelled or replaced by another draft, so its response always belongs to the draft that sent it,
- * and the secret it returns stays on screen until the user acknowledges it.
+ * and the secret it returns stays on screen until the user acknowledges it or changes account.
  */
 type Issuance =
   | { phase: "idle" }
@@ -89,11 +90,25 @@ type Issuance =
   | { phase: "issued"; token: CreatedPersonalAccessToken };
 
 export function PersonalAccessTokensSettings() {
+  const { data: session } = useAuthSession();
+  const userId = session?.user.id;
+  // Local secrets and confirmation state must not survive an in-place account switch.
+  return userId ? <PersonalAccessTokensPanel key={userId} /> : null;
+}
+
+function PersonalAccessTokensPanel() {
   const { tokens, loading, error, mutate } = usePersonalAccessTokens();
   const { policy, error: policyError } = usePersonalAccessTokenPolicy();
   const { authorization } = useCurrentUserAuthorization();
   const [issuance, setIssuance] = useState<Issuance>({ phase: "idle" });
   const [revokeTarget, setRevokeTarget] = useState<PersonalAccessToken | null>(null);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
 
   // Leaving while a token is being created, or before its secret is acknowledged, loses the only
   // copy of the secret, so settings navigation, history traversal, and unload all ask first.
@@ -150,10 +165,12 @@ export function PersonalAccessTokensSettings() {
         permissions: holdable.filter((permission) => draft.permissions.has(permission)),
       });
     } catch (cause) {
+      if (!active.current) return;
       toast.error(cause instanceof Error ? cause.message : "Failed to create access token");
       setIssuance({ phase: "editing", draft });
       return;
     }
+    if (!active.current) return;
     setIssuance({ phase: "issued", token: created });
     // The token exists now; a failed list refresh must not take its secret off screen.
     void mutate();
@@ -162,9 +179,11 @@ export function PersonalAccessTokensSettings() {
   async function revoke(token: PersonalAccessToken) {
     try {
       await revokePersonalAccessToken(token.id);
+      if (!active.current) return;
       toast.success(`Revoked ${token.name}`);
       await mutate();
     } catch (cause) {
+      if (!active.current) return;
       toast.error(cause instanceof Error ? cause.message : "Failed to revoke access token");
     }
   }

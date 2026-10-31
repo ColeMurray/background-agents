@@ -48,6 +48,12 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
     authorization: { permissions: hooks.permissions },
   }),
 }));
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({
+    data: { user: { id: "user-1" } },
+    status: "authenticated",
+  }),
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 expect.extend(matchers);
