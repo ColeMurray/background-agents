@@ -8,6 +8,7 @@ import {
   createPersonalAccessTokenRequestSchema,
   isPersonalAccessTokenFormat,
   isPersonalAccessTokenGrantable,
+  personalAccessTokenEffectiveExpiry,
   personalAccessTokenMaxLifetimeDays,
   personalAccessTokenPolicyAllows,
   personalAccessTokenPolicySchema,
@@ -124,6 +125,18 @@ describe("personal access token policy", () => {
   it("defaults the lifetime cap to the system maximum", () => {
     expect(personalAccessTokenMaxLifetimeDays(open)).toBe(PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS);
     expect(personalAccessTokenMaxLifetimeDays({ ...open, maxLifetimeDays: 30 })).toBe(30);
+  });
+
+  it("ends a token at its own expiry, or sooner under a lower lifetime cap", () => {
+    const day = 24 * 60 * 60 * 1000;
+    const token = { createdAt: 0, expiresAt: 90 * day };
+    expect(personalAccessTokenEffectiveExpiry(token, open)).toBe(90 * day);
+    expect(personalAccessTokenEffectiveExpiry(token, { ...open, maxLifetimeDays: 30 })).toBe(
+      30 * day
+    );
+    expect(personalAccessTokenEffectiveExpiry(token, { ...open, maxLifetimeDays: 180 })).toBe(
+      90 * day
+    );
   });
 
   it("allows every grantable permission without a ceiling, and never a withheld one", () => {

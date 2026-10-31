@@ -355,6 +355,22 @@ describe("PersonalAccessTokensSettings", () => {
     expect(screen.queryByLabelText("Create automations")).not.toBeInTheDocument();
   });
 
+  it("does not offer skill management when the policy withholds reading skills", async () => {
+    hooks.permissions = ["sessions.read", "skills.read", "skills.manage"];
+    hooks.policy = {
+      enabled: true,
+      maxLifetimeDays: null,
+      allowedPermissions: ["sessions.read", "skills.manage"],
+    };
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+
+    expect(screen.getByLabelText("Read sessions")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Read skills")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Manage skills")).not.toBeInTheDocument();
+  });
+
   it("shows the expiry the policy's lifetime cap imposes", () => {
     hooks.tokens = [{ ...TOKEN, createdAt: Date.now() - 40 * DAY_MS }];
     hooks.policy = { enabled: true, maxLifetimeDays: 30, allowedPermissions: null };

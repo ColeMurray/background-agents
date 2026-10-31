@@ -132,6 +132,22 @@ describe("the workspace token policy", () => {
     });
   });
 
+  it("refuses a ceiling that allows a permission without its prerequisite", async () => {
+    const response = await setPolicy({ allowedPermissions: ["sessions.read", "skills.manage"] });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_prerequisite_missing",
+      permission: "skills.manage",
+      requires: "skills.read",
+    });
+    expect((await policy()).revision).toBe(0);
+
+    const consistent = await setPolicy({
+      allowedPermissions: ["sessions.read", "skills.read", "skills.manage"],
+    });
+    expect(consistent.status).toBe(200);
+  });
+
   it("tells every user its rules, without the revision", async () => {
     await setPolicy({ maxLifetimeDays: 90 });
     const response = await serviceFetch(`${BASE}/personal-access-tokens/policy`, { as: MEMBER });

@@ -8,7 +8,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  PERSONAL_ACCESS_TOKEN_ERROR_CODES,
   personalAccessTokenPolicySchema,
+  unmetGrantPrerequisite,
   type PersonalAccessTokenPolicySnapshot,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokenPolicyStore } from "../db/personal-access-token-policy";
@@ -66,6 +68,20 @@ async function handleReplacePolicy(
   }
   const parsed = await parseBody(request, personalAccessTokenPolicySchema);
   if (parsed instanceof Response) return parsed;
+  // A ceiling that allows a permission without its prerequisite would never let a token use it.
+  const unmet =
+    parsed.allowedPermissions === null ? null : unmetGrantPrerequisite(parsed.allowedPermissions);
+  if (unmet) {
+    return json(
+      {
+        error: `A ceiling that allows ${unmet.permission} must also allow ${unmet.requires}`,
+        code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.prerequisiteMissing,
+        permission: unmet.permission,
+        requires: unmet.requires,
+      },
+      400
+    );
+  }
 
   const store = new PersonalAccessTokenPolicyStore(ctx.db);
   const result = await store.replace({

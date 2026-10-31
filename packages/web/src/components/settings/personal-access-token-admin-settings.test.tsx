@@ -10,6 +10,10 @@ import type {
   WorkspacePersonalAccessToken,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokenAdminSettings } from "./personal-access-token-admin-settings";
+import {
+  SettingsNavigationGuardProvider,
+  useConfirmSettingsNavigation,
+} from "./settings-navigation-guard";
 
 const hooks = vi.hoisted(() => ({
   policy: null as PersonalAccessTokenPolicySnapshot | null,
@@ -40,10 +44,14 @@ vi.mock("@/hooks/use-workspace-personal-access-tokens", () => ({
   revokeWorkspacePersonalAccessToken: hooks.revokeToken,
   revokeMemberPersonalAccessTokens: hooks.revokeMember,
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 beforeAll(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -75,6 +83,30 @@ const MEMBER_TOKEN: WorkspacePersonalAccessToken = {
   owner: { userId: "user-2", displayName: "Ada Member", email: "ada@example.com" },
 };
 
+/** Stands in for the settings navigation, which asks the guard before changing category. */
+function NavigationProbe({ onNavigate }: { onNavigate: (allowed: boolean) => void }) {
+  const confirmNavigation = useConfirmSettingsNavigation();
+  return (
+    <button type="button" onClick={() => onNavigate(confirmNavigation())}>
+      Other settings
+    </button>
+  );
+}
+
+function unloadPrevented(): boolean {
+  const event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+async function selectOnlyCeiling(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("radio", { name: /Only those selected/ }));
+  // Every grantable permission starts selected; clear them all.
+  for (const checkbox of screen.getAllByRole("checkbox")) {
+    if (checkbox.getAttribute("aria-checked") === "true") await user.click(checkbox);
+  }
+}
+
 describe("PersonalAccessTokenAdminSettings", () => {
   beforeEach(() => {
     hooks.policy = OPEN_POLICY;
@@ -85,12 +117,21 @@ describe("PersonalAccessTokenAdminSettings", () => {
       hooks.save,
       hooks.revokeToken,
       hooks.revokeMember,
+      toast.success,
+      toast.error,
     ])
       mock.mockReset();
   });
 
   it("saves a kill switch, lifetime cap, and permission ceiling against the loaded revision", async () => {
-    hooks.save.mockResolvedValue({ ...OPEN_POLICY, revision: 4 });
+    const saved = {
+      ...OPEN_POLICY,
+      enabled: false,
+      maxLifetimeDays: 30,
+      allowedPermissions: ["sessions.read" as const],
+      revision: 4,
+    };
+    hooks.save.mockResolvedValue({ status: "saved", policy: saved });
     const user = userEvent.setup();
     render(<PersonalAccessTokenAdminSettings />);
 
@@ -98,11 +139,7 @@ describe("PersonalAccessTokenAdminSettings", () => {
     expect(save).toBeDisabled();
     await user.click(screen.getByRole("switch", { name: "Allow personal access tokens" }));
     await user.click(screen.getByRole("radio", { name: /30 days/ }));
-    await user.click(screen.getByRole("radio", { name: /Only those selected/ }));
-    // Every grantable permission starts selected; narrow the ceiling to reads of sessions.
-    for (const checkbox of screen.getAllByRole("checkbox")) {
-      if (checkbox.getAttribute("aria-checked") === "true") await user.click(checkbox);
-    }
+    await selectOnlyCeiling(user);
     await user.click(screen.getByLabelText("Read sessions"));
     await user.click(save);
 
@@ -110,17 +147,95 @@ describe("PersonalAccessTokenAdminSettings", () => {
       { enabled: false, maxLifetimeDays: 30, allowedPermissions: ["sessions.read"] },
       3
     );
+    await waitFor(() =>
+      expect(hooks.mutatePolicy).toHaveBeenCalledWith(saved, { revalidate: false })
+    );
+    expect(toast.success).toHaveBeenCalledWith("Access token policy saved");
   });
 
   it("refuses an empty permission ceiling", async () => {
     const user = userEvent.setup();
     render(<PersonalAccessTokenAdminSettings />);
-    await user.click(screen.getByRole("radio", { name: /Only those selected/ }));
-    for (const checkbox of screen.getAllByRole("checkbox")) {
-      if (checkbox.getAttribute("aria-checked") === "true") await user.click(checkbox);
-    }
+    await selectOnlyCeiling(user);
     await user.click(screen.getByRole("button", { name: "Save policy" }));
     expect(hooks.save).not.toHaveBeenCalled();
+  });
+
+  it("allows a permission's prerequisites with it, and withdraws what needs a withdrawn one", async () => {
+    const user = userEvent.setup();
+    render(<PersonalAccessTokenAdminSettings />);
+    await selectOnlyCeiling(user);
+
+    await user.click(screen.getByLabelText("Manage skills"));
+    expect(screen.getByLabelText("Read skills")).toBeChecked();
+    await user.click(screen.getByLabelText("Read skills"));
+    expect(screen.getByLabelText("Manage skills")).not.toBeChecked();
+  });
+
+  it("shows the policy someone else saved rather than overwrite it", async () => {
+    hooks.save.mockResolvedValue({ status: "conflict" });
+    const user = userEvent.setup();
+    render(<PersonalAccessTokenAdminSettings />);
+
+    const enabled = screen.getByRole("switch", { name: "Allow personal access tokens" });
+    await user.click(enabled);
+    expect(enabled).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+
+    await waitFor(() => expect(hooks.mutatePolicy).toHaveBeenCalledWith());
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Someone else changed/));
+    // The edit is dropped, so the form shows the reloaded policy and Save is idle again.
+    expect(enabled).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save policy" })).toBeDisabled();
+  });
+
+  it("keeps unsaved edits when the policy revalidates", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<PersonalAccessTokenAdminSettings />);
+    await user.click(screen.getByRole("radio", { name: /90 days/ }));
+
+    hooks.policy = { ...OPEN_POLICY };
+    rerender(<PersonalAccessTokenAdminSettings />);
+    expect(screen.getByRole("radio", { name: /90 days/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save policy" })).toBeEnabled();
+  });
+
+  it("guards settings navigation and unload while the policy has unsaved changes", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const navigations: boolean[] = [];
+    const user = userEvent.setup();
+    render(
+      <SettingsNavigationGuardProvider>
+        <NavigationProbe onNavigate={(allowed) => navigations.push(allowed)} />
+        <PersonalAccessTokenAdminSettings />
+      </SettingsNavigationGuardProvider>
+    );
+
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(unloadPrevented()).toBe(false);
+
+    await user.click(screen.getByRole("switch", { name: "Allow personal access tokens" }));
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(unloadPrevented()).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
+    confirm.mockClear();
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(unloadPrevented()).toBe(false);
+    expect(navigations).toEqual([true, false, true]);
+  });
+
+  it("shows when each member's token stops working under the lifetime cap", () => {
+    hooks.policy = { ...OPEN_POLICY, maxLifetimeDays: 30 };
+    hooks.tokens = [{ ...MEMBER_TOKEN, createdAt: Date.now() - 40 * DAY_MS }];
+    render(<PersonalAccessTokenAdminSettings />);
+
+    const list = within(screen.getByRole("list", { name: "Members' access tokens" }));
+    expect(list.getByText("Expired")).toBeInTheDocument();
+    expect(list.getByText(/^Ada Member · Never used · Expired /)).toBeInTheDocument();
   });
 
   it("lists members' tokens with their owners and revokes one after confirmation", async () => {

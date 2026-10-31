@@ -6,13 +6,13 @@ import {
   isPersonalAccessTokenGrantable,
   PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES,
   PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH,
+  personalAccessTokenEffectiveExpiry,
   personalAccessTokenMaxLifetimeDays,
   personalAccessTokenPolicyAllows,
   withGrantPrerequisitesMet,
   type CreatedPersonalAccessToken,
   type PersonalAccessToken,
   type PersonalAccessTokenGrantablePermission,
-  type PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import {
   issuePersonalAccessToken,
@@ -28,7 +28,11 @@ import {
   personalAccessTokenPermissionLabel,
 } from "@/lib/personal-access-token-permissions";
 import { copyToClipboard } from "@/lib/format";
-import { formatFutureRelativeTime, formatRelativeTime } from "@/lib/time";
+import {
+  formatLastUsed,
+  formatTokenDate,
+  formatTokenExpiry,
+} from "@/lib/personal-access-token-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -50,7 +54,6 @@ import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 const LIFETIME_DAYS = [7, 30, 90, 180, 365] as const;
 const DEFAULT_LIFETIME_DAYS = 30;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface Draft {
   name: string;
@@ -71,13 +74,6 @@ function lifetimeLabel(days: number): string {
   return days === 1 ? "1 day" : `${days} days`;
 }
 
-/** When a token stops working: its own expiry, or sooner if the policy caps lifetimes lower. */
-function effectiveExpiry(token: PersonalAccessToken, policy: PersonalAccessTokenPolicy | null) {
-  if (!policy) return token.expiresAt;
-  const capped = token.createdAt + personalAccessTokenMaxLifetimeDays(policy) * MS_PER_DAY;
-  return Math.min(token.expiresAt, capped);
-}
-
 /**
  * Where issuing a token stands. The phases exclude one another: a pending request cannot be
  * cancelled or replaced by another draft, so its response always belongs to the draft that sent it,
@@ -88,21 +84,6 @@ type Issuance =
   | { phase: "editing"; draft: Draft }
   | { phase: "issuing"; draft: Draft }
   | { phase: "issued"; token: CreatedPersonalAccessToken };
-
-/** How a token list describes a token's last use. */
-export function formatLastUsed(lastUsedAt: number | null): string {
-  if (lastUsedAt === null) return "Never used";
-  const elapsed = formatRelativeTime(lastUsedAt);
-  return elapsed === "now" ? "Last used just now" : `Last used ${elapsed} ago`;
-}
-
-function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 export function PersonalAccessTokensSettings() {
   const { tokens, loading, error, mutate } = usePersonalAccessTokens();
@@ -240,7 +221,9 @@ export function PersonalAccessTokensSettings() {
             <TokenRow
               key={token.id}
               token={token}
-              expiresAt={effectiveExpiry(token, policy)}
+              expiresAt={
+                policy ? personalAccessTokenEffectiveExpiry(token, policy) : token.expiresAt
+              }
               onRevoke={() => setRevokeTarget(token)}
             />
           ))}
@@ -444,7 +427,8 @@ function TokenRow({
   expiresAt: number;
   onRevoke: () => void;
 }) {
-  const expired = expiresAt <= Date.now();
+  const now = Date.now();
+  const expired = expiresAt <= now;
   return (
     <li className="rounded-md border border-border bg-card px-4 py-3">
       <div className="flex items-start justify-between gap-3">
@@ -455,10 +439,8 @@ function TokenRow({
             {expired && <Badge className="bg-destructive-muted text-destructive">Expired</Badge>}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Created {formatDate(token.createdAt)} · {formatLastUsed(token.lastUsedAt)} ·{" "}
-            {expired
-              ? `Expired ${formatDate(expiresAt)}`
-              : `Expires ${formatFutureRelativeTime(expiresAt)}`}
+            Created {formatTokenDate(token.createdAt)} · {formatLastUsed(token.lastUsedAt)} ·{" "}
+            {formatTokenExpiry(expiresAt, now)}
           </p>
           <ul className="mt-2 flex flex-wrap gap-1" aria-label={`${token.name} permissions`}>
             {token.permissions.map((permission) => (

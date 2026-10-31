@@ -363,7 +363,9 @@ default, delegable to custom roles) and a human browser session:
 
 The policy (`enabled`, `maxLifetimeDays`, `allowedPermissions`) is checked at authentication, so it
 applies to existing tokens at once: disabled refuses every token with `401`, a lower lifetime cap
-ends tokens older than it, and a permission ceiling narrows every grant. A policy change writes
+ends tokens older than it, and a permission ceiling narrows every grant. A ceiling that allows a
+permission must also allow its prerequisites (`skills.manage` needs `skills.read`), or the update is
+refused with `400 permission_prerequisite_missing`. A policy change writes
 `workspace.personal_access_token_policy_updated` in the same transaction as the change.
 
 ### Audit Events

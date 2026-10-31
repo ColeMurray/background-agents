@@ -251,6 +251,22 @@ export function personalAccessTokenMaxLifetimeDays(policy: PersonalAccessTokenPo
   return policy.maxLifetimeDays ?? PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * When a token stops working: its own expiry, or sooner when the policy caps lifetimes below it.
+ * Authentication refuses a token from this moment, and token lists show it as the expiry.
+ */
+export function personalAccessTokenEffectiveExpiry(
+  token: { readonly createdAt: number; readonly expiresAt: number },
+  policy: PersonalAccessTokenPolicy
+): number {
+  return Math.min(
+    token.expiresAt,
+    token.createdAt + personalAccessTokenMaxLifetimeDays(policy) * MS_PER_DAY
+  );
+}
+
 /** Whether the policy lets a token hold a permission. Withheld permissions are never allowed. */
 export function personalAccessTokenPolicyAllows(
   policy: PersonalAccessTokenPolicy,

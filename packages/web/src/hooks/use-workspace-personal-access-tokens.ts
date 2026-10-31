@@ -72,24 +72,27 @@ export function useWorkspacePersonalAccessTokens() {
   };
 }
 
-/**
- * Replaces the policy if it is still at `revision`. A 412 means someone else changed it first;
- * the caller should reload rather than overwrite their change.
- */
+export type SavePersonalAccessTokenPolicyResult =
+  | { status: "saved"; policy: PersonalAccessTokenPolicySnapshot }
+  /** Someone else changed the policy since `revision`; reload it rather than overwrite theirs. */
+  | { status: "conflict" };
+
+/** Replaces the policy if it is still at `revision`. Other refusals throw with their message. */
 export async function saveWorkspacePersonalAccessTokenPolicy(
   policy: PersonalAccessTokenPolicy,
   revision: number
-): Promise<PersonalAccessTokenPolicySnapshot> {
+): Promise<SavePersonalAccessTokenPolicyResult> {
   const response = await browserApiFetch(POLICY_KEY, {
     method: "PUT",
     headers: { "Content-Type": "application/json", "If-Match": `"pat-policy-${revision}"` },
     body: JSON.stringify(policy),
   });
-  if (response.status === 412) {
-    throw new Error("Someone else changed the policy; reload it and try again");
-  }
+  if (response.status === 412) return { status: "conflict" };
   if (!response.ok) throw new Error(await errorMessage(response, "Failed to save the policy"));
-  return personalAccessTokenPolicySnapshotSchema.parse(await response.json());
+  return {
+    status: "saved",
+    policy: personalAccessTokenPolicySnapshotSchema.parse(await response.json()),
+  };
 }
 
 export async function revokeWorkspacePersonalAccessToken(id: string): Promise<void> {

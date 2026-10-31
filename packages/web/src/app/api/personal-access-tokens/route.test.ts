@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET, POST } from "./route";
 import { DELETE } from "./[id]/route";
+import { GET as getPolicy } from "./policy/route";
 
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
@@ -51,6 +52,24 @@ describe("personal access token relays", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/personal-access-tokens", undefined, {
       timeoutMs: undefined,
     });
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("reads the workspace policy's rules, privately", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ enabled: true }));
+
+    const response = await getPolicy(
+      new NextRequest("http://localhost/api/personal-access-tokens/policy"),
+      noParams
+    );
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/personal-access-tokens/policy",
+      undefined,
+      {
+        timeoutMs: undefined,
+      }
+    );
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 

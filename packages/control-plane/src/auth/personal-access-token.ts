@@ -10,7 +10,7 @@ import {
   isPersonalAccessTokenFormat,
   PERSONAL_ACCESS_TOKEN_DISPLAY_CHARS,
   PERSONAL_ACCESS_TOKEN_PREFIX,
-  personalAccessTokenMaxLifetimeDays,
+  personalAccessTokenEffectiveExpiry,
   personalAccessTokenPolicyAllows,
   type PersonalAccessTokenPolicy,
 } from "@open-inspect/shared/types/personal-access-tokens";
@@ -44,8 +44,6 @@ export interface PersonalAccessTokenPolicySource {
   get(): Promise<PersonalAccessTokenPolicy>;
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
 export type PersonalAccessTokenAuthentication =
   | { kind: "authenticated"; credential: PersonalAccessTokenCredential }
   /** Unknown, expired, or past the policy's lifetime cap; reported identically to the caller. */
@@ -68,8 +66,7 @@ export async function authenticatePersonalAccessToken(
   const [policy, credential] = await Promise.all([policies.get(), tokens.findByToken(token)]);
   if (!policy.enabled) return { kind: "disabled" };
   if (!credential) return { kind: "rejected" };
-  const cappedAt = credential.createdAt + personalAccessTokenMaxLifetimeDays(policy) * MS_PER_DAY;
-  if (Math.min(credential.expiresAt, cappedAt) <= now) return { kind: "rejected" };
+  if (personalAccessTokenEffectiveExpiry(credential, policy) <= now) return { kind: "rejected" };
   return {
     kind: "authenticated",
     credential: {

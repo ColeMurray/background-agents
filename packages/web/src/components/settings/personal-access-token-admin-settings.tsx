@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import {
+  PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES,
   PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS,
+  personalAccessTokenEffectiveExpiry,
+  withGrantPrerequisitesMet,
   type PersonalAccessTokenGrantablePermission,
   type PersonalAccessTokenPolicy,
   type WorkspacePersonalAccessToken,
@@ -21,8 +24,7 @@ import {
   PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER,
   personalAccessTokenPermissionLabel,
 } from "@/lib/personal-access-token-permissions";
-import { formatFutureRelativeTime } from "@/lib/time";
-import { formatLastUsed } from "./personal-access-tokens-settings";
+import { formatLastUsed, formatTokenExpiry } from "@/lib/personal-access-token-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,6 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 /** Lifetime caps an administrator can choose; null leaves the system maximum of one year. */
 const LIFETIME_CAPS = [null, 180, 90, 30, 7] as const;
@@ -48,6 +51,15 @@ type Revocation =
 
 function ownerLabel(owner: WorkspacePersonalAccessToken["owner"]): string {
   return owner.displayName ?? owner.email ?? owner.userId;
+}
+
+/** The rules of a policy snapshot, without its revision and authorship. */
+function rulesOf(policy: PersonalAccessTokenPolicy): PersonalAccessTokenPolicy {
+  return {
+    enabled: policy.enabled,
+    maxLifetimeDays: policy.maxLifetimeDays,
+    allowedPermissions: policy.allowedPermissions,
+  };
 }
 
 function samePolicy(a: PersonalAccessTokenPolicy, b: PersonalAccessTokenPolicy): boolean {
@@ -66,61 +78,68 @@ export function PersonalAccessTokenAdminSettings() {
 
 function PolicySection() {
   const { policy, loading, error, mutate } = useWorkspacePersonalAccessTokenPolicy();
-  const [draft, setDraft] = useState<PersonalAccessTokenPolicy | null>(null);
+  // Unsaved edits, held apart from the loaded policy so a revalidation never replaces them. Null
+  // while the form shows the saved policy.
+  const [edits, setEdits] = useState<PersonalAccessTokenPolicy | null>(null);
   const [saving, setSaving] = useState(false);
+  const saved = policy ? rulesOf(policy) : null;
+  const dirty = edits !== null && saved !== null && !samePolicy(edits, saved);
 
-  useEffect(() => {
-    if (policy) {
-      setDraft({
-        enabled: policy.enabled,
-        maxLifetimeDays: policy.maxLifetimeDays,
-        allowedPermissions: policy.allowedPermissions,
-      });
-    }
-  }, [policy]);
+  // A policy edit is easy to lose and decides what every member's tokens can do, so leaving with
+  // unsaved changes asks first, as the other workspace policies do.
+  useSettingsUnsavedChanges(dirty);
 
-  if (loading || (!draft && !error)) {
-    return <div className="text-sm text-muted-foreground">Loading...</div>;
-  }
-  if (error || !policy || !draft) {
+  if (loading) return <div className="text-sm text-muted-foreground">Loading...</div>;
+  if (error || !policy || !saved) {
     return <div className="text-sm text-destructive">Failed to load the access token policy.</div>;
   }
 
-  const dirty = !samePolicy(draft, {
-    enabled: policy.enabled,
-    maxLifetimeDays: policy.maxLifetimeDays,
-    allowedPermissions: policy.allowedPermissions,
-  });
+  const draft = edits ?? saved;
+  const revision = policy.revision;
   const ceiling = new Set(draft.allowedPermissions ?? []);
 
   async function save() {
-    if (!draft || !policy) return;
     if (draft.allowedPermissions?.length === 0) {
       toast.error("Allow at least one permission, or turn tokens off instead");
       return;
     }
     setSaving(true);
     try {
-      await mutate(await saveWorkspacePersonalAccessTokenPolicy(draft, policy.revision), {
-        revalidate: false,
-      });
+      const result = await saveWorkspacePersonalAccessTokenPolicy(draft, revision);
+      if (result.status === "conflict") {
+        // Show the policy someone else saved, rather than let a second save overwrite it unseen.
+        setEdits(null);
+        await mutate();
+        toast.error("Someone else changed the policy. Review it, then make your changes again.");
+        return;
+      }
+      await mutate(result.policy, { revalidate: false });
+      setEdits(null);
       toast.success("Access token policy saved");
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to save the policy");
-      await mutate();
     } finally {
       setSaving(false);
     }
   }
 
+  // Allowing a permission allows its prerequisites, and withdrawing a prerequisite withdraws what
+  // needs it: a ceiling that allowed one without the other would never let a token use it.
   function toggleCeiling(permission: PersonalAccessTokenGrantablePermission, allowed: boolean) {
-    if (!draft) return;
     const next = new Set(draft.allowedPermissions ?? []);
-    if (allowed) next.add(permission);
-    else next.delete(permission);
-    setDraft({
+    if (allowed) {
+      next.add(permission);
+      for (const prerequisite of PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES[permission] ?? []) {
+        next.add(prerequisite);
+      }
+    } else {
+      next.delete(permission);
+    }
+    setEdits({
       ...draft,
-      allowedPermissions: PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS.filter((p) => next.has(p)),
+      allowedPermissions: withGrantPrerequisitesMet(
+        PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS.filter((p) => next.has(p))
+      ),
     });
   }
 
@@ -148,7 +167,7 @@ function PolicySection() {
           <Switch
             id="access-tokens-enabled"
             checked={draft.enabled}
-            onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
+            onCheckedChange={(enabled) => setEdits({ ...draft, enabled })}
           />
         </div>
 
@@ -161,7 +180,7 @@ function PolicySection() {
                 name="access-token-lifetime-cap"
                 label={days === null ? "1 year" : `${days} days`}
                 checked={draft.maxLifetimeDays === days}
-                onChange={() => setDraft({ ...draft, maxLifetimeDays: days })}
+                onChange={() => setEdits({ ...draft, maxLifetimeDays: days })}
               />
             ))}
           </div>
@@ -176,14 +195,14 @@ function PolicySection() {
               name="access-token-ceiling"
               label="Any a token can hold"
               checked={draft.allowedPermissions === null}
-              onChange={() => setDraft({ ...draft, allowedPermissions: null })}
+              onChange={() => setEdits({ ...draft, allowedPermissions: null })}
             />
             <RadioCard
               name="access-token-ceiling"
               label="Only those selected"
               checked={draft.allowedPermissions !== null}
               onChange={() =>
-                setDraft({
+                setEdits({
                   ...draft,
                   allowedPermissions: draft.allowedPermissions ?? [
                     ...PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS,
@@ -232,17 +251,7 @@ function PolicySection() {
             {saving ? "Saving..." : "Save policy"}
           </Button>
           {dirty && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setDraft({
-                  enabled: policy.enabled,
-                  maxLifetimeDays: policy.maxLifetimeDays,
-                  allowedPermissions: policy.allowedPermissions,
-                })
-              }
-            >
+            <Button size="sm" variant="outline" onClick={() => setEdits(null)}>
               Discard changes
             </Button>
           )}
@@ -254,7 +263,10 @@ function PolicySection() {
 
 function TokensSection() {
   const { tokens, hasMore, loadMore, loading, error, mutate } = useWorkspacePersonalAccessTokens();
+  // The saved policy, so each token shows when it actually stops working under the lifetime cap.
+  const { policy } = useWorkspacePersonalAccessTokenPolicy();
   const [revocation, setRevocation] = useState<Revocation | null>(null);
+  const now = Date.now();
 
   async function revoke(target: Revocation) {
     try {
@@ -296,58 +308,63 @@ function TokensSection() {
         </div>
       ) : (
         <ul className="space-y-2" aria-label="Members' access tokens">
-          {tokens.map((token) => (
-            <li key={token.id} className="rounded-md border border-border bg-card px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-foreground">{token.name}</span>
-                    <code className="font-mono text-xs text-muted-foreground">
-                      {token.displayPrefix}…
-                    </code>
-                    {token.expiresAt <= Date.now() && (
-                      <Badge className="bg-destructive-muted text-destructive">Expired</Badge>
-                    )}
+          {tokens.map((token) => {
+            const expiresAt = policy
+              ? personalAccessTokenEffectiveExpiry(token, policy)
+              : token.expiresAt;
+            return (
+              <li key={token.id} className="rounded-md border border-border bg-card px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-foreground">{token.name}</span>
+                      <code className="font-mono text-xs text-muted-foreground">
+                        {token.displayPrefix}…
+                      </code>
+                      {expiresAt <= now && (
+                        <Badge className="bg-destructive-muted text-destructive">Expired</Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {ownerLabel(token.owner)} · {formatLastUsed(token.lastUsedAt)} ·{" "}
+                      {formatTokenExpiry(expiresAt, now)}
+                    </p>
+                    <ul
+                      className="mt-2 flex flex-wrap gap-1"
+                      aria-label={`${token.name} permissions`}
+                    >
+                      {token.permissions.map((permission) => (
+                        <li key={permission}>
+                          <Badge className="bg-muted text-muted-foreground">
+                            {personalAccessTokenPermissionLabel(permission)}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {ownerLabel(token.owner)} · {formatLastUsed(token.lastUsedAt)} · Expires{" "}
-                    {formatFutureRelativeTime(token.expiresAt)}
-                  </p>
-                  <ul
-                    className="mt-2 flex flex-wrap gap-1"
-                    aria-label={`${token.name} permissions`}
-                  >
-                    {token.permissions.map((permission) => (
-                      <li key={permission}>
-                        <Badge className="bg-muted text-muted-foreground">
-                          {personalAccessTokenPermissionLabel(permission)}
-                        </Badge>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Revoke ${token.name} of ${ownerLabel(token.owner)}`}
+                      onClick={() => setRevocation({ kind: "token", token })}
+                    >
+                      Revoke
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="subtle"
+                      size="xs"
+                      onClick={() => setRevocation({ kind: "member", owner: token.owner })}
+                    >
+                      Revoke all of {ownerLabel(token.owner)}&apos;s tokens
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    aria-label={`Revoke ${token.name} of ${ownerLabel(token.owner)}`}
-                    onClick={() => setRevocation({ kind: "token", token })}
-                  >
-                    Revoke
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    size="xs"
-                    onClick={() => setRevocation({ kind: "member", owner: token.owner })}
-                  >
-                    Revoke all of {ownerLabel(token.owner)}&apos;s tokens
-                  </Button>
-                </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
       {hasMore && (

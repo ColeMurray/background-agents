@@ -22,11 +22,11 @@ You need the **Manage personal access tokens** permission (`workspace.personal_a
 
 The policy applies to existing tokens the moment you save it, not only to new ones:
 
-| Setting                          | Effect                                                                                                                                               |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Allow personal access tokens** | Off refuses every token at once and stops members creating new ones. Tokens are not revoked: turning it back on restores them.                       |
-| **Longest lifetime**             | Tokens older than this stop working, even if they were issued for longer. New tokens cannot be issued for longer.                                    |
-| **Permissions tokens may hold**  | Narrows every token's grant to these permissions, and new tokens cannot be granted others. Workspace administration permissions are never available. |
+| Setting                          | Effect                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Allow personal access tokens** | Off refuses every token at once and stops members creating new ones. Tokens are not revoked: turning it back on restores them.                                                                                                              |
+| **Longest lifetime**             | Tokens older than this stop working, even if they were issued for longer. New tokens cannot be issued for longer.                                                                                                                           |
+| **Permissions tokens may hold**  | Narrows every token's grant to these permissions, and new tokens cannot be granted others. Workspace administration permissions are never available. Allowing **Manage skills** also allows **Read skills**, which a token needs to use it. |
 
 Turning tokens off is the fastest response to a suspected leak when you do not know which token leaked. Every policy change is recorded in the [audit log](/administration/audit-log) with the settings before and after, and saving refuses to overwrite a change someone else made since you loaded the page.
 
