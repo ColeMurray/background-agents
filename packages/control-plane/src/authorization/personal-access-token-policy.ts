@@ -10,9 +10,9 @@
  *   with their intersection with the token's grant, so every permission check downstream narrows
  *   without knowing tokens exist.
  *
- * For the second condition to mean anything, a route that accepts tokens must be gated by at least
- * one permission a token can be granted. `personalAccessTokenRouteViolation` holds every opted-in
- * route to that when the app is built.
+ * For the second condition to mean anything, every requirement of a route that accepts tokens must
+ * be decided by permissions a token can be granted. `personalAccessTokenRouteViolation` holds every
+ * opted-in route to that, one requirement at a time, when the app is built.
  *
  * Workspace-role visibility is not narrowed: an administrator's token holding `sessions.read` sees
  * the sessions its owner sees. The grant decides which kinds of resource a token reaches; the
@@ -46,35 +46,58 @@ const SESSION_ACTION_PERMISSIONS: Record<SessionAction, PermissionId | null> = {
 };
 
 /**
- * The permissions a requirement can be satisfied by, any one of which suffices. Empty when the
- * requirement is decided by membership or ownership rather than by a permission.
+ * How a grant narrows one requirement: the permissions that can satisfy it, any one of which
+ * suffices, or why a token cannot be admitted under it at all.
  */
-export function requirementPermissions(
+export type RequirementNarrowing =
+  | { kind: "permissions"; permissions: readonly PermissionId[] }
+  | { kind: "unsupported"; reason: string };
+
+function permissions(...ids: PermissionId[]): RequirementNarrowing {
+  return { kind: "permissions", permissions: ids };
+}
+
+/**
+ * Classify one requirement on its own. A requirement decided by ownership or membership is
+ * unsupported even beside a permission requirement: composing it with a grantable permission
+ * would let a token holding only that permission pass a check its grant cannot express.
+ */
+export function requirementNarrowing(
   requirement: RouteAuthorizationRequirement
-): readonly PermissionId[] {
+): RequirementNarrowing {
   switch (requirement.kind) {
     case "permission":
-      return [requirement.permission];
+      return permissions(requirement.permission);
     case "session": {
       const permission = SESSION_ACTION_PERMISSIONS[requirement.action];
-      return permission ? [permission] : [];
+      return permission
+        ? permissions(permission)
+        : {
+            kind: "unsupported",
+            reason: `session action "${requirement.action}" is decided by ownership, which no grant can narrow`,
+          };
     }
     case "automation":
-      if (requirement.operation === "read") return ["automations.read"];
+      if (requirement.operation === "read") return permissions("automations.read");
       return requirement.operation === "manage"
-        ? ["automations.manage.any", "automations.manage.own"]
-        : ["automations.trigger.any", "automations.trigger.own"];
+        ? permissions("automations.manage.any", "automations.manage.own")
+        : permissions("automations.trigger.any", "automations.trigger.own");
     case "environment":
-      return [`environments.${requirement.need}` as const];
+      return permissions(`environments.${requirement.need}` as const);
     case "team":
-      return [];
+      // Team admission refuses every principal but a browser user, so a token could never pass.
+      return {
+        kind: "unsupported",
+        reason: `team need "${requirement.need}" admits only a browser user`,
+      };
   }
 }
 
 /**
  * Why a route policy may not accept personal access tokens, or null when it may. A route that
  * declares `personalAccessTokens: "accept"` must authenticate the bearer, authorize an active
- * user, and require at least one permission, every one of which a token can be granted.
+ * user, and have at least one requirement, each of which is decided by permissions a token can
+ * be granted.
  */
 export function personalAccessTokenRouteViolation(policy: RouteAdmissionPolicy): string | null {
   if (!TOKEN_AUTHENTICATIONS.has(policy.authentication.kind)) {
@@ -83,13 +106,18 @@ export function personalAccessTokenRouteViolation(policy: RouteAdmissionPolicy):
   if (policy.authorization.kind !== "active-user") {
     return `authorization "${policy.authorization.kind}" requires no permission a grant could narrow`;
   }
-  const permissions = policy.authorization.allOf.flatMap(requirementPermissions);
-  if (permissions.length === 0) {
-    return "no requirement is decided by a permission, so a grant could not narrow it";
+  if (policy.authorization.allOf.length === 0) {
+    return "it has no requirement, so a grant could not narrow it";
   }
-  const withheld = permissions.find((permission) => !isPersonalAccessTokenGrantable(permission));
-  if (withheld) {
-    return `it requires "${withheld}", which is withheld from personal access tokens`;
+  for (const requirement of policy.authorization.allOf) {
+    const narrowing = requirementNarrowing(requirement);
+    if (narrowing.kind === "unsupported") return narrowing.reason;
+    const withheld = narrowing.permissions.find(
+      (permission) => !isPersonalAccessTokenGrantable(permission)
+    );
+    if (withheld) {
+      return `it requires "${withheld}", which is withheld from personal access tokens`;
+    }
   }
   return null;
 }

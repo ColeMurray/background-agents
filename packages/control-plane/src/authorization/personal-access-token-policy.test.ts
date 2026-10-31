@@ -10,6 +10,7 @@ import {
   requirePermission,
   requireSession,
   requireTeam,
+  sessionRequirement,
   SCM_AGNOSTIC_HANDLER_AUTHENTICATED_ROUTE,
   SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   SCM_AGNOSTIC_SANDBOX_FALLBACK_ROUTE,
@@ -21,7 +22,7 @@ import {
 } from "../routes/shared";
 import {
   personalAccessTokenRouteViolation,
-  requirementPermissions,
+  requirementNarrowing,
   restrictAuthorizationToGrant,
 } from "./personal-access-token-policy";
 
@@ -34,25 +35,39 @@ function policy(overrides: Partial<RouteAdmissionPolicy>): RouteAdmissionPolicy 
   };
 }
 
-describe("requirementPermissions", () => {
-  it("maps each requirement to the permissions that can satisfy it", () => {
-    expect(requirementPermissions(permissionRequirement("skills.read"))).toEqual(["skills.read"]);
-    expect(requirementPermissions(requireSession("read").allOf[0])).toEqual(["sessions.read"]);
-    expect(requirementPermissions(requireSession("sandbox").allOf[0])).toEqual([
-      "sessions.sandbox_access",
-    ]);
+describe("requirementNarrowing", () => {
+  it("maps each permission-decided requirement to the permissions that can satisfy it", () => {
+    expect(requirementNarrowing(permissionRequirement("skills.read"))).toEqual({
+      kind: "permissions",
+      permissions: ["skills.read"],
+    });
+    expect(requirementNarrowing(requireSession("read").allOf[0])).toEqual({
+      kind: "permissions",
+      permissions: ["sessions.read"],
+    });
+    expect(requirementNarrowing(requireSession("sandbox").allOf[0])).toEqual({
+      kind: "permissions",
+      permissions: ["sessions.sandbox_access"],
+    });
     expect(
-      requirementPermissions({ kind: "automation", operation: "trigger", automationIdParam: "id" })
-    ).toEqual(["automations.trigger.any", "automations.trigger.own"]);
-    expect(requirementPermissions({ kind: "environment", idParam: "id", need: "use" })).toEqual([
-      "environments.use",
-    ]);
+      requirementNarrowing({ kind: "automation", operation: "trigger", automationIdParam: "id" })
+    ).toEqual({
+      kind: "permissions",
+      permissions: ["automations.trigger.any", "automations.trigger.own"],
+    });
+    expect(requirementNarrowing({ kind: "environment", idParam: "id", need: "use" })).toEqual({
+      kind: "permissions",
+      permissions: ["environments.use"],
+    });
   });
 
-  it("maps ownership-only decisions to no permission", () => {
-    expect(requirementPermissions(requireSession("manageCollaborators").allOf[0])).toEqual([]);
-    expect(requirementPermissions(requireSession("changeVisibility").allOf[0])).toEqual([]);
-    expect(requirementPermissions(requireTeam("read").allOf[0])).toEqual([]);
+  it.each([
+    ["collaborator management", requireSession("manageCollaborators").allOf[0]],
+    ["visibility changes", requireSession("changeVisibility").allOf[0]],
+    ["team reads", requireTeam("read").allOf[0]],
+    ["team membership", requireTeam("member").allOf[0]],
+  ])("marks %s unsupported, since no grant decides them", (_label, requirement) => {
+    expect(requirementNarrowing(requirement)).toMatchObject({ kind: "unsupported" });
   });
 });
 
@@ -63,8 +78,8 @@ describe("personalAccessTokenRouteViolation", () => {
     ["an automation operation", requireAutomation("trigger")],
     ["an environment need", requireEnvironment("read")],
     [
-      "a team need beside a permission",
-      requireAll(requireTeam("member").allOf[0], permissionRequirement("sessions.read")),
+      "a session action beside a permission",
+      requireAll(sessionRequirement("read"), permissionRequirement("skills.read")),
     ],
   ])("accepts an active-user route gated by %s", (_label, authorization) => {
     expect(personalAccessTokenRouteViolation(policy({ authorization }))).toBeNull();
@@ -105,12 +120,56 @@ describe("personalAccessTokenRouteViolation", () => {
   });
 
   it.each([
-    ["team membership", requireTeam("read")],
-    ["session collaborator management", requireSession("manageCollaborators")],
-  ])("refuses a route decided only by %s", (_label, authorization) => {
-    expect(personalAccessTokenRouteViolation(policy({ authorization }))).toMatch(
-      /no requirement is decided by a permission/
+    ["team membership", requireTeam("read"), /team need "read" admits only a browser user/],
+    [
+      "session collaborator management",
+      requireSession("manageCollaborators"),
+      /session action "manageCollaborators" is decided by ownership/,
+    ],
+  ])("refuses a route decided only by %s", (_label, authorization, reason) => {
+    expect(personalAccessTokenRouteViolation(policy({ authorization }))).toMatch(reason);
+  });
+
+  // Composition must not erase an exclusion: a token granted only the companion permission would
+  // otherwise pass the ownership or membership check its grant cannot express.
+  it.each([
+    [
+      "collaborator management",
+      sessionRequirement("manageCollaborators"),
+      /session action "manageCollaborators" is decided by ownership/,
+    ],
+    [
+      "visibility changes",
+      sessionRequirement("changeVisibility"),
+      /session action "changeVisibility" is decided by ownership/,
+    ],
+    ["team membership", requireTeam("member").allOf[0], /team need "member" admits only/],
+  ])("refuses %s composed beside a grantable permission", (_label, requirement, reason) => {
+    for (const authorization of [
+      requireAll(permissionRequirement("sessions.read"), requirement),
+      requireAll(requirement, permissionRequirement("sessions.read")),
+    ]) {
+      expect(personalAccessTokenRouteViolation(policy({ authorization }))).toMatch(reason);
+    }
+  });
+
+  it("refuses a route with no requirement", () => {
+    expect(personalAccessTokenRouteViolation(policy({ authorization: requireAll() }))).toMatch(
+      /has no requirement/
     );
+  });
+
+  it("refuses a withheld permission composed beside a grantable one", () => {
+    expect(
+      personalAccessTokenRouteViolation(
+        policy({
+          authorization: requireAll(
+            permissionRequirement("sessions.read"),
+            permissionRequirement("global_secrets.manage")
+          ),
+        })
+      )
+    ).toMatch(/"global_secrets.manage", which is withheld/);
   });
 
   it("refuses a route requiring a permission withheld from tokens", () => {

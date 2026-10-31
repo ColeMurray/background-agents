@@ -684,9 +684,11 @@ Two independent checks bound what a token can do, and both must pass:
 - **The route accepts tokens.** A route admits tokens only when its policy declares
   `personalAccessTokens: "accept"`. Everywhere else a token is refused with
   `403 personal_access_token_not_accepted`, whatever other principals the route accepts. `admit()`
-  refuses to build an opted-in route unless it authorizes an active user and is gated by at least
-  one permission, every one of which a token may be granted. A grant can therefore always narrow
-  what an opted-in route allows.
+  refuses to build an opted-in route unless it authorizes an active user and every one of its
+  requirements is decided by permissions a token may be granted. Each requirement is checked on its
+  own, so a requirement decided by ownership (collaborator or visibility management) or by team
+  membership is refused even beside a grantable permission. A grant can therefore always narrow what
+  an opted-in route allows.
 - **The token holds the permission.** Admission loads the owner's effective authorization as usual,
   then narrows its permissions to the intersection with the token's grant. Every downstream
   permission, scoped-permission, and resource check reads the narrowed set, so a token never exceeds
