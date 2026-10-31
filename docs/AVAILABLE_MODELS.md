@@ -1,11 +1,11 @@
 # Available Models
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
-enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, OpenCode Go, Z.AI
-Coding Plan, and DeepSeek models are available but must be enabled in **Settings > Models**. OpenAI
-and SuperGrok subscriptions are configured in **Settings > Provider Accounts**; OpenCode Zen and
-OpenCode Go require `OPENCODE_API_KEY`; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSeek requires
-`DEEPSEEK_API_KEY`.
+enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, OpenCode Go, Kimi
+Coding Plan, Z.AI Coding Plan, and DeepSeek models are available but must be enabled in **Settings >
+Models**. OpenAI and SuperGrok subscriptions are configured in **Settings > Provider Accounts**;
+OpenCode Zen and OpenCode Go require `OPENCODE_API_KEY`; Kimi Coding Plan requires `KIMI_API_KEY`;
+Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
 
 OpenAI, xAI and Anthropic session selectors offer provider policy, any active connected account, and
 API-key mode. Automation editors can resolve defaults on each run or pin an account/API-key choice.
@@ -150,6 +150,22 @@ model behind three. Pick the entry whose billing you want.
 
 These models run on the OpenCode harness only — the Claude Agent harness runs Anthropic models
 exclusively.
+
+## Kimi Coding Plan
+
+Kimi Coding Plan models require a [Kimi Code membership API key](https://www.kimi.com/code/docs/en/)
+in `KIMI_API_KEY` as a global or repository secret. They run on OpenCode's built-in
+`kimi-code-plan-global` provider, which calls Kimi's overseas coding endpoint and uses the
+membership plan's allowance, separate from Kimi models billed through OpenCode Go.
+
+| Model ID                                          | Display name              | Description      | Reasoning efforts | Default effort |
+| ------------------------------------------------- | ------------------------- | ---------------- | ----------------- | -------------- |
+| `kimi-code-plan-global/k3.1-pro`                  | Kimi K3.1 Pro             | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-code-plan-global/k3.1-pro-highspeed`        | Kimi K3.1 Pro Highspeed   | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-code-plan-global/k3`                        | Kimi K3                   | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-code-plan-global/k3-256k`                   | Kimi K3 256K              | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-code-plan-global/kimi-for-coding`           | Kimi for Coding           | Kimi Coding Plan | Not supported     | N/A            |
+| `kimi-code-plan-global/kimi-for-coding-highspeed` | Kimi for Coding Highspeed | Kimi Coding Plan | Not supported     | N/A            |
 
 ## Z.AI Coding Plan
 

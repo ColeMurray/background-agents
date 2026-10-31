@@ -869,7 +869,7 @@ export class SandboxLifecycleManager
         this.launchContext.resolveRepositories(session);
       const imageScope = resolveImageBuildScope(session, repositories);
       const selectedImage = imageScope
-        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent.harness)
+        ? await this.launchContext.lookupImageBuildForSpawn(imageScope, repositories, agent)
         : null;
 
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;

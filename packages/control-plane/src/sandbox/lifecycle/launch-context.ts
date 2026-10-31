@@ -1,4 +1,4 @@
-import { getValidHarnessOrDefault, type HarnessId } from "@open-inspect/shared/harnesses";
+import { getValidHarnessOrDefault } from "@open-inspect/shared/harnesses";
 import { extractProviderAndModel, getValidModelOrDefault } from "@open-inspect/shared/models";
 import {
   omitUnsupportedSandboxSettings,
@@ -142,12 +142,17 @@ export class SandboxLaunchContext {
   async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
     repositories: SessionRepositoryInfo[],
-    harness: HarnessId
+    agent: Pick<AgentLaunchFields, "harness" | "provider">
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
       const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, harness);
+      const result = await evaluateImageBuildForSpawn(
+        image,
+        repositories,
+        agent.harness,
+        agent.provider
+      );
       if (result.outcome === "selected") {
         this.getLogger().info("Using prebuilt image", {
           event: "image_build.spawn_selected",

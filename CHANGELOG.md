@@ -4,6 +4,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## October 31, 2026
 
+**Kimi Coding Plan models.** Kimi K3.1 Pro, K3, Kimi for Coding, and their Highspeed and 256K
+variants run on the OpenCode harness with a Kimi Code membership API key saved as `KIMI_API_KEY`.
+Enable the opt-in Kimi Coding Plan group under Settings › Models. Requests use Kimi's coding
+endpoint and the membership plan's allowance, separate from OpenCode Go billing. Kimi sessions skip
+prebuilt images older than runtime generation 79, whose model catalog may predate these models.
+
 **Personal access tokens and an MCP server.** Issue tokens under **Settings › Access tokens** so
 local tools can call Open-Inspect as you. Each token expires, holds only the permissions you grant,
 and never exceeds your current role. The new `packages/mcp-server` uses a token to let Claude Code

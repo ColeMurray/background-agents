@@ -8,5 +8,8 @@
     "claude": 76,
     "opencode": 76,
     "codex": 79
+  },
+  "modelProviderMinimumGeneration": {
+    "kimi-code-plan-global": 79
   }
 }

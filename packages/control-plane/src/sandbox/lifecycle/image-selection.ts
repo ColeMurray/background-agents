@@ -80,12 +80,14 @@ export type ImageBuildSelectionResult =
 /**
  * Evaluate the latest ready image (or its absence) against the session's own
  * repository snapshot. Checks run cheapest-first; the floor is the session
- * harness's and fails closed on an unparseable runtime version.
+ * harness's and model provider's and fails closed on an unparseable runtime
+ * version.
  */
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
   sessionRepositories: FingerprintRepositoryInput[],
-  harness: HarnessId = DEFAULT_HARNESS
+  harness: HarnessId = DEFAULT_HARNESS,
+  modelProvider?: string
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
@@ -97,7 +99,7 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness);
+  const minimumRuntimeVersion = minCompatibleRuntimeVersionFor(harness, modelProvider);
   if (
     runtimeVersion === null ||
     runtimeVersion < minimumRuntimeVersion ||
