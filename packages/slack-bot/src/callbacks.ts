@@ -7,9 +7,14 @@ import { TOKEN_VALIDITY_MS, verifyCallbackFromControlPlane } from "@open-inspect
 import { SLACK_ACTIVITY_REFRESH_KIND } from "@open-inspect/shared/types/session-api";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import type { Env } from "./types";
+import {
+  isCompletionEnqueued,
+  isCompletionPosted,
+  markCompletionEnqueued,
+} from "./completion/delivery-ledger";
 import { createSlackCompletionJob, type SlackCompletionJob } from "./completion/job";
 import { createLogger } from "./logger";
+import type { Env } from "./types";
 import {
   closeThreadSession,
   isThreadClosureNoticeSent,
@@ -198,6 +203,21 @@ async function enqueueCompletion(
   if (await isThreadSessionClosed(c.env, job.channel, job.threadTs, job.sessionId)) {
     return c.json({ ok: true });
   }
+  const [posted, enqueued] = await Promise.all([
+    isCompletionPosted(c.env, job.deliveryId),
+    isCompletionEnqueued(c.env, job.deliveryId),
+  ]);
+  if (posted || enqueued) {
+    log.info("slack.completion.enqueue", {
+      trace_id: job.traceId,
+      delivery_id: job.deliveryId,
+      session_id: job.sessionId,
+      message_id: job.messageId,
+      outcome: "duplicate",
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ ok: true, deliveryId: job.deliveryId });
+  }
   try {
     await c.env.SLACK_COMPLETION_QUEUE.send(job, { contentType: "json" });
   } catch (error) {
@@ -212,6 +232,7 @@ async function enqueueCompletion(
     });
     return c.json({ error: "completion enqueue failed" }, 503);
   }
+  await markCompletionEnqueued(c.env, job.deliveryId);
 
   log.info("http.request", {
     trace_id: job.traceId,

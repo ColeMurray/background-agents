@@ -6,9 +6,17 @@ const slackCompletionContextSchema = z.object({
   reasoningEffort: z.string().optional(),
 });
 
+/**
+ * Stable id for one completion. Callback retries and queue redeliveries name
+ * the same delivery, including ids that contain the separator.
+ */
+export function slackCompletionDeliveryId(sessionId: string, messageId: string): string {
+  return `completion:${encodeURIComponent(sessionId)}:${encodeURIComponent(messageId)}`;
+}
+
 export const slackCompletionJobSchema = z.object({
   version: z.literal(1),
-  deliveryId: z.string().uuid(),
+  deliveryId: z.string().min(1),
   source: z.enum(["session", "automation"]),
   sessionId: z.string().min(1),
   messageId: z.string().min(1),
@@ -28,7 +36,7 @@ type SlackCompletionJobInput = Omit<SlackCompletionJob, "version" | "deliveryId"
 export function createSlackCompletionJob(input: SlackCompletionJobInput): SlackCompletionJob {
   return {
     version: 1,
-    deliveryId: crypto.randomUUID(),
+    deliveryId: slackCompletionDeliveryId(input.sessionId, input.messageId),
     ...input,
   };
 }
