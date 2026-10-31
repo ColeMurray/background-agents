@@ -116,14 +116,14 @@ class ReasoningTracker:
             self._part_steps[part_id] = (
                 step_id or self._step_ids.current(oc_message_id) or oc_message_id
             )
-        step_id = self._part_steps[part_id]
-        if not step_id:
+        pinned_step_id = self._part_steps[part_id]
+        if not pinned_step_id:
             return []
         if part_type == "reasoning":
-            run = self._fold_reasoning(part, part_id, step_id, is_new=is_new)
+            run = self._fold_reasoning(part, part_id, pinned_step_id, is_new=is_new)
         else:
-            run = self._end(step_id)
-        return [] if run is None else [run.to_event(self._message_id, step_id)]
+            run = self._end(pinned_step_id)
+        return [] if run is None else [run.to_event(self._message_id, pinned_step_id)]
 
     def reconcile(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         """Fold a fetched message's parts, each into the step it sits in.
@@ -132,9 +132,12 @@ class ReasoningTracker:
         stream missed still reach the timeline.
         """
         info = message.get("info", {})
-        step_id = info.get("id", "")
-        self.record_provider(step_id, info.get("providerID"))
+        oc_message_id = info.get("id", "")
+        self.record_provider(oc_message_id, info.get("providerID"))
         latest: dict[str, dict[str, Any]] = {}
+        # Parts before the first step-start sit in the message's own step, as
+        # `apply` places a part with no open step.
+        step_id = oc_message_id
         for part in message.get("parts", []):
             if part.get("type") == "step-start" and part.get("id"):
                 step_id = part["id"]

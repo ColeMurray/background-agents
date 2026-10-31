@@ -53,9 +53,16 @@ import { getSafeExternalUrl } from "@/lib/urls";
 
 const EMPTY_PROMPT_QUEUE: PromptQueueItem[] = [];
 const EMPTY_EXPANDED_SECTIONS: ReadonlySet<string> = new Set();
-const NOOP_TOGGLE_SECTION = () => {};
-const NOOP_TOGGLE_REASONING = () => {};
+const NOOP_TOGGLE = () => {};
 const MAX_AUTOFIX_RAW_FALLBACK_CHARS = 4_000;
+
+/** A copy of `set` with `key` added, or removed if it was there. */
+function toggleKey<T>(set: ReadonlySet<T>, key: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
 
 export function SessionTimeline({
   events,
@@ -167,12 +174,7 @@ export function SessionTimeline({
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
-    setExpandedToolCalls((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    setExpandedToolCalls((expanded) => toggleKey(expanded, key));
   }, []);
 
   const toggleToolGroup = useCallback((events: ToolCallEvent[]) => {
@@ -189,39 +191,21 @@ export function SessionTimeline({
   }, []);
 
   const toggleWorkGroup = useCallback((messageId: string) => {
-    setExpandedWorkGroups((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
-      return next;
-    });
+    setExpandedWorkGroups((expanded) => toggleKey(expanded, messageId));
   }, []);
 
   const toggleTaskSection = useCallback((key: string) => {
-    setExpandedTaskSections((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    setExpandedTaskSections((expanded) => toggleKey(expanded, key));
   }, []);
 
   const toggleReasoning = useCallback((key: string) => {
-    setExpandedReasoning((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    setExpandedReasoning((expanded) => toggleKey(expanded, key));
   }, []);
 
   const toggleAutofixSection = useCallback((messageId: string, key: string) => {
     setExpandedAutofixSections((expanded) => {
       const next = new Map(expanded);
-      const messageSections = new Set(expanded.get(messageId));
-      if (messageSections.has(key)) messageSections.delete(key);
-      else messageSections.add(key);
-      next.set(messageId, messageSections);
+      next.set(messageId, toggleKey(expanded.get(messageId) ?? EMPTY_EXPANDED_SECTIONS, key));
       return next;
     });
   }, []);
@@ -764,9 +748,9 @@ export const EventItem = memo(function EventItem({
   currentParticipantId,
   participantProfiles,
   expandedAutofixSections = EMPTY_EXPANDED_SECTIONS,
-  onToggleAutofixSection = NOOP_TOGGLE_SECTION,
+  onToggleAutofixSection = NOOP_TOGGLE,
   isReasoningExpanded = false,
-  onToggleReasoning = NOOP_TOGGLE_REASONING,
+  onToggleReasoning = NOOP_TOGGLE,
   onOpenMedia,
 }: {
   event: SandboxEvent;

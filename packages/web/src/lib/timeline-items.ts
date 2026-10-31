@@ -77,6 +77,16 @@ function eventKey(event: SandboxEvent): string {
   return `${event.type}:${messageId || sandboxId || "session"}:${event.timestamp}`;
 }
 
+/**
+ * The identity of an event re-sent whole on every change, such as a tool
+ * call's or a reasoning step's: its newest state shows at its first position.
+ */
+function positionKey(event: SandboxEvent): string | null {
+  if (event.type === "tool_call" && event.callId) return `tool:${toolCallKey(event)}`;
+  if (event.type === "reasoning") return `reasoning:${reasoningKey(event)}`;
+  return null;
+}
+
 function groupFlatEvents(events: SandboxEvent[]): FlatTimelineItem[] {
   const groups: FlatTimelineItem[] = [];
   let tools: ToolCallEvent[] = [];
@@ -112,27 +122,16 @@ function groupFlatEvents(events: SandboxEvent[]): FlatTimelineItem[] {
 
 function dedupeEvents(events: SandboxEvent[]): SandboxEvent[] {
   const result: Array<SandboxEvent | null> = [];
-  const toolIndexes = new Map<string, number>();
+  const positions = new Map<string, number>();
   const completionMessageIds = new Set<string>();
   const tokenIndexes = new Map<string, number>();
-  const reasoningIndexes = new Map<string, number>();
 
   for (const event of events) {
-    if (event.type === "tool_call" && event.callId) {
-      const key = toolCallKey(event);
-      const index = toolIndexes.get(key);
+    const key = positionKey(event);
+    if (key !== null) {
+      const index = positions.get(key);
       if (index === undefined) {
-        toolIndexes.set(key, result.length);
-        result.push(event);
-      } else {
-        result[index] = event;
-      }
-    } else if (event.type === "reasoning") {
-      // Cumulative per step: the newest state stays where the step began reasoning.
-      const key = reasoningKey(event);
-      const index = reasoningIndexes.get(key);
-      if (index === undefined) {
-        reasoningIndexes.set(key, result.length);
+        positions.set(key, result.length);
         result.push(event);
       } else {
         result[index] = event;
