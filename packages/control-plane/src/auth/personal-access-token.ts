@@ -48,7 +48,10 @@ export type PersonalAccessTokenAuthentication =
   | { kind: "authenticated"; credential: PersonalAccessTokenCredential }
   /** Unknown, expired, or past the policy's lifetime cap; reported identically to the caller. */
   | { kind: "rejected" }
-  /** The workspace policy has turned tokens off; true of every token, so it reveals nothing. */
+  /**
+   * The workspace policy has turned tokens off. Reported only for a live token, which tells its
+   * holder nothing they could not already learn by using it.
+   */
   | { kind: "disabled" };
 
 /**
@@ -56,6 +59,9 @@ export type PersonalAccessTokenAuthentication =
  * a lifetime cap lower than a token's own expiry ends it early, and a permission ceiling narrows
  * its grant. Unknown and expired tokens are reported identically: telling them apart would
  * confirm that a guessed token had once existed.
+ *
+ * The policy is read only once the token is found, so a forged token, which anyone can present,
+ * costs a single lookup.
  */
 export async function authenticatePersonalAccessToken(
   tokens: PersonalAccessTokenLookup,
@@ -63,10 +69,11 @@ export async function authenticatePersonalAccessToken(
   token: string,
   now: number
 ): Promise<PersonalAccessTokenAuthentication> {
-  const [policy, credential] = await Promise.all([policies.get(), tokens.findByToken(token)]);
-  if (!policy.enabled) return { kind: "disabled" };
+  const credential = await tokens.findByToken(token);
   if (!credential) return { kind: "rejected" };
+  const policy = await policies.get();
   if (personalAccessTokenEffectiveExpiry(credential, policy) <= now) return { kind: "rejected" };
+  if (!policy.enabled) return { kind: "disabled" };
   return {
     kind: "authenticated",
     credential: {

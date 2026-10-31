@@ -82,12 +82,35 @@ describe("authenticatePersonalAccessToken", () => {
     ).resolves.toEqual({ kind: "rejected" });
   });
 
-  it("refuses every token, known or not, while the policy disables tokens", async () => {
-    for (const found of [credential, null]) {
+  it("refuses a live token while the policy disables tokens", async () => {
+    await expect(
+      authenticatePersonalAccessToken(lookup(credential), policy({ enabled: false }), TOKEN, NOW)
+    ).resolves.toEqual({ kind: "disabled" });
+  });
+
+  it("reports unknown and expired tokens alike while the policy disables tokens", async () => {
+    for (const [found, now] of [
+      [null, NOW],
+      [credential, NOW + 1],
+    ] as const) {
       await expect(
-        authenticatePersonalAccessToken(lookup(found), policy({ enabled: false }), TOKEN, NOW)
-      ).resolves.toEqual({ kind: "disabled" });
+        authenticatePersonalAccessToken(lookup(found), policy({ enabled: false }), TOKEN, now)
+      ).resolves.toEqual({ kind: "rejected" });
     }
+  });
+
+  it("reads no policy for an unknown token, so a forged one costs a single lookup", async () => {
+    let policyReads = 0;
+    const counted = {
+      get: async () => {
+        policyReads++;
+        return { ...open, enabled: false };
+      },
+    };
+    await expect(
+      authenticatePersonalAccessToken(lookup(null), counted, TOKEN, NOW)
+    ).resolves.toEqual({ kind: "rejected" });
+    expect(policyReads).toBe(0);
   });
 
   it("ends an existing token early when the policy lowers the lifetime cap", async () => {
