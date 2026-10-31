@@ -65,6 +65,7 @@ import {
   BoatSandboxLifecycle,
   boatIdempotencyKey,
   boatSandboxName,
+  boatStartupDeadlineAtMs,
   classifyBoatError,
   dropBoatReservedEnv,
   resolveBoatMachineType,
@@ -183,6 +184,9 @@ export class BoatSandboxProvider implements SandboxProvider {
   }
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    // Every wait for readiness below ends while the connect watchdog still
+    // leaves the bridge time to connect.
+    const readyDeadlineAtMs = boatStartupDeadlineAtMs(config.generationCreatedAtMs ?? Date.now());
     let boatSandboxId: string | undefined;
     try {
       const portPlan = this.resolvePortPlan(config);
@@ -253,14 +257,17 @@ export class BoatSandboxProvider implements SandboxProvider {
         config.sandboxId,
         portRequests,
         { codeServerPassword, vncPassword },
-        created.hostedPorts
+        created.hostedPorts,
+        readyDeadlineAtMs
       );
       // Known private, and the tunnel env file in place: the setup script Boat
       // started at machine-up may now exec the launcher.
-      await this.lifecycle.releaseLaunch(boatSandboxId);
+      await this.lifecycle.releaseLaunch(boatSandboxId, { readyDeadlineAtMs });
       const releasedAtMs = Date.now();
 
-      const ready = await this.lifecycle.waitForReady(boatSandboxId);
+      const ready = await this.lifecycle.waitForReady(boatSandboxId, {
+        deadlineAtMs: readyDeadlineAtMs,
+      });
       // The launcher started when the machine came up or when the launch was
       // released, whichever was later; watch it briefly from there for an
       // early exit, as the detached start did.
@@ -550,14 +557,16 @@ export class BoatSandboxProvider implements SandboxProvider {
    * taken from its answer; any other, including one the create could not
    * host, is hosted with its own call, as Boat prescribes for that case. A
    * port that still fails is logged and left out: the session runs without
-   * that link rather than not at all.
+   * that link rather than not at all. A create passes its readiness deadline,
+   * since its tunnel env file may go to a sandbox that is still starting.
    */
   private async exposeAccess(
     boatSandboxId: string,
     logicalSandboxId: string,
     requests: BoatPortRequest[],
     passwords: { codeServerPassword?: string; vncPassword?: string },
-    hostedByCreate: BoatCreateHostedPort[] = []
+    hostedByCreate: BoatCreateHostedPort[] = [],
+    readyDeadlineAtMs?: number
   ): Promise<BoatAccess> {
     const routedByCreate = new Map<number, string>();
     for (const hosted of hostedByCreate) {
@@ -613,7 +622,7 @@ export class BoatSandboxProvider implements SandboxProvider {
     }
     if (Object.keys(tunnelUrls).length > 0) {
       access.tunnelUrls = tunnelUrls;
-      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls);
+      await this.writeTunnelEnvFile(boatSandboxId, logicalSandboxId, tunnelUrls, readyDeadlineAtMs);
     }
     return access;
   }
@@ -621,7 +630,8 @@ export class BoatSandboxProvider implements SandboxProvider {
   private async writeTunnelEnvFile(
     boatSandboxId: string,
     logicalSandboxId: string,
-    tunnelUrls: Record<string, string>
+    tunnelUrls: Record<string, string>,
+    readyDeadlineAtMs: number | undefined
   ): Promise<void> {
     const lines = [
       `${TUNNEL_ENV_SANDBOX_ID_KEY}=${logicalSandboxId}`,
@@ -629,10 +639,11 @@ export class BoatSandboxProvider implements SandboxProvider {
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([port, url]) => `TUNNEL_${port}=${url}`),
     ];
-    await this.lifecycle.writeFileWhenReady(boatSandboxId, {
-      path: BOAT_TUNNEL_ENV_FILE_PATH,
-      content: lines.join("\n") + "\n",
-    });
+    await this.lifecycle.writeFileWhenReady(
+      boatSandboxId,
+      { path: BOAT_TUNNEL_ENV_FILE_PATH, content: lines.join("\n") + "\n" },
+      { readyDeadlineAtMs }
+    );
   }
 }
 

@@ -28,6 +28,7 @@ import {
   SandboxProviderError,
   signalUntilDeadline,
 } from "./provider";
+import { DEFAULT_CONNECTING_TIMEOUT_CONFIG } from "./lifecycle/decisions";
 import { SANDBOX_RUNTIME_VERSION } from "./runtime-manifest";
 import { REPO_IMAGE_CALLBACK_ENV } from "./sandbox-env";
 
@@ -131,6 +132,20 @@ const BOAT_DASHBOARD_URL = "https://boat.dev/dashboard";
 const CREATE_ATTEMPTS = 3;
 /** Tries for a file the runtime needs before it starts, before a create gives up. */
 const LAUNCH_FILE_WRITE_ATTEMPTS = 3;
+/** Room a create leaves the runtime to start and its bridge to connect. */
+const BRIDGE_ATTACH_MARGIN_MS = 30_000;
+
+/**
+ * When a create stops waiting for its sandbox to be ready: the connect
+ * watchdog's deadline for the generation (DEFAULT_CONNECTING_TIMEOUT_CONFIG,
+ * counted from the reservation), less the room its bridge needs to connect. A
+ * start still going then fails as the create's own transient error instead of
+ * outliving the watchdog, which would fail the generation and count it toward
+ * the circuit breaker.
+ */
+export function boatStartupDeadlineAtMs(reservedAtMs: number): number {
+  return reservedAtMs + DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs - BRIDGE_ATTACH_MARGIN_MS;
+}
 
 /** How long a flow waits, and how often it looks, at each step of a sandbox's life. */
 export interface BoatLifecycleTimings {
@@ -413,12 +428,20 @@ export class BoatSandboxLifecycle {
   }
 
   /**
-   * Poll until the sandbox accepts commands. A sandbox that ends in `error` or
-   * `cancelled` on the way is a failed launch; one that is merely slow fails
-   * transiently when the budget runs out.
+   * Poll until the sandbox accepts commands, for at most the ready budget and
+   * never past `deadlineAtMs`. A sandbox that ends in `error` or `cancelled` on
+   * the way is a failed launch; one that is merely slow fails transiently when
+   * the budget runs out.
    */
-  async waitForReady(boatSandboxId: string): Promise<BoatSandbox> {
-    const deadlineAtMs = Date.now() + this.timings.readyTimeoutMs;
+  async waitForReady(
+    boatSandboxId: string,
+    options: { deadlineAtMs?: number } = {}
+  ): Promise<BoatSandbox> {
+    const startedAtMs = Date.now();
+    const deadlineAtMs = Math.min(
+      startedAtMs + this.timings.readyTimeoutMs,
+      options.deadlineAtMs ?? Number.POSITIVE_INFINITY
+    );
     for (;;) {
       const sandbox = await this.client.getSandbox(boatSandboxId);
       if (BOAT_LIVE_STATES.has(sandbox.state)) return sandbox;
@@ -443,7 +466,7 @@ export class BoatSandboxLifecycle {
       }
       if (Date.now() >= deadlineAtMs) {
         throw new SandboxProviderError(
-          `Boat sandbox did not become ready within ${this.timings.readyTimeoutMs}ms (state ${sandbox.state})`,
+          `Boat sandbox did not become ready within ${Math.max(0, deadlineAtMs - startedAtMs)}ms (state ${sandbox.state})`,
           "transient"
         );
       }
@@ -535,24 +558,30 @@ export class BoatSandboxLifecycle {
    * Write a file the runtime reads when it starts, into a sandbox that may
    * still be starting. Boat holds such a write until the sandbox is ready, for
    * at most BOAT_START_WAIT_MS (boat-rest-client.ts), and answers 409
-   * `sandbox_starting` when the sandbox is still starting by then; the next try
-   * then follows a wait for readiness ({@link waitForReady}, on its budget)
-   * rather than a pause, so a slow start fails only where waitForReady would
-   * fail it. A write that still fails after a few tries is thrown before any
-   * launch, so the runtime never starts without the file.
+   * `sandbox_starting` when the sandbox is still starting by then. That answer
+   * is followed, once, by a wait for readiness ({@link waitForReady}, ending at
+   * `readyDeadlineAtMs` at the latest) and then the write again, whatever tries
+   * other failures have used. Any other failure gets a few tries with a pause;
+   * a write that still fails is thrown before any launch, so the runtime never
+   * starts without the file.
    */
   async writeFileWhenReady(
     boatSandboxId: string,
-    file: { path: string; content: string }
+    file: { path: string; content: string },
+    options: { readyDeadlineAtMs?: number } = {}
   ): Promise<void> {
+    let failures = 0;
+    let waitedForReady = false;
     for (let attempt = 1; ; attempt++) {
       try {
         await this.client.writeFile(boatSandboxId, file);
         return;
       } catch (error) {
-        if (attempt >= LAUNCH_FILE_WRITE_ATTEMPTS) throw error;
         const stillStarting =
-          error instanceof BoatConflictError && error.code === "sandbox_starting";
+          !waitedForReady &&
+          error instanceof BoatConflictError &&
+          error.code === "sandbox_starting";
+        if (!stillStarting && ++failures >= LAUNCH_FILE_WRITE_ATTEMPTS) throw error;
         log.warn("boat.file_write_retry", {
           sandbox_id: boatSandboxId,
           path: file.path,
@@ -560,10 +589,14 @@ export class BoatSandboxLifecycle {
           still_starting: stillStarting,
           error: error instanceof Error ? error.message : String(error),
         });
-        // A failed wait is not retried: it throws from this catch block, which
-        // the try above does not cover.
-        if (stillStarting) await this.waitForReady(boatSandboxId);
-        else await delayUnlessCancelled(this.timings.createRetryDelayMs);
+        if (stillStarting) {
+          // A failed wait is not retried: it throws from this catch block,
+          // which the try above does not cover.
+          await this.waitForReady(boatSandboxId, { deadlineAtMs: options.readyDeadlineAtMs });
+          waitedForReady = true;
+        } else {
+          await delayUnlessCancelled(this.timings.createRetryDelayMs);
+        }
       }
     }
   }
@@ -575,11 +608,15 @@ export class BoatSandboxLifecycle {
    * ({@link writeFileWhenReady}), and a create that cannot write it fails, so
    * the runtime never starts without it.
    */
-  async releaseLaunch(boatSandboxId: string): Promise<void> {
-    await this.writeFileWhenReady(boatSandboxId, {
-      path: BOAT_LAUNCH_MARKER_PATH,
-      content: "released\n",
-    });
+  async releaseLaunch(
+    boatSandboxId: string,
+    options: { readyDeadlineAtMs?: number } = {}
+  ): Promise<void> {
+    await this.writeFileWhenReady(
+      boatSandboxId,
+      { path: BOAT_LAUNCH_MARKER_PATH, content: "released\n" },
+      options
+    );
   }
 
   /**

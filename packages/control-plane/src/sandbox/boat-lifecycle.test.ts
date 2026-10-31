@@ -118,6 +118,46 @@ describe("BoatSandboxLifecycle writeFileWhenReady", () => {
     expect((error as SandboxProviderError).message).toContain("no capacity");
     expect(client.writeFile).toHaveBeenCalledOnce();
   });
+
+  it("waits out a sandbox still starting even after other failures have used the tries", async () => {
+    const answers = [
+      new BoatApiError("agent unavailable", 503),
+      new BoatApiError("agent unavailable", 503),
+      stillStarting(),
+    ];
+    let reads = 0;
+    const client = mockClient({
+      writeFile: vi.fn(async () => {
+        const answer = answers.shift();
+        if (answer) throw answer;
+      }),
+      getSandbox: vi.fn(async () => boatSandbox({ state: ++reads < 2 ? "provisioned" : "ready" })),
+    });
+    await new BoatSandboxLifecycle(client, fastTimings).writeFileWhenReady("bx_abcdefgh", marker);
+    expect(client.writeFile).toHaveBeenCalledTimes(4);
+    expect(client.getSandbox).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("BoatSandboxLifecycle waitForReady", () => {
+  it("gives up at the deadline it is given, inside its own budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = mockClient({
+        getSandbox: vi.fn(async () => boatSandbox({ state: "provisioned" })),
+      });
+      const waiting = new BoatSandboxLifecycle(client)
+        .waitForReady("bx_abcdefgh", { deadlineAtMs: Date.now() + 30_000 })
+        .catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(31_000);
+      const error = await waiting;
+      expect(error).toBeInstanceOf(SandboxProviderError);
+      expect((error as SandboxProviderError).errorType).toBe("transient");
+      expect((error as SandboxProviderError).message).toContain("within 30000ms");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("BOAT_SETUP_SCRIPT", () => {

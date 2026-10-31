@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { deriveVncPassword } from "../sandbox-env";
 import {
@@ -28,6 +28,18 @@ import {
   type BoatCreateSandboxParams,
 } from "../boat-rest-client";
 import { RequestDeadlineError } from "../request-deadline";
+import {
+  createMockAlarmScheduler,
+  createMockBroadcaster,
+  createMockIdGenerator,
+  createMockSandbox,
+  createMockSession,
+  createMockStorage,
+  createMockWebSocketManager,
+  createTestConfig,
+  createTestLifecycleManager,
+  createUnmanagedShutdown,
+} from "../lifecycle/test-helpers";
 
 const resumeConfig = {
   providerObjectId: "bx_abcdefgh",
@@ -949,5 +961,90 @@ describe("BoatSandboxProvider", () => {
       expect((error as SandboxProviderError).errorType).toBe(expected);
       expect((error as SandboxProviderError).cause).toBe(cause);
     });
+  });
+});
+
+describe("BoatSandboxProvider under the lifecycle manager's connect watchdog", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * Spawn through the manager with Boat at its slowest: the create waits a
+   * minute for a machine, and the launch marker write is held a minute before
+   * Boat answers `sandbox_starting`. The sandbox is ready `readyAfterMs` after
+   * the reservation, which is also where the watchdog counts from. Resolves
+   * once the spawn has settled, with the clock still short of the watchdog.
+   */
+  async function spawnSlowStart(readyAfterMs: number) {
+    const sandbox = createMockSandbox({
+      status: "pending",
+      last_heartbeat: null,
+      modal_object_id: null,
+    });
+    const storage = createMockStorage(createMockSession(), sandbox);
+    const config = createTestConfig();
+    let held = false;
+    const client = mockClient({
+      createSandbox: vi.fn(async (params: BoatCreateSandboxParams) => {
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        return boatCreated(params);
+      }),
+      writeFile: vi.fn(async () => {
+        if (held) return;
+        held = true;
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        throw new BoatConflictError("Sandbox is still starting", "sandbox_starting");
+      }),
+      getSandbox: vi.fn(async () =>
+        boatSandbox({
+          state: Date.now() - sandbox.created_at >= readyAfterMs ? "ready" : "provisioned",
+        })
+      ),
+    });
+    const manager = createTestLifecycleManager(
+      new BoatSandboxProvider(client, providerConfig),
+      storage,
+      storage,
+      createMockBroadcaster(),
+      createMockWebSocketManager(false),
+      createMockAlarmScheduler(),
+      createMockIdGenerator(),
+      createUnmanagedShutdown(),
+      config
+    );
+    let settledAtMs: number | undefined;
+    const spawning = manager.spawnSandbox().then(() => {
+      settledAtMs = Date.now();
+    });
+    // The manager's token hashing runs on the real clock; only then is Boat called.
+    await vi.waitFor(() => expect(client.createSandbox).toHaveBeenCalledOnce());
+    const watchdogAtMs = sandbox.created_at + config.connectingTimeout.timeoutMs;
+    await vi.advanceTimersByTimeAsync(watchdogAtMs - 1_000 - Date.now());
+    await vi.waitFor(() => expect(settledAtMs).toBeDefined(), { interval: 10 });
+    await spawning;
+    expect(settledAtMs).toBeLessThan(watchdogAtMs);
+    return { sandbox, client, manager, watchdogAtMs };
+  }
+
+  it("fails a start still going at its startup deadline before the watchdog, off the breaker", async () => {
+    const { sandbox, client, manager, watchdogAtMs } = await spawnSlowStart(250_000);
+    expect(sandbox.status).toBe("failed");
+    expect(sandbox.spawn_failure_count).toBe(0);
+    expect(client.deleteSandbox).toHaveBeenCalledWith("bx_abcdefgh");
+
+    // The watchdog then finds the attempt already failed, and counts nothing.
+    await vi.advanceTimersByTimeAsync(watchdogAtMs + 1 - Date.now());
+    await manager.handleAlarm();
+    expect(sandbox.spawn_failure_count).toBe(0);
+  });
+
+  it("keeps a start that is ready before its startup deadline", async () => {
+    const { sandbox, client } = await spawnSlowStart(200_000);
+    expect(sandbox.status).toBe("connecting");
+    expect(sandbox.modal_object_id).toBe("bx_abcdefgh");
+    expect(client.deleteSandbox).not.toHaveBeenCalled();
   });
 });
