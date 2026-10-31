@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type {
@@ -101,9 +101,10 @@ function unloadPrevented(): boolean {
 
 async function selectOnlyCeiling(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("radio", { name: /Only those selected/ }));
-  // Every grantable permission starts selected; clear them all.
+  // Every grantable permission starts selected; clear them all. Plain click events: a full pointer
+  // sequence for each of about 30 boxes outlasts the test timeout on CI.
   for (const checkbox of screen.getAllByRole("checkbox")) {
-    if (checkbox.getAttribute("aria-checked") === "true") await user.click(checkbox);
+    if (checkbox.getAttribute("aria-checked") === "true") fireEvent.click(checkbox);
   }
 }
 
