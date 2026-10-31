@@ -417,6 +417,17 @@ project_root = "../../../"
 # r2_media_bucket_name = ""
 
 # =============================================================================
+# Unattended Trace Export (Optional)
+# =============================================================================
+# Lets a job export sessions without a browser (docs/TRACE_EXPORT.md). Off while
+# both are empty; set both together. The job acts as this one user: prefer a
+# dedicated user whose role grants only sessions.read and sessions.export.
+# Changing either value replaces the signing secret. Read the secret from the
+# sensitive export_service_secret output.
+# export_service_actor   = "github:12345"                     # github:<numeric GitHub user id>
+# export_service_user_id = "0123456789abcdef0123456789abcdef" # that user's users.id in D1
+
+# =============================================================================
 # Initial Deployment Flags
 # =============================================================================
 # For first-time deployment, set both to false to avoid chicken-and-egg issues

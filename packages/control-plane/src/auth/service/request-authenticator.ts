@@ -13,10 +13,15 @@ import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
 import type { Env } from "../../types";
-import { ASSERTION_RIGHTS, isActorNamespace, type ActorNamespace } from "../principal";
+import {
+  SERVICE_PROFILES,
+  isActorNamespace,
+  type ActorNamespace,
+  type ResolvedIdentity,
+} from "../principal";
 import type { AuthenticationRequestServices } from "../request-services";
 import type { AuthResult } from "../result";
-import { serviceAuthSecret } from "./config";
+import { serviceCredential, type ServiceCredential } from "./config";
 
 const logger = createLogger("auth");
 
@@ -68,6 +73,48 @@ function recordNonce(
   seenNonces.set(key, now + TOKEN_VALIDITY_MS);
 }
 
+type ActorResolution =
+  | { ok: true; actor: ResolvedIdentity | null }
+  | { ok: false; failure: "not_pinned_actor" | "namespace" | "pinned_user_mismatch" };
+
+/**
+ * Apply the service's actor policy to the asserted actor header (empty when
+ * absent). A pinned actor must match the configured pin, already exist, and
+ * still belong to the pinned user: a user merge moves identities to the
+ * surviving user, and must not move this credential with them.
+ */
+async function resolveAssertedActor(
+  service: ServiceName,
+  actor: string,
+  credential: ServiceCredential,
+  ctx: AuthenticationRequestServices
+): Promise<ActorResolution> {
+  const policy = SERVICE_PROFILES[service].actor;
+  const pin = policy.kind === "pinned" ? credential.pinnedActor : undefined;
+  if (policy.kind === "pinned" && (!pin || actor !== pin.actor)) {
+    return { ok: false, failure: "not_pinned_actor" };
+  }
+  if (actor === "") return { ok: true, actor: null };
+
+  const parsed = parseActor(actor);
+  if (!parsed || policy.kind === "none" || policy.namespace !== parsed.provider) {
+    return { ok: false, failure: "namespace" };
+  }
+  const identity = await new UserStore(ctx.db).getIdentity(parsed.provider, parsed.providerUserId);
+  if (pin && identity?.userId !== pin.userId) {
+    return { ok: false, failure: "pinned_user_mismatch" };
+  }
+  return {
+    ok: true,
+    actor: {
+      provider: parsed.provider,
+      providerUserId: parsed.providerUserId,
+      canonicalUserId: identity?.userId ?? null,
+      participantUserId: actor,
+    },
+  };
+}
+
 export async function authenticateServiceRequest(
   request: Request,
   env: Env,
@@ -87,8 +134,20 @@ export async function authenticateServiceRequest(
   }
   const service = serviceHeader;
 
-  const secret = serviceAuthSecret(env, service);
-  if (!secret) {
+  const credential = serviceCredential(env, service);
+  if (!credential) {
+    // A pinned service is off until an operator configures it; treat it like
+    // an unknown service rather than a misconfiguration.
+    if (SERVICE_PROFILES[service].actor.kind === "pinned") {
+      logger.warn("Service auth failed: service not enabled", {
+        event: "auth.service_failed",
+        failure: "service_disabled",
+        service,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+    }
     logger.error("Service auth secret not configured - rejecting request", {
       event: "auth.misconfigured",
       service,
@@ -135,7 +194,7 @@ export async function authenticateServiceRequest(
   const verification = await verifyServiceSignature({
     signatureHeader,
     service,
-    secret,
+    secret: credential.secret,
     method: request.method,
     url: request.url,
     bodySha256Hex,
@@ -154,29 +213,17 @@ export async function authenticateServiceRequest(
 
   recordNonce(service, verification.nonce, ctx);
 
-  let resolvedActor = null;
-  if (actor !== "") {
-    const parsed = parseActor(actor);
-    if (!parsed || ASSERTION_RIGHTS[service] !== parsed.provider) {
-      logger.warn("Actor assertion denied", {
-        event: "auth.assertion_denied",
-        service,
-        actor,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
-    }
-    const identity = await new UserStore(ctx.db).getIdentity(
-      parsed.provider,
-      parsed.providerUserId
-    );
-    resolvedActor = {
-      provider: parsed.provider,
-      providerUserId: parsed.providerUserId,
-      canonicalUserId: identity?.userId ?? null,
-      participantUserId: actor,
-    };
+  const resolved = await resolveAssertedActor(service, actor, credential, ctx);
+  if (!resolved.ok) {
+    logger.warn("Actor assertion denied", {
+      event: "auth.assertion_denied",
+      failure: resolved.failure,
+      service,
+      actor,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
   }
 
   // Rebuild requests whose body was consumed for signature verification.
@@ -190,7 +237,7 @@ export async function authenticateServiceRequest(
         });
 
   return {
-    principal: { kind: "service", service, actor: resolvedActor },
+    principal: { kind: "service", service, actor: resolved.actor },
     request: handlerRequest,
   };
 }

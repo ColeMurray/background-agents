@@ -23,6 +23,7 @@ const SERVICE_SECRETS: Record<ServiceName, string> = {
   "github-bot": "test-service-secret-github-bot",
   "slack-bot": "test-service-secret-slack-bot",
   "linear-bot": "test-service-secret-linear-bot",
+  export: "test-service-secret-export",
 };
 
 function fetchWorker(request: Request, requestEnv: WorkerBindings = env): Promise<Response> {

@@ -159,3 +159,9 @@ output "docs_site_url" {
   description = "Documentation site URL (null when docs_site_enabled = false)"
   value       = var.docs_site_enabled ? coalesce(local.docs_custom_domain_url, module.docs_site[0].production_url) : null
 }
+
+output "export_service_secret" {
+  description = "Signing secret for the export service (docs/TRACE_EXPORT.md). Null unless export_service_actor is set."
+  value       = var.export_service_actor != "" ? random_password.service_auth_secret_export[0].result : null
+  sensitive   = true
+}

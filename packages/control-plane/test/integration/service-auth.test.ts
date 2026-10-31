@@ -8,6 +8,7 @@ import {
   type ServiceName,
 } from "@open-inspect/shared/service-auth";
 import { generateInternalToken } from "@open-inspect/shared/auth";
+import { SERVICE_PROFILES } from "../../src/auth/principal";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { REPOS_CACHE_KEY, reposCacheIdentity } from "../../src/routes/repos";
@@ -19,6 +20,7 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": "test-service-secret-slack-bot",
   "github-bot": "test-service-secret-github-bot",
   "linear-bot": "test-service-secret-linear-bot",
+  export: "test-service-secret-export",
 };
 
 async function signedFetch(p: {
@@ -49,8 +51,9 @@ describe("sig1 service-credential authentication", () => {
   beforeEach(cleanD1Tables);
 
   it("rejects actorless service requests on broad routes", async () => {
-    for (const service of Object.keys(SERVICE_SECRET).filter(
-      (candidate): candidate is Exclude<ServiceName, "web"> => candidate !== "web"
+    // Services without asserted actors are refused at authentication instead.
+    for (const service of (Object.keys(SERVICE_SECRET) as ServiceName[]).filter(
+      (candidate) => SERVICE_PROFILES[candidate].actor.kind === "asserted"
     )) {
       const response = await signedFetch({
         service,
@@ -909,7 +912,9 @@ describe("sig1 service-credential authentication", () => {
           model: "anthropic/claude-haiku-4-5",
         }),
       });
-      expect(response.status, service).toBe(service === "web" ? 401 : 403);
+      // Web and the pinned export service need their actor at authentication.
+      const assertsActors = SERVICE_PROFILES[service].actor.kind === "asserted";
+      expect(response.status, service).toBe(assertsActors ? 403 : 401);
     }
 
     const sessionCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions").first<{

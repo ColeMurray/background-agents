@@ -43,6 +43,8 @@ const SERVICE_PERMISSION_CEILINGS: Record<ServiceName, readonly PermissionId[]> 
     "sessions.lifecycle",
     "skills.read",
   ],
+  // Unattended trace export (docs/TRACE_EXPORT.md): read and export sessions, nothing else.
+  export: ["sessions.read", "sessions.export"],
 };
 
 /** Checks the hard permission ceiling for a trusted service, independent of user grants. */
