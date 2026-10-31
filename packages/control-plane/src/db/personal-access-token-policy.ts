@@ -73,15 +73,20 @@ export class PersonalAccessTokenPolicyStore {
   /**
    * Replace the policy if it is still at `expectedRevision`. The audit insert and the update share
    * one precondition inside one transaction, so the event is written exactly when the change is.
+   *
+   * The audit's `before` is read here and used only when it is at `expectedRevision` itself: every
+   * change bumps the revision, so a snapshot at that revision is exactly the policy the guarded
+   * update replaces, whatever other administrators save around this request.
    */
   async replace(input: {
-    before: PersonalAccessTokenPolicySnapshot;
     expectedRevision: number;
     policy: PersonalAccessTokenPolicy;
     actorUserId: string;
     requestId: string;
     now: number;
   }): Promise<ReplacePersonalAccessTokenPolicyResult> {
+    const before = await this.get();
+    if (before.revision !== input.expectedRevision) return { status: "conflict", policy: before };
     const after = personalAccessTokenPolicySchema.parse(input.policy);
     const ceiling =
       after.allowedPermissions === null
@@ -106,7 +111,7 @@ export class PersonalAccessTokenPolicyStore {
           input.requestId,
           input.actorUserId,
           JSON.stringify({
-            before: rulesOf(input.before),
+            before: rulesOf(before),
             requested: { expectedRevision: input.expectedRevision },
             after,
           }),
@@ -117,7 +122,9 @@ export class PersonalAccessTokenPolicyStore {
           `UPDATE workspace_personal_access_token_policy
               SET enabled = ?, max_lifetime_days = ?, allowed_permissions_json = ?,
                   revision = revision + 1, updated_at = ?, updated_by_user_id_snapshot = ?
-            WHERE id = 1 AND revision = ?`
+            WHERE id = 1 AND revision = ?
+        RETURNING enabled, max_lifetime_days, allowed_permissions_json, revision, updated_at,
+                  updated_by_user_id_snapshot`
         )
         .bind(
           after.enabled ? 1 : 0,
@@ -128,7 +135,9 @@ export class PersonalAccessTokenPolicyStore {
           input.expectedRevision
         ),
     ]);
-    const policy = await this.get();
-    return { status: updated.meta.changes === 1 ? "applied" : "conflict", policy };
+    // The row this update wrote, not a later read another administrator's save could overtake.
+    const [written] = updated.results as PolicyRow[];
+    if (written) return { status: "applied", policy: toSnapshot(written) };
+    return { status: "conflict", policy: await this.get() };
   }
 }

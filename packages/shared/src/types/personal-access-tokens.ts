@@ -312,4 +312,6 @@ export const PERSONAL_ACCESS_TOKEN_ERROR_CODES = {
   permissionNotAllowed: "permission_not_allowed_by_policy",
   /** The requested lifetime exceeds the workspace policy's maximum. */
   lifetimeExceedsPolicy: "lifetime_exceeds_policy",
+  /** The workspace policy changed while the token was being issued; nothing was issued. */
+  policyChanged: "personal_access_token_policy_changed",
 } as const;

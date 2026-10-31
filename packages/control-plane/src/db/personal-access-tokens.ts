@@ -48,10 +48,18 @@ export interface IssuePersonalAccessTokenInput {
   readonly expiresAt: number;
   readonly now: number;
   readonly requestId: string;
+  /**
+   * The workspace token policy revision the request was checked against. When set, the token is
+   * issued only if the policy is still at it, so a concurrent policy change cannot let through a
+   * token the new policy forbids.
+   */
+  readonly policyRevision?: number;
 }
 
 export type IssuePersonalAccessTokenResult =
-  { kind: "issued"; token: CreatedPersonalAccessToken } | { kind: "limit_reached" };
+  | { kind: "issued"; token: CreatedPersonalAccessToken }
+  | { kind: "limit_reached" }
+  | { kind: "policy_changed" };
 
 export interface RevokePersonalAccessTokenInput {
   /** The token's owner; a token id alone never selects another user's token. */
@@ -131,12 +139,16 @@ function auditSnapshot(token: PersonalAccessToken) {
   };
 }
 
+/** Passes revoke-all makes before reporting that the member is still issuing tokens. */
+const REVOKE_ALL_MAX_PASSES = 5;
+
 export class PersonalAccessTokenStore {
   constructor(private readonly db: SqlDatabase) {}
 
   /**
-   * Issues a token unless its owner already holds PERSONAL_ACCESS_TOKEN_MAX_PER_USER. The limit,
-   * the token, its grant, and its audit event commit together or not at all.
+   * Issues a token unless its owner already holds PERSONAL_ACCESS_TOKEN_MAX_PER_USER, or the policy
+   * has moved past `policyRevision`. Those checks, the token, its grant, and its audit event commit
+   * together or not at all.
    */
   async issue(input: IssuePersonalAccessTokenInput): Promise<IssuePersonalAccessTokenResult> {
     const plaintext = `${PERSONAL_ACCESS_TOKEN_PREFIX}${generateId(PERSONAL_ACCESS_TOKEN_RANDOM_BYTES)}`;
@@ -151,13 +163,20 @@ export class PersonalAccessTokenStore {
       token: plaintext,
     };
 
-    const [inserted] = await this.db.batch([
+    const policyGuard =
+      input.policyRevision === undefined
+        ? ""
+        : `
+             AND EXISTS (
+               SELECT 1 FROM workspace_personal_access_token_policy WHERE id = 1 AND revision = ?
+             )`;
+    const statements = await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO personal_access_tokens
              (id, user_id, name, token_hash, display_prefix, created_at, last_used_at, expires_at)
            SELECT ?, ?, ?, ?, ?, ?, NULL, ?
-           WHERE (SELECT COUNT(*) FROM personal_access_tokens WHERE user_id = ?) < ?`
+           WHERE (SELECT COUNT(*) FROM personal_access_tokens WHERE user_id = ?) < ?${policyGuard}`
         )
         .bind(
           token.id,
@@ -168,7 +187,8 @@ export class PersonalAccessTokenStore {
           token.createdAt,
           token.expiresAt,
           input.userId,
-          PERSONAL_ACCESS_TOKEN_MAX_PER_USER
+          PERSONAL_ACCESS_TOKEN_MAX_PER_USER,
+          ...(input.policyRevision === undefined ? [] : [input.policyRevision])
         ),
       ...token.permissions.map((permission) =>
         this.db
@@ -188,9 +208,15 @@ export class PersonalAccessTokenStore {
         before: {},
         after: auditSnapshot(token),
       }),
+      // Read in the same transaction, to tell a moved policy from the limit when nothing inserts.
+      this.db.prepare("SELECT revision FROM workspace_personal_access_token_policy WHERE id = 1"),
     ]);
-    if (inserted.meta.changes === 0) return { kind: "limit_reached" };
-    return { kind: "issued", token };
+    const [inserted] = statements;
+    if (inserted.meta.changes === 1) return { kind: "issued", token };
+    const [policy] = statements[statements.length - 1].results as { revision: number }[];
+    return input.policyRevision !== undefined && policy?.revision !== input.policyRevision
+      ? { kind: "policy_changed" }
+      : { kind: "limit_reached" };
   }
 
   /** One user's tokens, newest first, with their grants. Never includes a secret. */
@@ -281,35 +307,43 @@ export class PersonalAccessTokenStore {
   }
 
   /**
-   * Revokes every token `userId` holds, recording each revocation and who made it. Returns how
-   * many were revoked; a token issued after the read is not among them.
+   * Revokes every token `userId` holds, recording each revocation and who made it. Each pass
+   * audits and deletes the tokens it listed in one transaction, and passes repeat until one finds
+   * none, so a token issued while this runs is revoked too. `complete` is false only when the
+   * member kept issuing tokens through every pass; suspending the member stops that.
    */
-  async revokeAll(input: Omit<RevokePersonalAccessTokenInput, "tokenId">): Promise<number> {
-    const tokens = await this.list(input.userId);
-    if (tokens.length === 0) return 0;
-    const results = await this.db.batch([
-      ...tokens.map((token) =>
-        this.bindAudit({
-          action: "personal_access_token.revoked",
-          tokenId: token.id,
-          ownerUserId: input.userId,
-          actorUserId: input.actorUserId,
-          requestId: input.requestId,
-          now: input.now,
-          before: auditSnapshot(token),
-          after: {},
-        })
-      ),
-      this.db
-        .prepare(
-          `DELETE FROM personal_access_tokens
-            WHERE user_id = ? AND id IN (${tokens.map(() => "?").join(", ")})
-            RETURNING id`
-        )
-        .bind(input.userId, ...tokens.map((token) => token.id)),
-    ]);
-    // Counted from the returned rows: an engine may include the cascaded grant rows in `changes`.
-    return results[results.length - 1].results.length;
+  async revokeAll(
+    input: Omit<RevokePersonalAccessTokenInput, "tokenId">
+  ): Promise<{ revoked: number; complete: boolean }> {
+    let revoked = 0;
+    for (let pass = 0; pass < REVOKE_ALL_MAX_PASSES; pass++) {
+      const tokens = await this.list(input.userId);
+      if (tokens.length === 0) return { revoked, complete: true };
+      const results = await this.db.batch([
+        ...tokens.map((token) =>
+          this.bindAudit({
+            action: "personal_access_token.revoked",
+            tokenId: token.id,
+            ownerUserId: input.userId,
+            actorUserId: input.actorUserId,
+            requestId: input.requestId,
+            now: input.now,
+            before: auditSnapshot(token),
+            after: {},
+          })
+        ),
+        this.db
+          .prepare(
+            `DELETE FROM personal_access_tokens
+              WHERE user_id = ? AND id IN (${tokens.map(() => "?").join(", ")})
+              RETURNING id`
+          )
+          .bind(input.userId, ...tokens.map((token) => token.id)),
+      ]);
+      // Counted from the returned rows: an engine may include the cascaded grant rows in `changes`.
+      revoked += results[results.length - 1].results.length;
+    }
+    return { revoked, complete: (await this.list(input.userId)).length === 0 };
   }
 
   /**

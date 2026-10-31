@@ -347,8 +347,10 @@ user holds at most 50 tokens (`409 personal_access_token_limit_reached`). Issue 
 `personal_access_token.created` and `personal_access_token.revoked` audit events in the same
 transaction. Issuing also enforces the workspace token policy
 (`403 personal_access_tokens_disabled`, `400 lifetime_exceeds_policy`,
-`400 permission_not_allowed_by_policy`). See [Personal access tokens](#personal-access-tokens-1)
-under the security model for how a token is admitted.
+`400 permission_not_allowed_by_policy`), and inserts the token only if the policy is still at the
+revision the request was checked against (`409 personal_access_token_policy_changed` otherwise). See
+[Personal access tokens](#personal-access-tokens-1) under the security model for how a token is
+admitted.
 
 Workspace governance requires `workspace.personal_access_tokens.manage` (Owner and Administrator by
 default, delegable to custom roles) and a human browser session:
@@ -360,6 +362,10 @@ default, delegable to custom roles) and a human browser session:
 | `/settings/personal-access-tokens`       | GET    | Every member's tokens with owners, newest first, `cursor`-paged |
 | `/settings/personal-access-tokens/:id`   | DELETE | Revoke any member's token                                       |
 | `/members/:id/personal-access-tokens`    | DELETE | Revoke every token one member holds → `{ revoked }`             |
+
+Revoke-all repeats until a pass finds no token, so a token the member issues while it runs is
+revoked too. If the member keeps issuing through every pass, it answers `409 revoke_all_incomplete`
+with the count revoked; suspend the member and revoke again.
 
 The policy (`enabled`, `maxLifetimeDays`, `allowedPermissions`) is checked at authentication, so it
 applies to existing tokens at once: disabled refuses every token with `401`, a lower lifetime cap

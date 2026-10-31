@@ -5,13 +5,14 @@
  */
 
 import { env, SELF } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type {
   ListWorkspacePersonalAccessTokensResponse,
   PersonalAccessTokenPolicy,
   PersonalAccessTokenPolicySnapshot,
 } from "@open-inspect/shared/types/personal-access-tokens";
+import { PersonalAccessTokenPolicyStore } from "../../src/db/personal-access-token-policy";
 import { PersonalAccessTokenStore } from "../../src/db/personal-access-tokens";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -146,6 +147,91 @@ describe("the workspace token policy", () => {
       allowedPermissions: ["sessions.read", "skills.read", "skills.manage"],
     });
     expect(consistent.status).toBe(200);
+  });
+
+  it("audits only an update whose before is the revision it replaced", async () => {
+    // A request read revision 0; another administrator then saved revision 1.
+    const stale = await policy();
+    expect((await setPolicy({ maxLifetimeDays: 90 })).status).toBe(200);
+    const store = new PersonalAccessTokenPolicyStore(env.DB);
+    vi.spyOn(store, "get").mockResolvedValueOnce(stale);
+
+    const result = await store.replace({
+      expectedRevision: 1,
+      policy: { ...OPEN, enabled: false },
+      actorUserId: ADMIN.userId,
+      requestId: "stale-before",
+      now: Date.now(),
+    });
+    expect(result.status).toBe("conflict");
+    expect((await policy()).enabled).toBe(true);
+    const audits = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM authorization_audit_events
+        WHERE action = 'workspace.personal_access_token_policy_updated'`
+    ).first<{ count: number }>();
+    expect(audits?.count).toBe(1);
+  });
+
+  it("reports the policy its own update wrote, not a later read", async () => {
+    const store = new PersonalAccessTokenPolicyStore(env.DB);
+    const get = store.get.bind(store);
+    // Any read after the update sees another administrator's later save.
+    vi.spyOn(store, "get")
+      .mockImplementationOnce(get)
+      .mockResolvedValue({
+        ...OPEN,
+        maxLifetimeDays: 7,
+        revision: 9,
+        updatedAt: 0,
+        updatedByUserId: OTHER.userId,
+      });
+
+    await expect(
+      store.replace({
+        expectedRevision: 0,
+        policy: { ...OPEN, maxLifetimeDays: 30 },
+        actorUserId: ADMIN.userId,
+        requestId: "returning",
+        now: 1234,
+      })
+    ).resolves.toEqual({
+      status: "applied",
+      policy: {
+        ...OPEN,
+        maxLifetimeDays: 30,
+        revision: 1,
+        updatedAt: 1234,
+        updatedByUserId: ADMIN.userId,
+      },
+    });
+  });
+
+  it("issues nothing once the policy has moved past the revision a request was checked against", async () => {
+    const checked = (await policy()).revision;
+    expect((await setPolicy({ maxLifetimeDays: 90 })).status).toBe(200);
+    const store = new PersonalAccessTokenStore(env.DB);
+    const request = {
+      userId: MEMBER.userId,
+      name: "raced",
+      permissions: ["sessions.read"] satisfies PermissionId[],
+      expiresAt: Date.now() + 30 * DAY_MS,
+      now: Date.now(),
+      requestId: "policy-race",
+    };
+
+    await expect(store.issue({ ...request, policyRevision: checked })).resolves.toEqual({
+      kind: "policy_changed",
+    });
+    expect(await store.list(MEMBER.userId)).toEqual([]);
+    const created = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM authorization_audit_events
+        WHERE action = 'personal_access_token.created'`
+    ).first<{ count: number }>();
+    expect(created?.count).toBe(0);
+
+    await expect(store.issue({ ...request, policyRevision: checked + 1 })).resolves.toMatchObject({
+      kind: "issued",
+    });
   });
 
   it("tells every user its rules, without the revision", async () => {
@@ -293,6 +379,50 @@ describe("administering members' tokens", () => {
       .bind(MEMBER.userId)
       .first<{ count: number }>();
     expect(audits?.count).toBe(2);
+  });
+
+  it("revokes a token the member issues while revoke-all runs", async () => {
+    await issueToken(MEMBER.userId, ["sessions.read"], "before");
+    const store = new PersonalAccessTokenStore(env.DB);
+    const list = store.list.bind(store);
+    let raced: Awaited<ReturnType<typeof issueToken>> | undefined;
+    vi.spyOn(store, "list").mockImplementation(async (userId) => {
+      const tokens = await list(userId);
+      // The member issues another token just after the first pass has listed theirs.
+      raced ??= await issueToken(MEMBER.userId, ["sessions.read"], "during");
+      return tokens;
+    });
+
+    await expect(
+      store.revokeAll({
+        userId: MEMBER.userId,
+        actorUserId: ADMIN.userId,
+        now: Date.now(),
+        requestId: "revoke-all-race",
+      })
+    ).resolves.toEqual({ revoked: 2, complete: true });
+    expect((await withToken(raced!.token, "/sessions")).status).toBe(401);
+    expect(await list(MEMBER.userId)).toEqual([]);
+  });
+
+  it("reports a member who keeps issuing tokens through every revoke-all pass", async () => {
+    await issueToken(MEMBER.userId, ["sessions.read"], "first");
+    const store = new PersonalAccessTokenStore(env.DB);
+    const list = store.list.bind(store);
+    vi.spyOn(store, "list").mockImplementation(async (userId) => {
+      const tokens = await list(userId);
+      await issueToken(MEMBER.userId, ["sessions.read"], "again");
+      return tokens;
+    });
+
+    await expect(
+      store.revokeAll({
+        userId: MEMBER.userId,
+        actorUserId: ADMIN.userId,
+        now: Date.now(),
+        requestId: "revoke-all-flood",
+      })
+    ).resolves.toEqual({ revoked: 5, complete: false });
   });
 
   it("is never reachable with a token, even an administrator's", async () => {

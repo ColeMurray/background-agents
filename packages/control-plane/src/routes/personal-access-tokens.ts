@@ -141,7 +141,17 @@ async function handleIssueToken(
     expiresAt: now + parsed.expiresInDays * MS_PER_DAY,
     now,
     requestId: ctx.request_id,
+    policyRevision: policy.revision,
   });
+  if (result.kind === "policy_changed") {
+    return json(
+      {
+        error: "The workspace token policy changed while this token was being issued; try again",
+        code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.policyChanged,
+      },
+      409
+    );
+  }
   if (result.kind === "limit_reached") {
     return json(
       {

@@ -85,7 +85,6 @@ async function handleReplacePolicy(
 
   const store = new PersonalAccessTokenPolicyStore(ctx.db);
   const result = await store.replace({
-    before: await store.get(),
     expectedRevision: Number(match[1]),
     policy: parsed,
     actorUserId: ctx.principal.userId,
@@ -146,12 +145,23 @@ async function handleRevokeMemberTokens(
   params: { id: string },
   ctx: UserRouteContext
 ): Promise<Response> {
-  const revoked = await new PersonalAccessTokenStore(ctx.db).revokeAll({
+  const { revoked, complete } = await new PersonalAccessTokenStore(ctx.db).revokeAll({
     userId: params.id,
     actorUserId: ctx.principal.userId,
     now: Date.now(),
     requestId: ctx.request_id,
   });
+  if (!complete) {
+    return json(
+      {
+        error:
+          "The member issued tokens while they were being revoked. Suspend the member, then revoke again.",
+        code: "revoke_all_incomplete",
+        revoked,
+      },
+      409
+    );
+  }
   return json({ revoked });
 }
 
