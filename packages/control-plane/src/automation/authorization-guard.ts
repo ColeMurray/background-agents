@@ -1,3 +1,4 @@
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase } from "../db/sql-database";
 
@@ -15,19 +16,40 @@ export interface AutomationExecutionAuthorizationRequest {
   executionUserId?: string;
   requiresRepositoryUse: TargetUseRequirement;
   requiresEnvironmentUse: TargetUseRequirement;
+  /**
+   * Permissions the admitted request may exercise, such as a personal access token's grant within
+   * its owner's role. Each permission execution needs must then be here as well as in the
+   * execution user's live role. Absent, the live role alone decides.
+   */
+  permissionCeiling?: readonly PermissionId[];
+}
+
+/** Never satisfied; written as a comparison so it is a boolean in every SQL dialect. */
+const NEVER_SQL = "1 = 0";
+
+function storedTargetAbsent(table: "automation_repositories" | "automation_environments"): string {
+  return `NOT EXISTS (SELECT 1 FROM ${table} stored_target WHERE stored_target.automation_id = a.id)`;
 }
 
 function targetUseGuard(
   requirement: TargetUseRequirement,
   table: "automation_repositories" | "automation_environments",
-  permission: "repositories.use" | "environments.use"
+  permission: "repositories.use" | "environments.use",
+  withinCeiling: boolean
 ): SqlPredicate {
   if (requirement === false) return { sql: "", values: [] };
+  // Outside the ceiling no role can supply the permission, so only an absent target passes.
+  if (!withinCeiling) {
+    return {
+      sql: `AND ${requirement === "stored" ? storedTargetAbsent(table) : NEVER_SQL}`,
+      values: [],
+    };
+  }
   const guard = rolePermissionPredicate(permission);
   return {
     sql:
       requirement === "stored"
-        ? `AND (NOT EXISTS (SELECT 1 FROM ${table} stored_target WHERE stored_target.automation_id = a.id)
+        ? `AND (${storedTargetAbsent(table)}
              OR ${guard.sql})`
         : `AND ${guard.sql}`,
     values: guard.values,
@@ -37,16 +59,22 @@ function targetUseGuard(
 export function automationExecutionPredicate(
   request: AutomationExecutionAuthorizationRequest
 ): SqlPredicate {
-  const createGuard = rolePermissionPredicate("sessions.create");
+  const ceiling = request.permissionCeiling ? new Set(request.permissionCeiling) : null;
+  const withinCeiling = (permission: PermissionId) => !ceiling || ceiling.has(permission);
+  const createGuard = withinCeiling("sessions.create")
+    ? rolePermissionPredicate("sessions.create")
+    : { sql: NEVER_SQL, values: [] };
   const repositoryGuard = targetUseGuard(
     request.requiresRepositoryUse,
     "automation_repositories",
-    "repositories.use"
+    "repositories.use",
+    withinCeiling("repositories.use")
   );
   const environmentGuard = targetUseGuard(
     request.requiresEnvironmentUse,
     "automation_environments",
-    "environments.use"
+    "environments.use",
+    withinCeiling("environments.use")
   );
   return {
     sql: `EXISTS (
@@ -77,7 +105,8 @@ export function automationExecutionPredicate(
  *
  * The caller derives repository/environment requirements from the immutable target selection that
  * will execute, so a concurrent edit to the automation tables cannot weaken this decision. Missing
- * users, roles, automations, or suspended users fail closed.
+ * users, roles, automations, or suspended users fail closed, as does a needed permission outside
+ * the request's `permissionCeiling`.
  *
  * This does not decide whether a caller may manage or manually trigger the automation. The route's
  * ownership-scoped authorization performs that admission before execution begins.

@@ -260,7 +260,13 @@ describe("automation lifecycle routes", () => {
         });
         expect(response.status).toBe(status);
         if (status === 201) {
-          expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", null);
+          // The run is bounded by what admission allowed, here the trigger permission alone.
+          expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", {
+            userId: "user-1",
+            scmEnrichment: null,
+            actorKind: "person",
+            permissionCeiling: [`automations.trigger.${scope}`],
+          });
         } else {
           await expect(response.json()).resolves.toMatchObject({
             reason_code: "not_owner_or_lead",
@@ -285,7 +291,16 @@ describe("automation lifecycle routes", () => {
         invocationId: "inv-1",
         runs: [{ id: "run-1" }],
       });
-      expect(mockSchedulerTrigger).toHaveBeenCalledWith("auto-1", "user-1", enrichment);
+      expect(mockSchedulerTrigger).toHaveBeenCalledWith(
+        "auto-1",
+        expect.objectContaining({
+          userId: "user-1",
+          scmEnrichment: enrichment,
+          // A browser session is a person at the controls.
+          actorKind: "person",
+          permissionCeiling: expect.arrayContaining(["sessions.create", "repositories.use"]),
+        })
+      );
     });
 
     it("does not trigger automation when GitHub credential integrity fails", async () => {

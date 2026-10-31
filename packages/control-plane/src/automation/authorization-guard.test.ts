@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SqlDatabase } from "../db/sql-database";
-import { isAutomationExecutionAuthorized } from "./authorization-guard";
+import {
+  automationExecutionPredicate,
+  isAutomationExecutionAuthorized,
+} from "./authorization-guard";
 
 function recordingDb(result: { authorized: number } | null = { authorized: 1 }): {
   db: SqlDatabase;
@@ -79,5 +82,57 @@ describe("automation execution authorization", () => {
         requiresEnvironmentUse: true,
       })
     ).resolves.toBe(false);
+  });
+});
+
+describe("automation execution within a permission ceiling", () => {
+  const request = {
+    automationId: "automation-1",
+    executionUserId: "requester-1",
+    requiresRepositoryUse: true,
+    requiresEnvironmentUse: false,
+  } as const;
+
+  it("adds nothing when the ceiling holds every permission execution needs", () => {
+    expect(
+      automationExecutionPredicate({
+        ...request,
+        permissionCeiling: ["sessions.create", "repositories.use"],
+      })
+    ).toEqual(automationExecutionPredicate(request));
+  });
+
+  it.each([
+    ["sessions.create", ["repositories.use"]],
+    ["repositories.use", ["sessions.create"]],
+  ] as const)(
+    "never authorizes without %s in the ceiling, whatever the role holds",
+    (_withheld, ceiling) => {
+      const predicate = automationExecutionPredicate({ ...request, permissionCeiling: ceiling });
+      expect(predicate.sql).toContain("AND 1 = 0");
+    }
+  );
+
+  it("passes a stored target requirement outside the ceiling only when no target is stored", () => {
+    const predicate = automationExecutionPredicate({
+      ...request,
+      requiresRepositoryUse: "stored",
+      permissionCeiling: ["sessions.create"],
+    });
+    expect(predicate.sql).toContain(
+      "AND NOT EXISTS (SELECT 1 FROM automation_repositories stored_target"
+    );
+    // No role can supply the use permission, so the role guard is not offered as an alternative.
+    expect(predicate.sql).not.toContain("OR (r.key IN");
+  });
+
+  it("ignores a ceiling permission no target needs", () => {
+    expect(
+      automationExecutionPredicate({
+        ...request,
+        requiresRepositoryUse: false,
+        permissionCeiling: ["sessions.create"],
+      })
+    ).toEqual(automationExecutionPredicate({ ...request, requiresRepositoryUse: false }));
   });
 });

@@ -15,6 +15,12 @@ import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { fetchRuns } from "./run-helpers";
 import { seedEnvironment, seedGrant, seedTeam } from "./ownership-test-helpers";
+import type { ManualTriggerRequester } from "../../src/scheduler/contracts";
+
+/** A person firing from the browser, with only their live role bounding the run. */
+function asPerson(userId: string): ManualTriggerRequester {
+  return { userId, scmEnrichment: null, actorKind: "person" };
+}
 
 const EXECUTOR = "11111111111111111111111111111111";
 const REQUESTER = "22222222222222222222222222222222";
@@ -66,7 +72,7 @@ async function expectDenied(source: AutomationInvocationSource) {
   const row = (await store.getById(`auto-team-grants-${source}`))!;
   const scheduler = createScheduler(sqlDatabase(env.DB), createCloudflareEnv(env), { submit() {} });
   if (source === "manual") {
-    await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toMatchObject({
+    await expect(scheduler.trigger(row.id, asPerson(REQUESTER))).rejects.toMatchObject({
       name: AutomationExecutionUnauthorizedError.name,
       reason: "target_team_missing_grant",
     });
@@ -199,7 +205,7 @@ describe("automation current team repository grants (integration)", () => {
         submit() {},
       });
       if (source === "manual") {
-        await expect(scheduler.trigger(row.id, REQUESTER)).rejects.toMatchObject({
+        await expect(scheduler.trigger(row.id, asPerson(REQUESTER))).rejects.toMatchObject({
           name: "AutomationTriggerBlockedError",
           reason: "team_grants_changed",
         });

@@ -1,5 +1,8 @@
 /** Public automation scheduler results and errors, independent of its implementation. */
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { AutomationRun } from "@open-inspect/shared/types/automations";
+import type { InvocationActorKind } from "../db/automation-store";
+import type { GitHubEnrichment } from "../session/identity";
 import type { AutomationTriggerBlockedReason } from "./invocation-outcome";
 import type { ContinuationOutcome } from "./session-continuity";
 
@@ -31,6 +34,23 @@ export interface SchedulerEventResult {
 export interface SchedulerTriggerResult {
   invocationId: string;
   runs: AutomationRun[];
+}
+
+/** Who fires a manual run, and with what authority. */
+export interface ManualTriggerRequester {
+  /** The canonical user whose authority executes the run. */
+  userId: string;
+  scmEnrichment: GitHubEnrichment | null;
+  /**
+   * Who authored the firing, recorded on its invocation. Separate from `userId`: a credential
+   * acting as a user does not establish that a person fired the run.
+   */
+  actorKind: InvocationActorKind;
+  /**
+   * Permissions the admitted request may exercise. Execution then needs each permission it uses
+   * both here and in the user's live role; absent, the live role alone decides.
+   */
+  permissionCeiling?: readonly PermissionId[];
 }
 
 export class AutomationTriggerBlockedError extends Error {

@@ -54,6 +54,15 @@ async function saveAutomation(id: string, userId: string) {
     .run();
 }
 
+async function invocationActorKinds(automationId: string): Promise<string[]> {
+  const { results } = await env.DB.prepare(
+    "SELECT actor_kind FROM automation_invocations WHERE automation_id = ? ORDER BY created_at"
+  )
+    .bind(automationId)
+    .all<{ actor_kind: string }>();
+  return results.map((row) => row.actor_kind);
+}
+
 async function expectRefusal(response: Response, status: number, code: string) {
   expect(response.status).toBe(status);
   await expect(response.json()).resolves.toMatchObject({ code });
@@ -193,7 +202,11 @@ describe("automations with a token", () => {
   it("triggers its owner's automation and launches the run as the owner, but no one else's", async () => {
     await saveAutomation("auto-own", OWNER);
     await saveAutomation("auto-other", OTHER);
-    const token = await issueToken(OWNER, ["automations.read", "automations.trigger.own"]);
+    const token = await issueToken(OWNER, [
+      "automations.read",
+      "automations.trigger.own",
+      "sessions.create",
+    ]);
 
     const triggered = await withToken(token, "/automations/auto-own/trigger", { method: "POST" });
     expect(triggered.status).toBe(201);
@@ -203,11 +216,44 @@ describe("automations with a token", () => {
       userId: OWNER,
       spawnSource: "automation",
     });
+    // The owner's authority ran it, but a token does not establish that a person fired it.
+    expect(await invocationActorKinds("auto-own")).toEqual(["unknown"]);
 
     const foreign = await withToken(token, "/automations/auto-other/trigger", { method: "POST" });
     expect(foreign.status).toBe(403);
     expect(await fetchRuns("auto-other")).toEqual([]);
   });
+
+  it.each([
+    ["sessions.create", ["automations.trigger.own"], null],
+    [
+      "environments.use",
+      ["automations.trigger.own", "sessions.create"],
+      "env_token_trigger_target",
+    ],
+  ] as const)(
+    "launches nothing when the token lacks %s, though its owner holds it",
+    async (_withheld, grant, environmentId) => {
+      await saveAutomation("auto-own", OWNER);
+      if (environmentId) {
+        await seedEnvironment(environmentId, null);
+        await env.DB.prepare(
+          "INSERT INTO automation_environments (automation_id, environment_id, created_at, updated_at) VALUES (?, ?, 1, 1)"
+        )
+          .bind("auto-own", environmentId)
+          .run();
+      }
+      const token = await issueToken(OWNER, [...grant]);
+
+      const refused = await withToken(token, "/automations/auto-own/trigger", { method: "POST" });
+      expect(refused.status).toBe(403);
+      await expect(refused.json()).resolves.toMatchObject({
+        reason_code: "execution_authorization_denied",
+      });
+      expect(await fetchRuns("auto-own")).toEqual([]);
+      expect(await invocationActorKinds("auto-own")).toEqual([]);
+    }
+  );
 
   it.each([
     ["PUT", "/automations/auto-own", { name: "Renamed" }],

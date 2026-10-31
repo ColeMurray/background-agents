@@ -3,7 +3,8 @@
  */
 
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
-import { AutomationStore } from "../db/automation-store";
+import type { Principal } from "../auth/principal";
+import { AutomationStore, type InvocationActorKind } from "../db/automation-store";
 import { UserStore } from "../db/user-store";
 import { createScheduler } from "../scheduler/factory";
 import {
@@ -117,6 +118,14 @@ async function handleResumeAutomation(
   });
 }
 
+/**
+ * Who authored a manual firing. A browser session is a person at the controls; a personal access
+ * token may be a person's script or an agent, and the credential does not say which.
+ */
+function manualFiringActorKind(principal: Principal | undefined): InvocationActorKind {
+  return principal?.kind === "user" ? "person" : "unknown";
+}
+
 async function handleTriggerAutomation(
   request: Request,
   env: Env,
@@ -125,23 +134,26 @@ async function handleTriggerAutomation(
 ): Promise<Response> {
   const id = params.id;
 
-  const requesterUserId = ctx.authorization?.userId;
-  if (!requesterUserId) return error("Authorization unavailable", 503);
+  const authorization = ctx.authorization;
+  if (!authorization) return error("Authorization unavailable", 503);
 
-  const requesterEnrichment = await resolveGitHubEnrichmentForRequest(
+  const scmEnrichment = await resolveGitHubEnrichmentForRequest(
     new UserStore(ctx.db),
-    requesterUserId,
+    authorization.userId,
     await resolveGitHubCredentialAuthority(ctx, request.headers)
   );
 
   // The scheduler performs the authoritative D1-backed concurrency check.
   let triggerResult;
   try {
-    triggerResult = await createScheduler(ctx.db, env, ctx.executionCtx).trigger(
-      id,
-      requesterUserId,
-      requesterEnrichment
-    );
+    triggerResult = await createScheduler(ctx.db, env, ctx.executionCtx).trigger(id, {
+      userId: authorization.userId,
+      scmEnrichment,
+      actorKind: manualFiringActorKind(ctx.principal),
+      // What admission let this request do: a browser user's role, or a token's grant within it.
+      // The run may use no permission beyond it, whatever the user's role holds.
+      permissionCeiling: authorization.permissions,
+    });
   } catch (triggerError) {
     logger.error("automation.trigger_failed", {
       event: "automation.trigger_failed",

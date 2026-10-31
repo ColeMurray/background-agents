@@ -15,6 +15,12 @@ import { AutomationModelProviderAuthStore } from "../../src/db/automation-model-
 import { ModelProviderAccountStore } from "../../src/db/model-provider-accounts";
 import { ProviderDefaultStore } from "../../src/db/provider-account-defaults";
 import { createCloudflareEnv } from "../../src/cloudflare/platform";
+import type { ManualTriggerRequester } from "../../src/scheduler/contracts";
+
+/** A person firing from the browser, with only their live role bounding the run. */
+function asPerson(userId: string): ManualTriggerRequester {
+  return { userId, scmEnrichment: null, actorKind: "person" };
+}
 
 function createScheduler(schedulerEnv = createCloudflareEnv(env)) {
   return createAutomationScheduler(env.DB, schedulerEnv, { submit() {} });
@@ -685,8 +691,8 @@ describe("Scheduler (integration)", () => {
       ];
 
       const [triggerA, triggerB, tick] = await Promise.allSettled([
-        schedulers[0]!.trigger("auto-concurrent-admission", "user-1"),
-        schedulers[1]!.trigger("auto-concurrent-admission", "user-1"),
+        schedulers[0]!.trigger("auto-concurrent-admission", asPerson("user-1")),
+        schedulers[1]!.trigger("auto-concurrent-admission", asPerson("user-1")),
         schedulers[2]!.tick(),
       ]);
 
@@ -788,7 +794,7 @@ describe("Scheduler (integration)", () => {
     });
 
     it("rejects when automation is not found", async () => {
-      await expect(createScheduler().trigger("nonexistent", "user-1")).rejects.toThrow(
+      await expect(createScheduler().trigger("nonexistent", asPerson("user-1"))).rejects.toThrow(
         "Automation not found"
       );
     });
@@ -807,7 +813,7 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      await expect(createScheduler().trigger("auto-trig1", "user-1")).rejects.toThrow(
+      await expect(createScheduler().trigger("auto-trig1", asPerson("user-1"))).rejects.toThrow(
         "An active run already exists"
       );
     });
@@ -834,7 +840,7 @@ describe("Scheduler (integration)", () => {
       await store.create(makeAutomation({ id: "auto-trigger-only" }));
 
       await expect(
-        createScheduler().trigger("auto-trigger-only", requesterId)
+        createScheduler().trigger("auto-trigger-only", asPerson(requesterId))
       ).rejects.toBeInstanceOf(AutomationExecutionUnauthorizedError);
       expect(await fetchRuns("auto-trigger-only")).toEqual([]);
     });
@@ -863,7 +869,10 @@ describe("Scheduler (integration)", () => {
         } as unknown as DurableObjectNamespace,
       });
 
-      await createScheduler(schedulerEnv).trigger("auto-requester-principal", requesterId);
+      await createScheduler(schedulerEnv).trigger(
+        "auto-requester-principal",
+        asPerson(requesterId)
+      );
 
       expect(
         await env.DB.prepare(
@@ -905,7 +914,7 @@ describe("Scheduler (integration)", () => {
         } as unknown as DurableObjectNamespace,
       });
 
-      const result = await createScheduler(schedulerEnv).trigger("auto-trig2", "user-1");
+      const result = await createScheduler(schedulerEnv).trigger("auto-trig2", asPerson("user-1"));
       expect(result).toEqual({
         invocationId: expect.any(String),
         runs: [expect.objectContaining({ status: "running" })],

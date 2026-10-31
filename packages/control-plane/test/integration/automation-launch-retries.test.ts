@@ -10,6 +10,12 @@ import { cleanD1Tables } from "./cleanup";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { makeAutomation } from "./invocation-fixtures";
 import { fetchRuns } from "./run-helpers";
+import type { ManualTriggerRequester } from "../../src/scheduler/contracts";
+
+/** A person firing from the browser, with only their live role bounding the run. */
+function asPerson(userId: string): ManualTriggerRequester {
+  return { userId, scmEnrichment: null, actorKind: "person" };
+}
 
 const AUTOMATION_ID = "auto-retry";
 const INIT_FAILURE = "Failed to initialize session DO: 500";
@@ -242,7 +248,7 @@ describe.each(["recurring", "one-shot"] as const)("%s scheduled launch retries",
     const session = sessionStub();
     await createOverdueAutomation({ max_retries: 2 });
 
-    await expect(session.scheduler().trigger(AUTOMATION_ID, "user-1")).rejects.toThrow(
+    await expect(session.scheduler().trigger(AUTOMATION_ID, asPerson("user-1"))).rejects.toThrow(
       "Failed to trigger automation"
     );
 

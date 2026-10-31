@@ -46,7 +46,10 @@ export interface StartInvocationParams {
    */
   actorKind: InvocationActorKind;
   invocationId?: string;
-  /** Human authority used for a manual firing; unattended sources use the automation owner. */
+  /**
+   * The requester's authority for a manual firing, bounded by its permission ceiling; unattended
+   * sources use the automation owner.
+   */
   executionPrincipal?: ExecutionPrincipal;
   /** Cron slot being served — becomes scheduled_at and the idempotency key (schedule source only). */
   scheduledAt?: number;
@@ -172,11 +175,13 @@ export class AutomationInvocationService {
       automation.owner_team_id === null
         ? null
         : await this.deps.teams.getById(automation.owner_team_id);
+    // Each child launch re-checks this request, ceiling included, against the selected targets.
     const authorization: AutomationExecutionAuthorizationRequest = {
       automationId: automation.id,
       executionUserId: executionPrincipal.platformUserId,
       requiresRepositoryUse: selection.length > 0,
       requiresEnvironmentUse: environmentSelection.length > 0,
+      permissionCeiling: executionPrincipal.permissionCeiling,
     };
     if (!(await this.deps.isAuthorized(authorization))) {
       return { outcome: "unauthorized", reason: executionDenialReason(team) };

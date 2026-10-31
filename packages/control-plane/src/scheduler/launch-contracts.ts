@@ -8,6 +8,11 @@ export interface ExecutionPrincipal {
   platformUserId: string;
   participantUserId: string;
   scmEnrichment: GitHubEnrichment | null;
+  /**
+   * The admitted request's permissions, for a manual firing; execution may use only permissions
+   * both here and in the live role. Absent for unattended firings, which run with the owner's role.
+   */
+  permissionCeiling?: AutomationExecutionAuthorizationRequest["permissionCeiling"];
 }
 
 /** What admission decided for a firing, re-checked as each child launches. */
