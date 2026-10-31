@@ -344,8 +344,8 @@ caller currently holds (`403 permission_not_held`) and one tokens may hold at al
 `@open-inspect/shared/types/personal-access-tokens`, which withholds workspace administration). A
 user holds at most 50 tokens (`409 personal_access_token_limit_reached`). Issue and revoke write
 `personal_access_token.created` and `personal_access_token.revoked` audit events in the same
-transaction. See [Personal access tokens](#personal-access-tokens) under the security model for how
-a token is admitted.
+transaction. See [Personal access tokens](#personal-access-tokens-1) under the security model for
+how a token is admitted.
 
 ### Audit Events
 
@@ -682,13 +682,15 @@ revoking a token deletes its row.
 Two independent checks bound what a token can do, and both must pass:
 
 - **The route accepts tokens.** A route admits tokens only when its policy declares
-  `personalAccessTokens: "accept"`. Everywhere else a token is refused with
-  `403 personal_access_token_not_accepted`, whatever other principals the route accepts. `admit()`
-  refuses to build an opted-in route unless it authorizes an active user and every one of its
-  requirements is decided by permissions a token may be granted. Each requirement is checked on its
-  own, so a requirement decided by ownership (collaborator or visibility management) or by team
-  membership is refused even beside a grantable permission. A grant can therefore always narrow what
-  an opted-in route allows.
+  `personalAccessTokens: "accept"`, and no route does yet, so an issued token cannot authorize an
+  API call until one opts in. Any other route that authenticates the bearer refuses a valid token
+  with `403 personal_access_token_not_accepted`, whatever other principals it accepts. Public and
+  handler-authenticated routes never resolve a token, and sandbox routes verify the bearer as a
+  sandbox token, so none of them returns that code. `admit()` refuses to build an opted-in route
+  unless it authorizes an active user and every one of its requirements is decided by permissions a
+  token may be granted. Each requirement is checked on its own, so a requirement decided by
+  ownership (collaborator or visibility management) or by team membership is refused even beside a
+  grantable permission. A grant can therefore always narrow what an opted-in route allows.
 - **The token holds the permission.** Admission loads the owner's effective authorization as usual,
   then narrows its permissions to the intersection with the token's grant. Every downstream
   permission, scoped-permission, and resource check reads the narrowed set, so a token never exceeds
