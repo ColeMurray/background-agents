@@ -315,8 +315,24 @@ describe("skills with a token", () => {
     );
   });
 
-  it("loses skills.manage with its owner's role", async () => {
+  it("never reads skill or repository content through import without skills.read", async () => {
+    // Issued straight into storage: the route refuses this grant, but a grant can outlive a rule.
     const manager = await issueToken(ADMIN, ["skills.manage"]);
+    for (const path of [
+      "/skills/import/preview",
+      "/skills/import",
+      "/skills/skill-1/reimport/preview",
+    ]) {
+      await expectRefusal(
+        await withToken(manager, path, { method: "POST", body: {} }),
+        403,
+        "permission_required"
+      );
+    }
+  });
+
+  it("loses skills.manage with its owner's role", async () => {
+    const manager = await issueToken(ADMIN, ["skills.read", "skills.manage"]);
     await env.DB.prepare(
       "UPDATE user_role_assignments SET role_id = 'role_builtin_member' WHERE user_id = ?"
     )

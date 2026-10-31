@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   isPersonalAccessTokenGrantable,
+  PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES,
   PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH,
+  withGrantPrerequisitesMet,
   type CreatedPersonalAccessToken,
   type PersonalAccessToken,
   type PersonalAccessTokenGrantablePermission,
@@ -92,9 +94,13 @@ export function PersonalAccessTokensSettings() {
   // copy of the secret, so settings navigation, history traversal, and unload all ask first.
   useSettingsUnsavedChanges(issuance.phase === "issuing" || issuance.phase === "issued");
 
-  // Only permissions the user holds now can be granted, so the picker offers no others.
+  // Only permissions the user holds now can be granted, so the picker offers no others; nor one
+  // whose prerequisites the user lacks, which a token could never exercise.
   const holdable = useMemo(
-    () => (authorization?.permissions ?? []).filter(isPersonalAccessTokenGrantable),
+    () =>
+      withGrantPrerequisitesMet(
+        (authorization?.permissions ?? []).filter(isPersonalAccessTokenGrantable)
+      ),
     [authorization]
   );
 
@@ -230,11 +236,19 @@ function TokenForm({
   onSubmit: () => void;
   onCancel: () => void;
 }) {
+  // Granting a permission grants its prerequisites, which the picker only offers it alongside;
+  // withdrawing a prerequisite withdraws what needs it.
   const toggle = (permission: PersonalAccessTokenGrantablePermission, granted: boolean) => {
     const permissions = new Set(draft.permissions);
-    if (granted) permissions.add(permission);
-    else permissions.delete(permission);
-    onChange({ ...draft, permissions });
+    if (granted) {
+      permissions.add(permission);
+      for (const prerequisite of PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES[permission] ?? []) {
+        permissions.add(prerequisite);
+      }
+    } else {
+      permissions.delete(permission);
+    }
+    onChange({ ...draft, permissions: new Set(withGrantPrerequisitesMet([...permissions])) });
   };
   const held = new Set(holdable);
   const readOnly = holdable.filter(

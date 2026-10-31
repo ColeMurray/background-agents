@@ -163,6 +163,22 @@ describe("issuing personal access tokens", () => {
     });
   });
 
+  it("refuses to grant skills.manage without skills.read, which its routes answer with", async () => {
+    const response = await issue(OWNER, {
+      name: "laptop",
+      permissions: ["skills.manage"],
+      expiresInDays: 30,
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "permission_prerequisite_missing",
+      permission: "skills.manage",
+      requires: "skills.read",
+    });
+    const { results } = await env.DB.prepare("SELECT id FROM personal_access_tokens").all();
+    expect(results).toEqual([]);
+  });
+
   it.each([
     ["without an expiry", { name: "laptop", permissions: ["sessions.read"] }],
     ["with an empty grant", { name: "laptop", permissions: [], expiresInDays: 30 }],

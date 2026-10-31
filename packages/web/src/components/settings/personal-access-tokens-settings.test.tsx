@@ -160,6 +160,26 @@ describe("PersonalAccessTokensSettings", () => {
     expect(screen.queryByLabelText("Manage skills")).not.toBeInTheDocument();
   });
 
+  it("grants skill management only together with reading skills", async () => {
+    hooks.permissions = ["skills.read", "skills.manage"];
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+
+    await user.click(screen.getByLabelText("Manage skills"));
+    expect(screen.getByLabelText("Read skills")).toBeChecked();
+    await user.click(screen.getByLabelText("Read skills"));
+    expect(screen.getByLabelText("Manage skills")).not.toBeChecked();
+  });
+
+  it("does not offer skill management to a user who cannot read skills", async () => {
+    hooks.permissions = ["sessions.read", "skills.manage"];
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    expect(screen.queryByLabelText("Manage skills")).not.toBeInTheDocument();
+  });
+
   it("issues a token with the chosen grant and shows the secret once", async () => {
     const created: CreatedPersonalAccessToken = {
       ...TOKEN,

@@ -119,6 +119,53 @@ export function isPersonalAccessTokenGrantable(
 export const PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS: readonly PersonalAccessTokenGrantablePermission[] =
   PERMISSION_IDS.filter(isPersonalAccessTokenGrantable);
 
+/**
+ * Permissions a token's grant must also include for a permission to take effect.
+ *
+ * Every route a token can manage skills through answers with skill or repository content, which
+ * `skills.read` governs. A role may separate the two, but a token may not: one granted only
+ * `skills.manage` would read what its grant deliberately left out.
+ */
+export const PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES: Partial<
+  Record<PersonalAccessTokenGrantablePermission, readonly PersonalAccessTokenGrantablePermission[]>
+> = {
+  "skills.manage": ["skills.read"],
+};
+
+function prerequisitesOf(permission: PermissionId): readonly PermissionId[] {
+  return isPersonalAccessTokenGrantable(permission)
+    ? (PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES[permission] ?? [])
+    : [];
+}
+
+/** The first permission in `permissions` whose prerequisites it lacks, or null when none does. */
+export function unmetGrantPrerequisite(
+  permissions: readonly PermissionId[]
+): { permission: PermissionId; requires: PermissionId } | null {
+  const present = new Set(permissions);
+  for (const permission of permissions) {
+    const requires = prerequisitesOf(permission).find((prerequisite) => !present.has(prerequisite));
+    if (requires) return { permission, requires };
+  }
+  return null;
+}
+
+/** `permissions` less every permission whose prerequisites are not also present. */
+export function withGrantPrerequisitesMet<Permission extends PermissionId>(
+  permissions: readonly Permission[]
+): Permission[] {
+  let remaining = [...permissions];
+  // Dropping one permission can strand another that required it, so repeat until stable.
+  for (;;) {
+    const present = new Set<PermissionId>(remaining);
+    const kept = remaining.filter((permission) =>
+      prerequisitesOf(permission).every((prerequisite) => present.has(prerequisite))
+    );
+    if (kept.length === remaining.length) return kept;
+    remaining = kept;
+  }
+}
+
 export const PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH = 100;
 
 /** Bounds on how long a token stays valid, chosen when it is issued. Every token expires. */
@@ -174,6 +221,8 @@ export const PERSONAL_ACCESS_TOKEN_ERROR_CODES = {
   permissionNotGrantable: "permission_not_grantable",
   /** A requested permission is not one the issuing user currently holds. */
   permissionNotHeld: "permission_not_held",
+  /** A requested permission's PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES are not also requested. */
+  prerequisiteMissing: "permission_prerequisite_missing",
   /** The user already holds PERSONAL_ACCESS_TOKEN_MAX_PER_USER tokens. */
   limitReached: "personal_access_token_limit_reached",
 } as const;

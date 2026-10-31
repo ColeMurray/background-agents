@@ -108,7 +108,7 @@ export const PERSONAL_ACCESS_TOKEN_PERMISSION_COPY = {
   "skills.manage": {
     group: "skills",
     label: "Manage skills",
-    description: "Create, import, update, and delete managed skills",
+    description: "Create, import, update, and delete managed skills. Includes Read skills.",
     readOnly: false,
   },
   "skill_profiles.manage_own": {

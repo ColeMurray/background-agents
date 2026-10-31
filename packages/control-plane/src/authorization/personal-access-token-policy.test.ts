@@ -205,6 +205,21 @@ describe("restrictAuthorizationToGrant", () => {
     ).toEqual(["skills.read"]);
   });
 
+  it("drops a granted permission whose prerequisite did not survive narrowing", () => {
+    const manager = { ...owner, permissions: [...owner.permissions, "skills.manage" as const] };
+    expect(
+      restrictAuthorizationToGrant(manager, ["skills.manage", "skills.read"]).permissions
+    ).toEqual(["skills.read", "skills.manage"]);
+    // Granted only skills.manage, or granted both by an owner who no longer reads skills.
+    expect(restrictAuthorizationToGrant(manager, ["skills.manage"]).permissions).toEqual([]);
+    expect(
+      restrictAuthorizationToGrant({ ...manager, permissions: ["skills.manage"] }, [
+        "skills.manage",
+        "skills.read",
+      ]).permissions
+    ).toEqual([]);
+  });
+
   it("keeps the owner's identity, role, and suspension", () => {
     const restricted = restrictAuthorizationToGrant({ ...owner, suspendedAt: 5 }, []);
     expect(restricted).toMatchObject({ userId: "user-1", suspendedAt: 5, role: owner.role });

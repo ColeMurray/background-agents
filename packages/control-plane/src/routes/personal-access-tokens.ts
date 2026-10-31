@@ -12,6 +12,7 @@ import {
   isPersonalAccessTokenGrantable,
   PERSONAL_ACCESS_TOKEN_ERROR_CODES,
   PERSONAL_ACCESS_TOKEN_MAX_PER_USER,
+  unmetGrantPrerequisite,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { admit, dispatch } from "../routing/admit";
@@ -69,6 +70,18 @@ async function handleIssueToken(
         403
       );
     }
+  }
+  const unmet = unmetGrantPrerequisite(parsed.permissions);
+  if (unmet) {
+    return json(
+      {
+        error: `A token granted ${unmet.permission} must also be granted ${unmet.requires}`,
+        code: PERSONAL_ACCESS_TOKEN_ERROR_CODES.prerequisiteMissing,
+        permission: unmet.permission,
+        requires: unmet.requires,
+      },
+      400
+    );
   }
 
   const now = Date.now();

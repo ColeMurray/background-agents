@@ -20,7 +20,10 @@
  */
 
 import type { EffectiveAuthorization, PermissionId } from "@open-inspect/shared/rbac";
-import { isPersonalAccessTokenGrantable } from "@open-inspect/shared/types/personal-access-tokens";
+import {
+  isPersonalAccessTokenGrantable,
+  withGrantPrerequisitesMet,
+} from "@open-inspect/shared/types/personal-access-tokens";
 import type { SessionAction } from "@open-inspect/shared";
 import type { RouteAdmissionPolicy, RouteAuthorizationRequirement } from "../routes/shared";
 
@@ -124,7 +127,8 @@ export function personalAccessTokenRouteViolation(policy: RouteAdmissionPolicy):
 
 /**
  * The authority a token acts with: its owner's authorization, with permissions narrowed to those
- * the token was granted and that remain grantable. Suspension and role are the owner's.
+ * the token was granted and that remain grantable, less any whose grant prerequisites did not
+ * survive the narrowing. Suspension and role are the owner's.
  */
 export function restrictAuthorizationToGrant(
   authorization: EffectiveAuthorization,
@@ -133,8 +137,10 @@ export function restrictAuthorizationToGrant(
   const granted = new Set(grant);
   return {
     ...authorization,
-    permissions: authorization.permissions.filter(
-      (permission) => granted.has(permission) && isPersonalAccessTokenGrantable(permission)
+    permissions: withGrantPrerequisitesMet(
+      authorization.permissions.filter(
+        (permission) => granted.has(permission) && isPersonalAccessTokenGrantable(permission)
+      )
     ),
   };
 }

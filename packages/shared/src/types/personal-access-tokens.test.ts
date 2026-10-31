@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { PERMISSION_IDS, permissionsForBuiltInRole } from "../rbac";
 import {
+  PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES,
   PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS,
   PERSONAL_ACCESS_TOKEN_MAX_LIFETIME_DAYS,
   PERSONAL_ACCESS_TOKEN_PREFIX,
   createPersonalAccessTokenRequestSchema,
   isPersonalAccessTokenFormat,
   isPersonalAccessTokenGrantable,
+  unmetGrantPrerequisite,
+  withGrantPrerequisitesMet,
 } from "./personal-access-tokens";
 
 const WELL_FORMED = `${PERSONAL_ACCESS_TOKEN_PREFIX}${"a1".repeat(32)}`;
@@ -76,5 +79,37 @@ describe("createPersonalAccessTokenRequestSchema", () => {
     ["unknown fields", { ...valid, scopes: ["read"] }],
   ])("rejects %s", (_label, body) => {
     expect(createPersonalAccessTokenRequestSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe("grant prerequisites", () => {
+  it("names only grantable permissions on either side", () => {
+    for (const [permission, prerequisites] of Object.entries(
+      PERSONAL_ACCESS_TOKEN_GRANT_PREREQUISITES
+    )) {
+      expect(PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS).toContain(permission);
+      for (const prerequisite of prerequisites ?? []) {
+        expect(PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS).toContain(prerequisite);
+      }
+    }
+  });
+
+  it("finds a permission granted without its prerequisite", () => {
+    expect(unmetGrantPrerequisite(["sessions.read", "skills.manage"])).toEqual({
+      permission: "skills.manage",
+      requires: "skills.read",
+    });
+    expect(unmetGrantPrerequisite(["skills.manage", "skills.read"])).toBeNull();
+    expect(unmetGrantPrerequisite(["skills.read"])).toBeNull();
+  });
+
+  it("drops what a grant cannot exercise for want of a prerequisite", () => {
+    expect(withGrantPrerequisitesMet(["sessions.read", "skills.manage"])).toEqual([
+      "sessions.read",
+    ]);
+    expect(withGrantPrerequisitesMet(["skills.read", "skills.manage"])).toEqual([
+      "skills.read",
+      "skills.manage",
+    ]);
   });
 });
