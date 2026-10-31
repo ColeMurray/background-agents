@@ -76,6 +76,79 @@ describe("ControlPlaneClient", () => {
     await expect(client.get("/sessions")).rejects.toThrow(/ECONNREFUSED/);
   });
 
+  it.each(["GET", "POST"])("does not dispatch an already-cancelled %s", async (method) => {
+    const controller = new AbortController();
+    const reason = new Error("MCP request cancelled");
+    controller.abort(reason);
+    const client = new ControlPlaneClient({ baseUrl: BASE_URL, token: TOKEN }).withSignal(
+      controller.signal
+    );
+
+    await expect(
+      method === "GET" ? client.get("/skills") : client.post("/skills/import", {})
+    ).rejects.toBe(reason);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["headers", "body"])("propagates cancellation while waiting for %s", async (stage) => {
+    const controller = new AbortController();
+    const reason = new Error("MCP request cancelled");
+    let bodyReadStarted!: () => void;
+    const bodyRead = new Promise<void>((resolve) => {
+      bodyReadStarted = resolve;
+    });
+    fetchMock.mockImplementation(async (_url: string, init: { signal: AbortSignal }) => {
+      if (stage === "headers") {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        });
+      }
+      return new Response(
+        new ReadableStream(
+          {
+            start(stream) {
+              init.signal.addEventListener("abort", () => stream.error(init.signal.reason), {
+                once: true,
+              });
+            },
+            pull() {
+              bodyReadStarted();
+            },
+          },
+          // Disable prefetch so pull signals an actual pending reader.read().
+          { highWaterMark: 0 }
+        )
+      );
+    });
+    const client = new ControlPlaneClient({ baseUrl: BASE_URL, token: TOKEN }).withSignal(
+      controller.signal
+    );
+
+    const rejected = expect(client.get("/skills")).rejects.toBe(reason);
+    if (stage === "body") await bodyRead;
+    controller.abort(reason);
+    await rejected;
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
+  it("preserves the timeout on a request-bound client", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementation(
+      async (_url: string, init: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        })
+    );
+    const client = new ControlPlaneClient({
+      baseUrl: BASE_URL,
+      token: TOKEN,
+      timeoutMs: 10,
+    }).withSignal(controller.signal);
+
+    await expect(client.get("/skills")).rejects.toThrow(/timed out after 10ms/);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it("keeps the timeout running while the body is read, not just the headers", async () => {
     // fetch() resolves on headers. A body that never completes must still hit
     // the timeout rather than hanging the tool call forever.

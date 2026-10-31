@@ -121,8 +121,10 @@ export async function relayMcpRequest(
   request.signal.addEventListener("abort", onAbort, { once: true });
   if (request.signal.aborted) onAbort();
   let upstream: Response | undefined;
+  let validatedAt: number;
   try {
     await options.revalidate();
+    validatedAt = Date.now();
     if (abort.signal.aborted) throw new McpError("mcp_unavailable", 503);
     upstream = await (options.fetcher ?? ((req) => fetch(req)))(
       new Request(target, {
@@ -180,7 +182,6 @@ export async function relayMcpRequest(
   }
   timer = setTimeout(onAbort, MCP_STREAM_TIMEOUT_MS);
   const reader = upstream.body.getReader();
-  let validatedAt = Date.now();
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       let value: Uint8Array;

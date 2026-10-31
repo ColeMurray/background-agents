@@ -4,7 +4,7 @@
  * listing and revoking any member's tokens.
  */
 
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type {
@@ -14,8 +14,10 @@ import type {
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokenPolicyStore } from "../../src/db/personal-access-token-policy";
 import { PersonalAccessTokenStore } from "../../src/db/personal-access-tokens";
+import { handleControlPlaneHttp } from "../../src/cloudflare/http-host";
+import { createCloudflareEnv } from "../../src/cloudflare/platform";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, serviceRequestHeaders, sqlDatabase } from "./helpers";
 
 const BASE = "https://cp.test";
 const ADMIN = { userId: "aaaa1111aaaa1111aaaa1111aaaa1111", role: "administrator" } as const;
@@ -148,6 +150,115 @@ describe("the workspace token policy", () => {
     });
     expect(consistent.status).toBe(200);
   });
+
+  it.each(["owner", "administrator", "custom"])(
+    "allows an active %s with the management permission to save the policy",
+    async (role) => {
+      if (role === "custom") {
+        await env.DB.prepare(
+          `INSERT INTO roles (id, name, normalized_name) VALUES ('pat-manager', 'PAT manager', 'pat manager')`
+        ).run();
+        await env.DB.prepare(
+          `INSERT INTO role_permissions (role_id, permission_id)
+           VALUES ('pat-manager', 'workspace.personal_access_tokens.manage')`
+        ).run();
+      }
+      await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+        .bind(role === "custom" ? "pat-manager" : `role_builtin_${role}`, ADMIN.userId)
+        .run();
+
+      expect((await setPolicy({ enabled: false })).status).toBe(200);
+      expect(await policy()).toMatchObject({ enabled: false, revision: 1 });
+    }
+  );
+
+  it.each(["suspended", "demoted", "permission removed", "eligible role change"])(
+    "revalidates the admitted policy writer at commit: %s",
+    async (change) => {
+      await env.DB.prepare(
+        `INSERT INTO roles (id, name, normalized_name) VALUES ('pat-manager', 'PAT manager', 'pat manager')`
+      ).run();
+      await env.DB.prepare(
+        `INSERT INTO role_permissions (role_id, permission_id)
+         VALUES ('pat-manager', 'workspace.personal_access_tokens.manage')`
+      ).run();
+      if (change === "permission removed") {
+        await env.DB.prepare(
+          "UPDATE user_role_assignments SET role_id = 'pat-manager' WHERE user_id = ?"
+        )
+          .bind(ADMIN.userId)
+          .run();
+      }
+      const before = await policy();
+      const body = JSON.stringify({ ...OPEN, enabled: false });
+      const url = `${BASE}/settings/personal-access-token-policy`;
+      const headers = await serviceRequestHeaders(url, {
+        as: ADMIN,
+        method: "PUT",
+        headers: { "If-Match": `"pat-policy-${before.revision}"` },
+        body,
+      });
+      const db = sqlDatabase(env.DB);
+      let policyWritePrepared = false;
+      let raced = false;
+      const requestEnv = createCloudflareEnv(env);
+      requestEnv.DB = {
+        prepare(query) {
+          if (query.includes("workspace.personal_access_token_policy_updated")) {
+            policyWritePrepared = true;
+          }
+          return db.prepare(query);
+        },
+        async batch(statements) {
+          // Admission has succeeded; change live authority just before the policy/audit transaction.
+          if (policyWritePrepared && !raced) {
+            raced = true;
+            if (change === "suspended") {
+              await env.DB.prepare("UPDATE users SET suspended_at = 10 WHERE id = ?")
+                .bind(ADMIN.userId)
+                .run();
+            } else if (change === "permission removed") {
+              await env.DB.prepare(
+                "DELETE FROM role_permissions WHERE role_id = 'pat-manager'"
+              ).run();
+            } else {
+              await env.DB.prepare("UPDATE user_role_assignments SET role_id = ? WHERE user_id = ?")
+                .bind(change === "demoted" ? "role_builtin_member" : "pat-manager", ADMIN.userId)
+                .run();
+            }
+          }
+          return db.batch(statements);
+        },
+      };
+      const executionCtx = createExecutionContext();
+      const response = await handleControlPlaneHttp(
+        new Request(url, { method: "PUT", headers, body }),
+        requestEnv,
+        executionCtx
+      );
+      await waitOnExecutionContext(executionCtx);
+
+      expect(raced).toBe(true);
+      const authorized = change === "eligible role change";
+      expect(response.status).toBe(authorized ? 200 : 403);
+      if (!authorized) {
+        await expect(response.json()).resolves.toMatchObject({
+          code: "actor_authorization_changed",
+        });
+      }
+      const stored = await new PersonalAccessTokenPolicyStore(env.DB).get();
+      expect(stored).toEqual(
+        authorized
+          ? expect.objectContaining({ enabled: false, revision: before.revision + 1 })
+          : before
+      );
+      const audits = await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM authorization_audit_events
+         WHERE action = 'workspace.personal_access_token_policy_updated' AND operation_result = 'applied'`
+      ).first<{ count: number }>();
+      expect(audits?.count).toBe(authorized ? 1 : 0);
+    }
+  );
 
   it("audits only an update whose before is the revision it replaced", async () => {
     // A request read revision 0; another administrator then saved revision 1.

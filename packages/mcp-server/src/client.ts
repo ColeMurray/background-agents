@@ -33,6 +33,12 @@ export interface ControlPlaneClientConfig {
   timeoutMs?: number;
 }
 
+interface RequestOptions {
+  query?: Record<string, string | number | undefined>;
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
 /**
  * Hosts for which plain `http:` is accepted. The token travels in an `Authorization` header on
  * every request, so cleartext is only safe when the request cannot leave the machine. `URL`
@@ -110,7 +116,10 @@ export class ControlPlaneClient {
   private readonly token: string;
   private readonly timeoutMs: number;
 
-  constructor(config: ControlPlaneClientConfig) {
+  constructor(
+    config: ControlPlaneClientConfig,
+    private readonly signal?: AbortSignal
+  ) {
     this.baseUrl = requireSecureBaseUrl(config.baseUrl);
     if (!isPersonalAccessTokenFormat(config.token)) {
       // The value itself is never echoed: it may be a real credential pasted into the wrong place.
@@ -123,9 +132,23 @@ export class ControlPlaneClient {
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
+  /** Bind every HTTP step of one tool call without affecting concurrent calls. */
+  withSignal(signal: AbortSignal): ControlPlaneClient {
+    return new ControlPlaneClient(
+      { baseUrl: this.baseUrl, token: this.token, timeoutMs: this.timeoutMs },
+      signal
+    );
+  }
+
   /** GET a control-plane path and parse the JSON body. */
   get(path: string, query?: Record<string, string | number | undefined>): Promise<unknown> {
-    return this.send("GET", path, { query });
+    return this.sendJson("GET", path, { query });
+  }
+
+  /** GET a control-plane path and return its text body unchanged. */
+  async getText(path: string): Promise<string> {
+    const { body } = await this.send("GET", path, { headers: { Accept: "text/*" } });
+    return body;
   }
 
   /** POST a JSON body to a control-plane path and parse the JSON response. */
@@ -134,18 +157,30 @@ export class ControlPlaneClient {
     body: unknown,
     options?: { headers?: Record<string, string> }
   ): Promise<unknown> {
-    return this.send("POST", path, { body, headers: options?.headers });
+    return this.sendJson("POST", path, { body, headers: options?.headers });
+  }
+
+  private async sendJson(
+    method: "GET" | "POST",
+    path: string,
+    options: RequestOptions
+  ): Promise<unknown> {
+    const { body, status } = await this.send(method, path, options);
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new ControlPlaneError(
+        `${method} ${path} returned non-JSON: ${body.slice(0, 200)}`,
+        status
+      );
+    }
   }
 
   private async send(
     method: "GET" | "POST",
     path: string,
-    options: {
-      query?: Record<string, string | number | undefined>;
-      body?: unknown;
-      headers?: Record<string, string>;
-    }
-  ): Promise<unknown> {
+    options: RequestOptions
+  ): Promise<{ body: string; status: number }> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -163,6 +198,8 @@ export class ControlPlaneClient {
     let response: Response;
     let body: string;
     try {
+      // A late response to an earlier step must not dispatch a cancelled write.
+      this.signal?.throwIfAborted();
       response = await fetch(url.toString(), {
         method,
         headers,
@@ -170,12 +207,13 @@ export class ControlPlaneClient {
         // A redirect would carry the bearer token to wherever the response points. The control
         // plane never redirects an API call, so one means something in between is misbehaving.
         redirect: "error",
-        signal: controller.signal,
+        signal: this.signal ? AbortSignal.any([this.signal, controller.signal]) : controller.signal,
       });
       // Inside the same timer as the fetch: `fetch` resolves on headers, so a control plane that
       // sends headers and then stalls the body would hang the tool call if the timeout ended here.
       body = await readCapped(response);
     } catch (cause) {
+      this.signal?.throwIfAborted();
       // A cap breach already says exactly what happened; rewrapping it would hide that.
       if (cause instanceof ControlPlaneError) throw cause;
       const reason = controller.signal.aborted
@@ -197,14 +235,7 @@ export class ControlPlaneClient {
       );
     }
 
-    try {
-      return JSON.parse(body);
-    } catch {
-      throw new ControlPlaneError(
-        `${method} ${path} returned non-JSON: ${body.slice(0, 200)}`,
-        response.status
-      );
-    }
+    return { body, status: response.status };
   }
 }
 

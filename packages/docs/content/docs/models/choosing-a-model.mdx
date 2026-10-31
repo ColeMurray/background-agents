@@ -33,6 +33,7 @@ Settings › Models lists every model in the catalog, grouped by provider, under
 | OpenCode Zen     | No                 |
 | OpenCode Go      | No                 |
 | xAI / SuperGrok  | No                 |
+| Kimi Coding Plan | No                 |
 | Z.AI Coding Plan | No                 |
 | DeepSeek         | No                 |
 
@@ -177,6 +178,19 @@ Runs on OpenCode only. Opt-in group. Credential: the same `OPENCODE_API_KEY` sec
 
 Go also publishes `minimax-m2.5`, but the pinned OpenCode release does not resolve it on the Go gateway, so it is left out of the catalog. Use `opencode/minimax-m2.5` on Zen instead.
 
+### Kimi Coding Plan
+
+Runs on OpenCode only. Opt-in group. Credential: a [Kimi Code membership API key](https://www.kimi.com/code/docs/en/) in `KIMI_API_KEY` as a global or repository secret. Requests use Kimi's overseas coding endpoint and the membership plan's allowance, separate from Kimi models billed through OpenCode Go. Model and context-window access depend on the plan: the Highspeed models need Pro or above (Allegretto or above on legacy plans), and a plan without access returns 403. See Kimi's [model requirements](https://www.kimi.com/code/docs/en/kimi-code/models.html).
+
+| Model ID                                          | Display name              | Reasoning efforts | Default effort |
+| ------------------------------------------------- | ------------------------- | ----------------- | -------------- |
+| `kimi-code-plan-global/k3.1-pro`                  | Kimi K3.1 Pro             | Not supported     | N/A            |
+| `kimi-code-plan-global/k3.1-pro-highspeed`        | Kimi K3.1 Pro Highspeed   | Not supported     | N/A            |
+| `kimi-code-plan-global/k3`                        | Kimi K3                   | Not supported     | N/A            |
+| `kimi-code-plan-global/k3-256k`                   | Kimi K3 256K              | Not supported     | N/A            |
+| `kimi-code-plan-global/kimi-for-coding`           | Kimi for Coding           | Not supported     | N/A            |
+| `kimi-code-plan-global/kimi-for-coding-highspeed` | Kimi for Coding Highspeed | Not supported     | N/A            |
+
 ### Z.AI Coding Plan
 
 Runs on OpenCode only. Opt-in group. Credential: `ZHIPU_API_KEY` as a global or repository secret.
@@ -229,9 +243,9 @@ For a refused GitHub launch, retry a mention with a compatible `!model`, update 
     The sandbox has no usable credential for the selected model. Check the session's authentication
     mode first. In provider-account mode, verify the account and confirm it is entitled to the
     model. In API-key mode, add the provider's key to the session's secret scope:
-    `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `ZHIPU_API_KEY`, or
-    `OPENCODE_API_KEY` (an `opencode-go/*` model additionally needs an active Go subscription on
-    that key). See [Secrets](/configure/secrets).
+    `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `KIMI_API_KEY`,
+    `ZHIPU_API_KEY`, or `OPENCODE_API_KEY` (an `opencode-go/*` model additionally needs an active
+    Go subscription on that key). See [Secrets](/configure/secrets).
 
 </Accordion>
   <Accordion title="A model is missing from the selector">

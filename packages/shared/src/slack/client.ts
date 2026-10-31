@@ -559,7 +559,8 @@ const conversationsRepliesPayloadSchema = z.object({
  * `response_metadata.next_cursor` pagination so long threads are collected in
  * full rather than truncated to Slack's first (oldest) page. Pass `oldest` to
  * restrict the window to messages posted after that ts. Messages are returned
- * oldest-first. Returns the SlackEnvelope failure arm on any page's error.
+ * oldest-first. `truncated` is true when the page cap stopped pagination with
+ * replies left unread. Returns the SlackEnvelope failure arm on any page's error.
  */
 export async function getThreadMessages(
   token: string,
@@ -567,7 +568,7 @@ export async function getThreadMessages(
   threadTs: string,
   oldest?: string,
   options?: SlackRequestOptions
-): Promise<SlackEnvelope<{ messages: SlackThreadMessage[] }>> {
+): Promise<SlackEnvelope<{ messages: SlackThreadMessage[]; truncated: boolean }>> {
   const paginationSignal = boundedSignal(options?.signal, SLACK_PAGINATION_TIMEOUT_MS);
   const messages: SlackThreadMessage[] = [];
   let cursor: string | undefined;
@@ -594,7 +595,7 @@ export async function getThreadMessages(
     cursor = res.response_metadata?.next_cursor || undefined;
     if (!cursor) break;
   }
-  return { ok: true, messages };
+  return { ok: true, messages, truncated: cursor !== undefined };
 }
 
 /**

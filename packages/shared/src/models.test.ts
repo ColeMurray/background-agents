@@ -95,6 +95,14 @@ const GO_MODELS = [
 ] as const;
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
+const KIMI_CODE_PLAN_MODELS = [
+  "kimi-code-plan-global/k3.1-pro",
+  "kimi-code-plan-global/k3.1-pro-highspeed",
+  "kimi-code-plan-global/k3",
+  "kimi-code-plan-global/k3-256k",
+  "kimi-code-plan-global/kimi-for-coding",
+  "kimi-code-plan-global/kimi-for-coding-highspeed",
+] as const;
 const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
 
 it.each([
@@ -206,6 +214,7 @@ describe("model utilities", () => {
       ...XAI_MODELS,
       ...ZEN_MODELS,
       ...GO_MODELS,
+      ...KIMI_CODE_PLAN_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
     ]) {
@@ -588,6 +597,9 @@ describe("model utilities", () => {
       MODEL_OPTIONS.find((group) => group.category === "OpenCode Go")?.models.map((m) => m.id)
     ).toEqual(GO_MODELS);
     expect(
+      MODEL_OPTIONS.find((group) => group.category === "Kimi Coding Plan")?.models.map((m) => m.id)
+    ).toEqual(KIMI_CODE_PLAN_MODELS);
+    expect(
       MODEL_OPTIONS.find((group) => group.category === "Z.AI Coding Plan")?.models.map((m) => m.id)
     ).toEqual(ZAI_CODING_PLAN_MODELS);
     expect(
@@ -599,6 +611,7 @@ describe("model utilities", () => {
       ...XAI_MODELS,
       ...ZEN_MODELS,
       ...GO_MODELS,
+      ...KIMI_CODE_PLAN_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
     ]) {

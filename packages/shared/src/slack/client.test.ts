@@ -589,7 +589,23 @@ describe("getThreadMessages", () => {
           ],
         },
       ],
+      truncated: false,
     });
+  });
+
+  it("flags history cut off by the page cap as truncated", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({
+        ok: true,
+        messages: [{ ts: "1.1", text: "first", user: "U1" }],
+        response_metadata: { next_cursor: "more" },
+      })
+    );
+
+    const result = await getThreadMessages("xoxb-token", "C123", "1.0");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(25);
+    expect(result).toMatchObject({ ok: true, truncated: true });
   });
 
   it("passes oldest to fetch only newer replies", async () => {
@@ -624,6 +640,7 @@ describe("getThreadMessages", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.messages.map((m) => m.text)).toEqual(["first", "second"]);
+      expect(result.truncated).toBe(false);
     }
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const [secondUrl] = fetchSpy.mock.calls[1]!;

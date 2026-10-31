@@ -9,6 +9,7 @@ import {
   type PersonalAccessTokenPolicy,
   type PersonalAccessTokenPolicySnapshot,
 } from "@open-inspect/shared/types/personal-access-tokens";
+import { rolePermissionPredicate } from "../authorization/permission-sql";
 import type { SqlDatabase } from "./sql-database";
 
 interface PolicyRow {
@@ -53,6 +54,7 @@ function rulesOf(policy: PersonalAccessTokenPolicy): PersonalAccessTokenPolicy {
 
 export type ReplacePersonalAccessTokenPolicyResult =
   | { status: "applied"; policy: PersonalAccessTokenPolicySnapshot }
+  | { status: "actor_authorization_changed"; policy: PersonalAccessTokenPolicySnapshot }
   | { status: "conflict"; policy: PersonalAccessTokenPolicySnapshot };
 
 export class PersonalAccessTokenPolicyStore {
@@ -71,8 +73,9 @@ export class PersonalAccessTokenPolicyStore {
   }
 
   /**
-   * Replace the policy if it is still at `expectedRevision`. The audit insert and the update share
-   * one precondition inside one transaction, so the event is written exactly when the change is.
+   * Replace the policy if it is still at `expectedRevision` and the actor still has authority.
+   * Authorization, the audit insert, and the update share one transaction, so the event is written
+   * exactly when the authorized change is.
    *
    * The audit's `before` is read here and used only when it is at `expectedRevision` itself: every
    * change bumps the revision, so a snapshot at that revision is exactly the policy the guarded
@@ -92,7 +95,18 @@ export class PersonalAccessTokenPolicyStore {
       after.allowedPermissions === null
         ? null
         : JSON.stringify(PERMISSION_IDS.filter((p) => after.allowedPermissions!.includes(p)));
-    const [, updated] = await this.db.batch([
+    const permission = rolePermissionPredicate("workspace.personal_access_tokens.manage");
+    const actor = `EXISTS (
+      SELECT 1 FROM users u
+      JOIN user_role_assignments assignment ON assignment.user_id = u.id
+      JOIN roles r ON r.id = assignment.role_id
+      WHERE u.id = ? AND u.suspended_at IS NULL AND ${permission.sql}
+    )`;
+    const actorValues = [input.actorUserId, ...permission.values];
+    const auditId = crypto.randomUUID();
+    const [authorization, , updated] = await this.db.batch([
+      // Capture the denial in the same snapshot as the writes, not in a later authorization read.
+      this.db.prepare(`SELECT ${actor} AS authorized`).bind(...actorValues),
       this.db
         .prepare(
           `INSERT INTO authorization_audit_events
@@ -101,12 +115,12 @@ export class PersonalAccessTokenPolicyStore {
            SELECT ?, ?, ?, 'user', ?, 'workspace.personal_access_token_policy_updated',
                   'personal_access_token_policy', 'workspace',
                   'workspace.personal_access_token_policy_updated', 'applied', ?
-           WHERE EXISTS (
+           WHERE ${actor} AND EXISTS (
              SELECT 1 FROM workspace_personal_access_token_policy WHERE id = 1 AND revision = ?
            )`
         )
         .bind(
-          crypto.randomUUID(),
+          auditId,
           input.now,
           input.requestId,
           input.actorUserId,
@@ -115,6 +129,7 @@ export class PersonalAccessTokenPolicyStore {
             requested: { expectedRevision: input.expectedRevision },
             after,
           }),
+          ...actorValues,
           input.expectedRevision
         ),
       this.db
@@ -122,7 +137,9 @@ export class PersonalAccessTokenPolicyStore {
           `UPDATE workspace_personal_access_token_policy
               SET enabled = ?, max_lifetime_days = ?, allowed_permissions_json = ?,
                   revision = revision + 1, updated_at = ?, updated_by_user_id_snapshot = ?
-            WHERE id = 1 AND revision = ?
+             WHERE id = 1 AND revision = ? AND EXISTS (
+               SELECT 1 FROM authorization_audit_events WHERE id = ? AND operation_result = 'applied'
+             )
         RETURNING enabled, max_lifetime_days, allowed_permissions_json, revision, updated_at,
                   updated_by_user_id_snapshot`
         )
@@ -132,9 +149,13 @@ export class PersonalAccessTokenPolicyStore {
           ceiling,
           input.now,
           input.actorUserId,
-          input.expectedRevision
+          input.expectedRevision,
+          auditId
         ),
     ]);
+    if (!(authorization.results[0] as { authorized: number }).authorized) {
+      return { status: "actor_authorization_changed", policy: before };
+    }
     // The row this update wrote, not a later read another administrator's save could overtake.
     const [written] = updated.results as PolicyRow[];
     if (written) return { status: "applied", policy: toSnapshot(written) };

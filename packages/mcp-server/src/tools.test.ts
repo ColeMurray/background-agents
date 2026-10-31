@@ -78,7 +78,8 @@ function fakeClient(handlers: {
   const post = vi.fn(async (path: string, body?: unknown, options?: unknown) =>
     handlers.post?.(path, body, options)
   );
-  return { client: { get, post } as unknown as ControlPlaneClient, get, post };
+  const client = { get, post, withSignal: () => client } as unknown as ControlPlaneClient;
+  return { client, get, post };
 }
 
 describe("tool surface", () => {
@@ -220,7 +221,8 @@ describe("tool arguments", () => {
 
 describe("session diffs", () => {
   it("reads one file's patch with the ids the manifest lists", async () => {
-    const { client, get } = fakeClient({ get: () => ({ file: { patch: "@@" } }) });
+    const getText = vi.fn(async () => "@@");
+    const client = { getText } as unknown as ControlPlaneClient;
 
     await tool("get_session_diff_file").run(client, {
       session_id: "session/1",
@@ -228,7 +230,7 @@ describe("session diffs", () => {
       file_id: "file/../2",
     });
 
-    expect(get).toHaveBeenCalledWith("/sessions/session%2F1/diff/rev%201/files/file%2F..%2F2");
+    expect(getText).toHaveBeenCalledWith("/sessions/session%2F1/diff/rev%201/files/file%2F..%2F2");
   });
 });
 
