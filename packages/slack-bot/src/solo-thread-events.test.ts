@@ -418,6 +418,25 @@ describe("solo threads: untagged follow-ups from the thread's only poster", () =
       expect(launchedAcks(slackFetch)).toEqual(["Using *acme/app*", "Starting work..."]);
     });
 
+    it("keeps a thread blocked when a later mention relaunches it and the history reads solo", async () => {
+      const { env, slackFetch } = setup({
+        threadMessages: [rootMessage, { ts: "222.333", user: OWNER, text: "<@UBOT> try again" }],
+      });
+      await seedThread(env, { kind: "blocked" }, null);
+      await send(env, mention({ text: "<@UBOT> try again", ts: "222.333", thread_ts: ROOT_TS }));
+      expect(sessionFetchBodies(env.CONTROL_PLANE.fetch)).toHaveLength(1);
+      expect(await soloRecord(env)).toEqual({ kind: "blocked" });
+      // Arming runs after the acknowledgement is posted, and must not read the thread.
+      const [ack] = slackCalls(slackFetch, "chat.postMessage", () => true);
+      const { calls, invocationCallOrder } = slackFetch.mock;
+      const readsAfterAck = calls.filter(
+        ([input], i) =>
+          String(input).includes("conversations.replies") && invocationCallOrder[i] > ack.order
+      );
+      expect(readsAfterAck).toEqual([]);
+      expect(launchedAcks(slackFetch)).toEqual(["Starting work..."]);
+    });
+
     it("does not arm a mention that follows up on the thread's session", async () => {
       const { env } = setup({ threadMessages: [rootMessage, ownerReply] });
       await seedThread(env, null);

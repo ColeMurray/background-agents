@@ -24,7 +24,11 @@ import {
 import { isDirectMessageChannel, mentionsUser, startsWithUserMention } from "./dm-utils";
 import { createLogger } from "./logger";
 import { formatSoloThreadEndedNotice } from "./messages/blocks";
-import { storeSoloThread, type SoloThreadRecord } from "./sessions/solo-thread-store";
+import {
+  lookupSoloThread,
+  storeSoloThread,
+  type SoloThreadRecord,
+} from "./sessions/solo-thread-store";
 import type { Env } from "./types";
 
 const log = createLogger("solo-thread");
@@ -90,9 +94,12 @@ export async function readThreadParticipation(
  * Arm a channel thread for the person whose mention just launched its session,
  * when the thread's history shows they are its only person. Even a thread the
  * mention started is read: another person can reply while the session starts,
- * and their reply found no record to block. Best effort: any failure leaves the
- * thread unarmed. Returns whether it armed, and the caller shows the solo hint
- * exactly then, so no thread is armed without its owner being told.
+ * and their reply found no record to block. A thread blocked earlier stays
+ * blocked, even if the other person's messages are gone from its history.
+ * Best effort: any failure leaves the thread unarmed. Returns whether it armed,
+ * and the caller puts the solo hint in the acknowledgement update exactly then.
+ * That update's result is not checked, so if it fails the thread is armed
+ * without its owner being told.
  */
 export async function armSoloThread(
   env: Env,
@@ -100,8 +107,10 @@ export async function armSoloThread(
   traceId?: string
 ): Promise<boolean> {
   const { channel, threadTs, ownerUserId } = launch;
+  // Only one-to-one DMs need excluding: a group DM's read fails without `mpim:history`.
   if (isDirectMessageChannel(channel)) return false;
   try {
+    if ((await lookupSoloThread(env, channel, threadTs))?.kind === "blocked") return false;
     if ((await readThreadParticipation(env, channel, threadTs, ownerUserId, traceId)) !== "solo") {
       return false;
     }
@@ -149,6 +158,21 @@ export async function blockSoloThread(
   }
 }
 
+/** The fields of a Slack `message` event that the untagged-reply path reads. */
+export interface ThreadReplyEvent {
+  type: string;
+  subtype?: string;
+  channel_type?: string;
+  bot_id?: string;
+  user?: string;
+  channel?: string;
+  ts?: string;
+  thread_ts?: string;
+  text?: string;
+  files?: SlackMessageFile[];
+  attachments?: SlackMessageAttachment[];
+}
+
 /** A person's untagged reply in a channel thread, as the solo-thread checks see it. */
 export interface SoloThreadReply {
   user: string;
@@ -168,19 +192,7 @@ export interface SoloThreadReply {
  * to channel" broadcasts, which can reveal another person. Edits and deletions
  * never count.
  */
-export function toSoloThreadReply(event: {
-  type: string;
-  subtype?: string;
-  channel_type?: string;
-  bot_id?: string;
-  user?: string;
-  channel?: string;
-  ts?: string;
-  thread_ts?: string;
-  text?: string;
-  files?: SlackMessageFile[];
-  attachments?: SlackMessageAttachment[];
-}): SoloThreadReply | null {
+export function toSoloThreadReply(event: ThreadReplyEvent): SoloThreadReply | null {
   const { user, channel, ts, thread_ts: threadTs, text = "", files, attachments } = event;
   if (event.type !== "message") return null;
   const sentToChannel = event.subtype === "thread_broadcast";

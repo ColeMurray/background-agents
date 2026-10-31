@@ -7,7 +7,7 @@ import type { Env, ThreadSession } from "../types";
 
 const log = createLogger("handler");
 export const THREAD_CLOSED_MESSAGE = "this session is no longer available from this channel";
-/** How long a thread keeps its session mapping, and its solo-thread record, after the last write. */
+/** How long a thread keeps its session mapping after the last write. */
 export const THREAD_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const threadSessionSchema: z.ZodType<ThreadSession> = z.object({
   sessionId: z.string().min(1),

@@ -13,6 +13,9 @@ import { z } from "zod";
 import type { Env } from "../types";
 import { THREAD_SESSION_TTL_MS } from "./thread-session-store";
 
+/** A solo-thread record lasts as long as the thread's session mapping. */
+const SOLO_THREAD_TTL_MS = THREAD_SESSION_TTL_MS;
+
 const soloThreadRecordSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("owned"), ownerUserId: z.string().min(1) }),
   z.object({ kind: z.literal("blocked") }),
@@ -55,6 +58,6 @@ export async function storeSoloThread(
   await createKvCacheStore(env.SLACK_KV).put(
     getSoloThreadKey(channel, threadTs),
     JSON.stringify(record),
-    { ttlMs: THREAD_SESSION_TTL_MS }
+    { ttlMs: SOLO_THREAD_TTL_MS }
   );
 }

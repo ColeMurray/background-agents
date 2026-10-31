@@ -79,6 +79,7 @@ import {
   screenSoloReply,
   toSoloThreadReply,
   type SoloThreadReply,
+  type ThreadReplyEvent,
 } from "../solo-threads";
 
 const log = createLogger("handler");
@@ -818,7 +819,7 @@ async function admitSoloThreadReply(
  * channel automations.
  */
 export async function handleUntaggedThreadReply(
-  event: Parameters<typeof toSoloThreadReply>[0],
+  event: ThreadReplyEvent,
   env: Env,
   traceId: string | undefined,
   scheduleBackground: BackgroundTaskScheduler
