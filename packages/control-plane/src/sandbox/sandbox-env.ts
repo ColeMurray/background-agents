@@ -1,5 +1,5 @@
 import type { HarnessId } from "@open-inspect/shared/harnesses";
-import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
+import type { RuntimeMcpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
 import {
@@ -45,7 +45,7 @@ export interface SessionConfigPayload {
   provider: string;
   model: string;
   /** Omitted from the serialized payload when undefined. */
-  mcp_servers?: McpServerConfig[];
+  mcp_servers?: RuntimeMcpServerConfig[];
   /** Omitted from the serialized payload when undefined. */
   branch?: string | null;
   /** Ordered member list; only present for multi-repo sessions. */
@@ -67,7 +67,7 @@ export interface SessionConfigInput {
   harness: HarnessId;
   provider: string;
   model: string;
-  mcpServers?: McpServerConfig[];
+  mcpServers?: RuntimeMcpServerConfig[];
   branch?: string | null;
   repositories?: SessionRepositoryInfo[];
 }

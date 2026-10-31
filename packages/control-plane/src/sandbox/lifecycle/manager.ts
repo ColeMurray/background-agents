@@ -1,3 +1,15 @@
+import {
+  isPersonalMcpServer,
+  personalMcpWithheldReason,
+  resolveRuntimeMcpServers,
+  type PersonalMcpWithheldCode,
+} from "../../mcp/runtime-config";
+import { SANDBOX_RUNTIME_VERSION } from "../runtime-manifest";
+import type { HarnessId } from "@open-inspect/shared/harnesses";
+import type {
+  McpServerConfig,
+  RuntimeMcpServerConfig,
+} from "@open-inspect/shared/types/integrations";
 /**
  * SandboxLifecycleManager - orchestrates sandbox lifecycle operations.
  *
@@ -363,6 +375,11 @@ export interface SandboxLifecycleConfig extends AlarmPolicyConfig, SandboxLaunch
   circuitBreaker: CircuitBreakerConfig;
   spawn: SpawnConfig;
   controlPlaneUrl: string;
+  /** Every server a launch resolved; `withheld` names why its personal ones stayed out. */
+  recordMcpServers?: (
+    servers: RuntimeMcpServerConfig[],
+    withheld: PersonalMcpWithheldCode | null
+  ) => void;
   /**
    * Session ID for log correlation, resolved per use. Optional — logs will
    * omit sessionId if not provided. A thunk rather than a value because the
@@ -761,6 +778,37 @@ export class SandboxLifecycleManager
   }
 
   /**
+   * Resolves a launch's MCP servers and records them for the session's MCP
+   * context. Returns the sandbox's share: personal servers stay out of a
+   * sandbox that cannot tear them down per turn, and the record says why.
+   */
+  private launchMcpServers(
+    definitions: McpServerConfig[] | undefined,
+    launch: { sessionId: string; sandboxToken: string; harness: HarnessId; runtimeVersion: string }
+  ): RuntimeMcpServerConfig[] | undefined {
+    const servers = definitions
+      ? resolveRuntimeMcpServers(definitions, {
+          controlPlaneUrl: this.config.controlPlaneUrl,
+          sessionId: launch.sessionId,
+          sandboxToken: launch.sandboxToken,
+        })
+      : undefined;
+    const personal = servers?.filter(isPersonalMcpServer) ?? [];
+    const withheld = personal.length
+      ? personalMcpWithheldReason(launch.harness, launch.runtimeVersion)
+      : null;
+    this.config.recordMcpServers?.(servers ?? [], withheld);
+    if (!withheld) return servers;
+    this.log.info("Personal MCP servers withheld from launch", {
+      event: "mcp.personal_withheld",
+      reason: withheld,
+      names: personal.map((server) => server.name),
+      runtime_version: launch.runtimeVersion,
+    });
+    return servers?.filter((server) => !isPersonalMcpServer(server));
+  }
+
+  /**
    * Execute a fresh sandbox spawn.
    */
   private async doSpawn(replacedGeneration?: SandboxGeneration): Promise<void> {
@@ -827,7 +875,13 @@ export class SandboxLifecycleManager
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      const mcpServers = await this.launchContext.loadMcpServers(repositories);
+      const mcpDefinitions = await this.launchContext.loadMcpServers(repositories);
+      const mcpServers = this.launchMcpServers(mcpDefinitions, {
+        sessionId: session.session_name || session.id,
+        sandboxToken: sandboxAuthToken,
+        harness: agent.harness,
+        runtimeVersion: selectedImage?.runtimeVersion ?? SANDBOX_RUNTIME_VERSION,
+      });
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const vncEnabled = session.vnc_enabled === 1;
@@ -907,6 +961,12 @@ export class SandboxLifecycleManager
           sandboxId: expectedSandboxId,
           generationCreatedAtMs: retry.createdAt,
           sandboxAuthToken,
+          mcpServers: this.launchMcpServers(mcpDefinitions, {
+            sessionId,
+            sandboxToken: sandboxAuthToken,
+            harness: agent.harness,
+            runtimeVersion: SANDBOX_RUNTIME_VERSION,
+          }),
           prebuiltImageId: null,
           prebuiltImageSha: null,
         };
@@ -1161,7 +1221,13 @@ export class SandboxLifecycleManager
       const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled =
         await this.launchContext.resolveAgentSlackNotifyEnabled(session);
-      const mcpServers = await this.launchContext.loadMcpServers(repositories);
+      const mcpDefinitions = await this.launchContext.loadMcpServers(repositories);
+      const mcpServers = this.launchMcpServers(mcpDefinitions, {
+        sessionId: session.session_name || session.id,
+        sandboxToken: sandboxAuthToken,
+        harness: agent.harness,
+        runtimeVersion: snapshotRuntimeVersion,
+      });
       const { sandboxSettings, timeoutSeconds } =
         this.launchContext.resolveSandboxSettings(session);
       const restoreConfig = {

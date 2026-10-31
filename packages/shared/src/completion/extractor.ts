@@ -294,7 +294,20 @@ export function buildAgentResponseFromEvents(
   const success =
     typeof successValue === "boolean" ? successValue : (options.defaultSuccess ?? false);
 
+  const mcpWarnings = [
+    ...new Set(
+      chronologicalEvents
+        .filter(
+          (event) =>
+            event.type === "warning" &&
+            event.data.scope === "mcp" &&
+            typeof event.data.message === "string"
+        )
+        .map((event) => String(event.data.message).slice(0, 1000))
+    ),
+  ].slice(0, 5);
   return {
+    ...(mcpWarnings.length ? { mcpWarnings } : {}),
     textContent,
     toolCalls,
     artifacts:

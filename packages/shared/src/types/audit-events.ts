@@ -22,7 +22,12 @@ export const auditEventTimestampSchema = z
 export const auditOperationResultSchema = z.enum(["applied", "no_op", "denied", "rejected"]);
 
 /** Principal categories currently emitted by the control plane. */
-export const auditPrincipalKindSchema = z.enum(["user", "service", "sandbox"]);
+export const auditPrincipalKindSchema = z.enum([
+  "user",
+  "service",
+  "sandbox",
+  "personal-access-token",
+]);
 
 /** Forward-compatible structured metadata attached to an audit event. */
 export const auditEventMetadataSchema = z.record(z.string(), z.unknown());
@@ -112,6 +117,8 @@ export const AUDIT_OPERATION_ACTIONS = [
   "team.secret_set",
   "team.secret_deleted",
   "automation.executor_changed",
+  "personal_access_token.created",
+  "personal_access_token.revoked",
 ] as const;
 
 export const AUTHORIZATION_DECISION_METADATA_SCHEMA = "authorization_decision.v1";

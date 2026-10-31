@@ -24,7 +24,7 @@ interface McpServerMetadata {
 /** The credentials stored for a server, read the way sessions read them. */
 async function storedCredentials(id: string): Promise<Record<string, string> | undefined> {
   const store = new McpServerStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY!);
-  const server = (await store.getDecryptedForSession([])).find((s) => s.id === id);
+  const server = (await store.getForLaunch([])).find((s) => s.id === id);
   return server?.type === "remote" ? server.headers : server?.env;
 }
 

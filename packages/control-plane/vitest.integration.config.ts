@@ -1,3 +1,4 @@
+import { ManagedMcpGatewayFixture } from "./test/fixtures/managed-mcp-gateway";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 import path from "path";
@@ -39,6 +40,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest(async () => {
       const migrations = await readD1Migrations(migrationsPath);
+      const mcpFixture = new ManagedMcpGatewayFixture();
+      let mcpExchangeStarted = false;
+      let releaseMcpExchange: (() => void) | undefined;
 
       return {
         wrangler: {
@@ -51,6 +55,30 @@ export default defineConfig({
           compatibilityFlags: ["nodejs_compat"],
           async outboundService(request: Request) {
             const url = new URL(request.url);
+            if (url.origin === mcpFixture.origin) {
+              if (url.pathname === "/__fixture/pause") {
+                mcpExchangeStarted = false;
+                const gate = new Promise<void>((resolve) => {
+                  releaseMcpExchange = resolve;
+                });
+                mcpFixture.afterTokenExchange = async () => {
+                  mcpExchangeStarted = true;
+                  await gate;
+                };
+                return Response.json({ ok: true });
+              }
+              if (url.pathname === "/__fixture/release") {
+                releaseMcpExchange?.();
+                mcpFixture.afterTokenExchange = undefined;
+                return Response.json({ ok: true });
+              }
+              if (url.pathname === "/__fixture/status")
+                return Response.json({
+                  entered: mcpExchangeStarted,
+                  requests: mcpFixture.requests.length,
+                });
+              return mcpFixture.fetch(request);
+            }
             if (url.hostname.endsWith(".modal.run")) {
               return new Response("Modal is unavailable in integration tests", { status: 404 });
             }

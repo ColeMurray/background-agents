@@ -279,6 +279,7 @@ describe("response block", () => {
   // the 50-block message limit.
   it("emits one markdown block and stays within Slack's 50-block limit with every block populated", () => {
     const blocks = build("z".repeat(MARKDOWN_BLOCK_MAX_CHARS * 3), {
+      mcpWarnings: Array.from({ length: 5 }, () => "&".repeat(1000)),
       artifacts: [{ type: "branch", label: "feature/x", url: "https://example.com/tree/x" }],
       toolCalls: [
         { tool: "Edit", summary: "Edit src/a.ts" },
@@ -298,4 +299,50 @@ describe("response block", () => {
       text: { type: "mrkdwn", text: "_Agent completed._" },
     });
   });
+});
+
+it("renders escaped personal MCP recovery with a self-service button", () => {
+  const blocks = buildCompletionBlocks(
+    "s",
+    { ...BASE_RESPONSE, mcpWarnings: ["Connect <!channel>"] },
+    BASE_CONTEXT,
+    "https://app.example.com"
+  );
+  expect(JSON.stringify(blocks)).toContain("&lt;!channel&gt;");
+  expect(getActionElements(blocks)).toContainEqual(
+    expect.objectContaining({
+      action_id: "mcp_connections",
+      url: "https://app.example.com/settings?tab=mcp-connections",
+    })
+  );
+});
+
+it.each(["   ", "<!here>"])(
+  "omits the generic placeholder when response %j has MCP warnings but no visible text",
+  (textContent) => {
+    const blocks = buildCompletionBlocks(
+      "s",
+      { ...BASE_RESPONSE, textContent, mcpWarnings: ["Reconnect in Settings"] },
+      BASE_CONTEXT,
+      "https://app.example.com"
+    );
+    expect(blocks.filter((block) => block.type === "markdown")).toEqual([]);
+    const texts = blocks
+      .filter((block) => block.type === "section")
+      .map((block) => block.text.text);
+    expect(texts).toEqual([":warning: Reconnect in Settings"]);
+  }
+);
+
+it("splits MCP warnings after escaping within Slack's section limit", () => {
+  const blocks = buildCompletionBlocks(
+    "s",
+    { ...BASE_RESPONSE, mcpWarnings: ["&".repeat(1000)] },
+    BASE_CONTEXT,
+    "https://app.example.com"
+  );
+  const texts = blocks.filter((block) => block.type === "section").map((block) => block.text.text);
+  expect(blocks[0]).toEqual({ type: "markdown", text: BASE_RESPONSE.textContent });
+  expect(texts.join("")).toBe(`:warning: ${"&amp;".repeat(1000)}`);
+  for (const text of texts) expect(text.length).toBeLessThanOrEqual(3000);
 });

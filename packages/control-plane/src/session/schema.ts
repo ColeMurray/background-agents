@@ -776,6 +776,35 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     description: "Record each prompt author's account as it was when the prompt was queued",
     run: "ALTER TABLE messages ADD COLUMN author_canonical_user_id TEXT",
   },
+  {
+    id: 58,
+    description: "Retain admitted MCP author and queue-owned context",
+    run: (sql) => {
+      runMigration(sql, "ALTER TABLE messages ADD COLUMN admitted_canonical_user_id TEXT");
+      runMigration(sql, "ALTER TABLE messages ADD COLUMN mcp_eligible INTEGER NOT NULL DEFAULT 0");
+      runMigration(sql, "ALTER TABLE messages ADD COLUMN mcp_revision INTEGER NOT NULL DEFAULT 0");
+      runMigration(sql, "ALTER TABLE messages ADD COLUMN mcp_context TEXT");
+      runMigration(sql, "ALTER TABLE messages ADD COLUMN mcp_closed INTEGER NOT NULL DEFAULT 1");
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN mcp_servers TEXT");
+      runMigration(
+        sql,
+        "ALTER TABLE sandbox ADD COLUMN mcp_runtime_version INTEGER NOT NULL DEFAULT 0"
+      );
+      runMigration(
+        sql,
+        "ALTER TABLE sandbox ADD COLUMN mcp_rate_window INTEGER NOT NULL DEFAULT 0"
+      );
+      runMigration(sql, "ALTER TABLE sandbox ADD COLUMN mcp_rate_count INTEGER NOT NULL DEFAULT 0");
+      sql.exec(
+        "CREATE TABLE IF NOT EXISTS mcp_proxy_leases (id TEXT PRIMARY KEY, sandbox_id TEXT NOT NULL, expires_at INTEGER NOT NULL)"
+      );
+    },
+  },
+  {
+    id: 59,
+    description: "Distinguish bridge process replacement from transport reconnect",
+    run: "ALTER TABLE sandbox ADD COLUMN mcp_bridge_instance_id TEXT",
+  },
 ];
 
 function removePersistedHookOutputTails(sql: SqlStorage): void {

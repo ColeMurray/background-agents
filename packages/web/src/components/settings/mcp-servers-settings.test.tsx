@@ -2,10 +2,12 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import { toast } from "sonner";
 import type { McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import type * as McpServersModule from "@/hooks/use-mcp-servers";
 import { McpServersSettings } from "./mcp-servers-settings";
 
 expect.extend(matchers);
@@ -13,18 +15,21 @@ expect.extend(matchers);
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   updateMcpServer: vi.fn(),
+  browserApiFetch: vi.fn(),
   allowedPermissions: null as Set<string> | null,
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: mocks.browserApiFetch }));
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
 }));
-vi.mock("@/hooks/use-mcp-servers", () => ({
+// Delete and revoke stay real so their requests and refusals reach the component as sent.
+vi.mock("@/hooks/use-mcp-servers", async (importOriginal) => ({
+  ...(await importOriginal<typeof McpServersModule>()),
   useMcpServers: () => ({ servers, loading: false, mutate: mocks.mutate }),
   createMcpServer: vi.fn(),
   updateMcpServer: mocks.updateMcpServer,
-  deleteMcpServer: vi.fn(),
 }));
 vi.mock("@/hooks/use-current-user-authorization", () => ({
   useCurrentUserAuthorization: () => ({
@@ -70,7 +75,55 @@ const servers: McpServerMetadata[] = [
     repoScopes: null,
     enabled: true,
   },
+  {
+    id: "server-oauth-off",
+    revision: 5,
+    name: "Disabled OAuth",
+    type: "remote",
+    url: "https://oauth-off.example.com/mcp",
+    hasEnv: false,
+    hasHeaders: false,
+    credentialKeys: [],
+    repoScopes: null,
+    enabled: false,
+    authMode: "user_oauth",
+    managedRouting: true,
+    oauth: { issuer: "https://issuer.example.com", resource: "https://oauth-off.example.com/mcp" },
+  },
+  {
+    id: "server-oauth-on",
+    revision: 1,
+    name: "Enabled OAuth",
+    type: "remote",
+    url: "https://oauth-on.example.com/mcp",
+    hasEnv: false,
+    hasHeaders: false,
+    credentialKeys: [],
+    repoScopes: null,
+    enabled: true,
+    authMode: "user_oauth",
+    managedRouting: true,
+    oauth: { issuer: "https://issuer.example.com", resource: "https://oauth-on.example.com/mcp" },
+  },
+  {
+    id: "server-service-off",
+    revision: 1,
+    name: "Disabled Service",
+    type: "remote",
+    url: "https://service-off.example.com/mcp",
+    hasEnv: false,
+    hasHeaders: false,
+    credentialKeys: [],
+    repoScopes: null,
+    enabled: false,
+    authMode: "service_credentials",
+  },
 ];
+
+/** The header row holding a server's name and its actions. */
+function serverRow(name: RegExp): HTMLElement {
+  return screen.getByRole("button", { name }).parentElement!;
+}
 
 afterEach(() => {
   cleanup();
@@ -89,6 +142,86 @@ describe("McpServersSettings", () => {
     expect(screen.getByRole("button", { name: /Server A/ })).toBeDisabled();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke connections" })).not.toBeInTheDocument();
+  });
+
+  it("offers to revoke connections only for disabled remote servers", () => {
+    render(<McpServersSettings />);
+
+    // A server that left personal OAuth keeps its grants, so it offers revocation too.
+    expect(screen.getAllByRole("button", { name: "Revoke connections" })).toHaveLength(2);
+    for (const name of [/Disabled OAuth/, /Disabled Service/])
+      expect(
+        within(serverRow(name)).getByRole("button", { name: "Revoke connections" })
+      ).toBeInTheDocument();
+    expect(
+      within(serverRow(/Enabled OAuth/)).queryByRole("button", { name: "Revoke connections" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("revokes every user's connections only after confirmation, then refreshes", async () => {
+    mocks.browserApiFetch.mockResolvedValue(Response.json({ ok: true }));
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(
+      within(serverRow(/Disabled OAuth/)).getByRole("button", { name: "Revoke connections" })
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("every user’s personal connection to this server");
+    expect(mocks.browserApiFetch).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Revoke connections" }));
+
+    await waitFor(() => expect(mocks.mutate).toHaveBeenCalledOnce());
+    expect(mocks.browserApiFetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/mcp-servers/server-oauth-off/revoke-connections",
+      { method: "POST" }
+    );
+    expect(toast.success).toHaveBeenCalledWith("MCP connections revoked");
+  });
+
+  it("explains how to delete a server that users are still connected to", async () => {
+    mocks.browserApiFetch.mockResolvedValue(
+      Response.json(
+        {
+          error: "Disable this server, then disconnect its personal connections before deleting it",
+        },
+        { status: 409 }
+      )
+    );
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(within(serverRow(/Disabled OAuth/)).getByRole("button", { name: "Delete" }));
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" })
+    );
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Users are still connected to this server. Disable it and revoke its connections, then delete it."
+      )
+    );
+    expect(mocks.browserApiFetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/mcp-servers/server-oauth-off",
+      { method: "DELETE" }
+    );
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's reason for any other delete failure", async () => {
+    mocks.browserApiFetch.mockResolvedValue(
+      Response.json({ error: "MCP server not found" }, { status: 404 })
+    );
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(within(serverRow(/Disabled OAuth/)).getByRole("button", { name: "Delete" }));
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" })
+    );
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("MCP server not found"));
   });
 
   it("does not close a newer draft when an older save completes", async () => {
@@ -184,6 +317,9 @@ describe("McpServersSettings", () => {
         repoScopes: null,
         type: "remote",
         url: "https://c.example.com",
+        authMode: "service_credentials",
+        managedRouting: false,
+        oauth: null,
         headers: {},
         keepCredentialKeys: ["x-api-key", "Accept"],
         revision: 2,
@@ -210,6 +346,83 @@ describe("McpServersSettings", () => {
       )
     );
   });
+
+  it("restores the saved headers when the auth mode is switched away and back", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+
+    await user.click(screen.getByRole("button", { name: /Server C/ }));
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: "No upstream authentication" }));
+    expect(screen.queryByDisplayValue("x-api-key")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: "Shared service credentials" }));
+    expect(screen.getByDisplayValue("x-api-key")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+        "server-c",
+        expect.objectContaining({
+          authMode: "service_credentials",
+          headers: {},
+          keepCredentialKeys: ["x-api-key", "Accept"],
+        })
+      )
+    );
+  });
+
+  it.each([
+    {
+      mode: "none",
+      option: "No upstream authentication",
+      auth: { authMode: "none", managedRouting: false, oauth: null },
+    },
+    {
+      mode: "user_oauth",
+      option: /Each user/,
+      auth: {
+        authMode: "user_oauth",
+        managedRouting: true,
+        oauth: { issuer: "https://issuer.example.com", resource: "https://c.example.com" },
+      },
+    },
+  ])(
+    "keeps no saved header after choosing $mode and switching the type away and back",
+    async ({ option, auth }) => {
+      mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
+      const user = userEvent.setup();
+      render(<McpServersSettings />);
+
+      await user.click(screen.getByRole("button", { name: /Server C/ }));
+      await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+      await user.click(screen.getByRole("option", { name: option }));
+      if (auth.oauth) {
+        await user.type(
+          screen.getByPlaceholderText("https://gateway.example.com/mcp"),
+          auth.oauth.issuer
+        );
+      }
+      await user.click(screen.getByRole("button", { name: "Local" }));
+      await user.click(screen.getByRole("button", { name: "Remote" }));
+      await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      // Kept names would retain the stored headers, which this mode refuses.
+      await waitFor(() =>
+        expect(mocks.updateMcpServer).toHaveBeenCalledWith("server-c", {
+          name: "Server C",
+          enabled: true,
+          repoScopes: null,
+          type: "remote",
+          url: "https://c.example.com",
+          ...auth,
+          headers: {},
+          revision: 2,
+        })
+      );
+    }
+  );
 
   it("clears every saved header when all saved rows are removed", async () => {
     mocks.updateMcpServer.mockResolvedValue({ ...servers[2], revision: 3 });
@@ -286,6 +499,9 @@ describe("McpServersSettings", () => {
         repoScopes: null,
         type: "remote",
         url: "https://a.example.com",
+        authMode: "service_credentials",
+        managedRouting: false,
+        oauth: null,
         revision: 3,
       })
     );
@@ -317,6 +533,9 @@ describe("McpServersSettings", () => {
           repoScopes: null,
           type: "remote",
           url: "https://c.example.com",
+          authMode: "service_credentials",
+          managedRouting: false,
+          oauth: null,
           revision: 2,
         })
       );
@@ -346,5 +565,33 @@ describe("McpServersSettings", () => {
       command: ["npx", "tool"],
       revision: 3,
     });
+  });
+
+  it("selects personal OAuth through the shared control and clears service credentials", async () => {
+    mocks.updateMcpServer.mockResolvedValue({ ...servers[0], revision: 4 });
+    const user = userEvent.setup();
+    render(<McpServersSettings />);
+    await user.click(screen.getByRole("button", { name: /Server A/ }));
+    await user.type(screen.getByPlaceholderText("Header-Name"), "Authorization");
+    await user.type(screen.getByPlaceholderText("value"), "service-secret");
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(screen.getByRole("option", { name: /Each user/ }));
+    expect(screen.queryByPlaceholderText("Header-Name")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Route through Open Inspect" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Route through Open Inspect" })).toBeDisabled();
+    await user.type(
+      screen.getByPlaceholderText("https://gateway.example.com/mcp"),
+      "https://issuer.example.com"
+    );
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mocks.updateMcpServer).toHaveBeenCalledWith(
+      "server-a",
+      expect.objectContaining({
+        authMode: "user_oauth",
+        managedRouting: true,
+        headers: {},
+        oauth: { issuer: "https://issuer.example.com", resource: "https://a.example.com" },
+      })
+    );
   });
 });

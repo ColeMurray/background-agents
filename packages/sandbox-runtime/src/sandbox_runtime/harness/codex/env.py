@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ...managed_mcp import managed_marker
 from ..base import HarnessStartError
 
 CODEX_VERSION = "0.163.0"
@@ -147,6 +148,11 @@ def mcp_configuration(
     for index, server in enumerate(servers):
         if server.get("enabled") is False:
             continue
+        marker = managed_marker(server)
+        # Codex has no per-turn personal-client teardown. Never initialize one;
+        # native configuration sources are fenced by the launch/state validators.
+        if marker and marker["auth_mode"] == "user_oauth":
+            continue
         name = str(server.get("name") or f"external-{index}")
         if name == "oi" or name in result:
             raise HarnessStartError(
@@ -182,7 +188,9 @@ def mcp_configuration(
                     "Credential-bearing MCP URLs are not supported by the Codex harness"
                 )
             config["url"] = url
-            headers = server.get("headers") or server.get("env")
+            headers = (
+                server.get("headers") if marker else server.get("headers") or server.get("env")
+            )
             if headers:
                 config["http_headers"] = dict(headers)
         result[name] = config

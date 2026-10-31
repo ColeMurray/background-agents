@@ -154,6 +154,22 @@ describe("fetchSkillImport", () => {
     });
   });
 
+  it("refuses a moved ref before listing the tree or reading blobs", async () => {
+    const calls = { access: 0, resolve: 0, tree: 0, blobs: 0 };
+    const error = await fetchSkillImport(
+      fakeProvider({ "SKILL.md": { content: SKILL_MD } }, { calls }),
+      source(),
+      undefined,
+      undefined,
+      "f".repeat(40)
+    ).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(SkillImportError);
+    expect((error as SkillImportError).status).toBe(409);
+    expect((error as SkillImportError).message).toMatch(`source moved to commit ${COMMIT}`);
+    expect(calls).toEqual({ access: 1, resolve: 1, tree: 0, blobs: 0 });
+  });
+
   it("maps SKILL.md and supporting files onto a validated revision", async () => {
     const provider = fakeProvider({
       "SKILL.md": { content: SKILL_MD },

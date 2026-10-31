@@ -38,10 +38,10 @@ from sandbox_runtime.harness import AgentHarness, HarnessPrompt, HarnessStartErr
 from sandbox_runtime.harness.claude import (
     MAX_STDOUT_MESSAGE_BYTES,
     bare_model_id,
-    mcp_server_options,
     reasoning_options,
 )
 from sandbox_runtime.harness.claude_env import ClaudeAuthMode
+from sandbox_runtime.harness.claude_mcp import mcp_server_options
 from sandbox_runtime.harness.claude_translate import AUTHENTICATION_FAILED_MESSAGE
 from tests.claude_fakes import (
     FakeCredentialClient,

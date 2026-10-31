@@ -10,6 +10,7 @@ from ..claude_stager import ClaudeHarnessHandoff
 from ..codex_stager import CodexHarnessHandoff
 from ..credentials.openai_access_token_client import OpenAIAccessTokenClient
 from ..credentials.provider_credential_client import RuntimeCredentialClient
+from ..managed_mcp import ManagedMcpHarness, personal_names
 from ..memories import append_memory
 from ..model_prices import ModelPriceCatalog, default_catalog_path
 from .base import (
@@ -22,6 +23,7 @@ from .base import (
     HarnessProcessOwner,
     HarnessPrompt,
     HarnessStartError,
+    ManagedMcpNativeHarness,
     PromptLimits,
     TurnOutcome,
     parse_harness_id,
@@ -60,13 +62,29 @@ def build_agent_harness(
     opencode_port: int,
 ) -> AgentHarness:
     """The bridge-half registry: one ``match`` is the whole thing."""
+    servers = _mcp_servers_from(_session_config_from_env())
+
+    def managed(harness: ManagedMcpNativeHarness) -> AgentHarness:
+        if not personal_names(servers):
+            return harness
+        return ManagedMcpHarness(
+            harness,
+            servers=servers,
+            control_plane_url=identity.control_plane_url,
+            session_id=identity.session_id,
+            auth_token=identity.auth_token,
+        )
+
     match harness_id:
         case HarnessId.OPENCODE:
-            return OpencodeHarness(
-                client=OpenCodeClient(base_url=f"http://localhost:{opencode_port}", log=log),
-                attachment_processor=attachment_processor,
-                log=log,
-                limits=limits,
+            return managed(
+                OpencodeHarness(
+                    client=OpenCodeClient(base_url=f"http://localhost:{opencode_port}", log=log),
+                    attachment_processor=attachment_processor,
+                    log=log,
+                    limits=limits,
+                    managed_mcp_names=personal_names(servers),
+                )
             )
         case HarnessId.CLAUDE:
             from .claude import ClaudeHarness, ClaudeHarnessConfig
@@ -106,11 +124,13 @@ def build_agent_harness(
                 if oauth_managed and identity.control_plane_url
                 else None
             )
-            return ClaudeHarness(
-                config=config,
-                log=log,
-                limits=limits,
-                credential_client=credential_client,
+            return managed(
+                ClaudeHarness(
+                    config=config,
+                    log=log,
+                    limits=limits,
+                    credential_client=credential_client,
+                )
             )
         case HarnessId.CODEX:
             codex_handoff = CodexHarnessHandoff.read()

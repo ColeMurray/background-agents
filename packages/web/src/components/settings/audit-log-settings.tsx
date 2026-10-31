@@ -92,6 +92,8 @@ const OPERATION_LABELS: Record<AuditOperationAction, string> = {
   "team.binding_added": "Team channel binding added",
   "team.binding_removed": "Team channel binding removed",
   "automation.executor_changed": "Automation executor changed",
+  "personal_access_token.created": "Personal access token created",
+  "personal_access_token.revoked": "Personal access token revoked",
 };
 
 const OBSERVATION_LABELS: Record<AuditObservationAction, string> = {
@@ -123,6 +125,12 @@ function badgeTreatment(interpretation: AuditEventInterpretation): BadgeTreatmen
 }
 
 function actorSummary(event: AuditEvent): string {
+  if (event.principalKind === "personal-access-token") {
+    const tokenId = event.metadata.personalAccessTokenId;
+    const token = typeof tokenId === "string" ? `Personal access token / ${tokenId}` : null;
+    const owner = event.actorUserIdSnapshot ? `User / ${event.actorUserIdSnapshot}` : null;
+    return [token ?? "Personal access token", owner].filter(Boolean).join(" / ");
+  }
   if (event.actorServiceSnapshot && event.actorUserIdSnapshot) {
     return `Service / ${event.actorServiceSnapshot} / User actor / ${event.actorUserIdSnapshot}`;
   }

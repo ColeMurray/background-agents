@@ -14,6 +14,7 @@ import {
   seedMessage,
   seedSandboxAuth,
   routeRequest,
+  serviceFetch,
 } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
@@ -88,6 +89,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     await seedMessage(stub, {
       id: `processing-${parentName}`,
       authorId: owner.id,
+      admittedCanonicalUserId: opts?.canonicalUserId ?? null,
       content: "Spawn a child",
       source: "web",
       status: "processing",
@@ -190,6 +192,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+    expect(
+      await queryDO(childStub, "SELECT admitted_canonical_user_id, mcp_eligible FROM messages")
+    ).toEqual([{ admitted_canonical_user_id: "canonical-abc123", mcp_eligible: 0 }]);
   });
 
   it.each([
@@ -323,7 +328,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
           Date.now()
         );
         state.storage.sql.exec(
-          "UPDATE messages SET author_id = ? WHERE status = 'processing'",
+          "UPDATE messages SET author_id = ?, admitted_canonical_user_id = NULL WHERE status = 'processing'",
           "reviewer-participant"
         );
       });
@@ -371,8 +376,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         Date.now()
       );
       state.storage.sql.exec(
-        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
-        "other-author"
+        "UPDATE messages SET author_id = ?, admitted_canonical_user_id = ? WHERE status = 'processing'",
+        "other-author",
+        authorId
       );
     });
     const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
@@ -414,8 +420,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         Date.now()
       );
       state.storage.sql.exec(
-        "UPDATE messages SET author_id = ? WHERE status = 'processing'",
-        "participant-second-user"
+        "UPDATE messages SET author_id = ?, admitted_canonical_user_id = ? WHERE status = 'processing'",
+        "participant-second-user",
+        "canonical-user-2"
       );
     });
 
@@ -449,6 +456,76 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
         scm_login: "second-user",
         scm_access_token_encrypted: null,
       },
+    ]);
+  });
+
+  it("passes personal MCP delegation only through the turn's own sandbox", async () => {
+    const alice = "11111111111111111111111111111111";
+    const bob = "22222222222222222222222222222222";
+    const { parentName, stub, sandboxToken } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      canonicalUserId: alice,
+    });
+    await queryDO(stub, "UPDATE messages SET mcp_eligible = 1 WHERE status = 'processing'");
+    const url = `https://test.local/sessions/${parentName}/children`;
+    const body = JSON.stringify({ title: "Tracker child", prompt: "Use the tracker" });
+    const childAuthority = async (response: Response) => {
+      expect(response.status).toBe(201);
+      const { sessionId } = await response.json<{ sessionId: string }>();
+      return queryDO<{ admitted_canonical_user_id: string | null; mcp_eligible: number }>(
+        env.SESSION.get(env.SESSION.idFromName(sessionId)),
+        "SELECT admitted_canonical_user_id, mcp_eligible FROM messages"
+      );
+    };
+
+    const fromSandbox = await SELF.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body,
+    });
+    expect(await childAuthority(fromSandbox)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 1 },
+    ]);
+
+    // A collaborator spawning during Alice's turn chooses the prompt, so it must not run
+    // with her personal MCP grants.
+    const fromCollaborator = await serviceFetch(url, {
+      method: "POST",
+      body,
+      as: { userId: bob, role: "member" },
+    });
+    expect(await childAuthority(fromCollaborator)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 0 },
+    ]);
+
+    // Shared sessions delegate per turn: Bob's earlier prompt here does not stop
+    // Alice's own turn from passing her delegation to a child it spawns.
+    await runInSessionDO(stub, (_instance: SessionDO, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO participants (id, user_id, canonical_user_id, role, joined_at)
+         VALUES ('participant-bob', 'user-bob', ?, 'member', ?)`,
+        bob,
+        Date.now()
+      );
+    });
+    await seedMessage(stub, {
+      id: `bob-${parentName}`,
+      authorId: "participant-bob",
+      admittedCanonicalUserId: bob,
+      content: "Bob's earlier prompt",
+      source: "web",
+      status: "completed",
+      createdAt: Date.now() - 1_000,
+    });
+    await queryDO(stub, "UPDATE messages SET mcp_eligible = 1 WHERE id = ?", `bob-${parentName}`);
+    const afterBob = await SELF.fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body,
+    });
+    expect(await childAuthority(afterBob)).toEqual([
+      { admitted_canonical_user_id: alice, mcp_eligible: 1 },
     ]);
   });
 

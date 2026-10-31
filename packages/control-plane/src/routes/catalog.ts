@@ -1,3 +1,5 @@
+import { mcpConnectionRoutes } from "./mcp-connections";
+import { mcpProxyRoutes } from "./mcp-proxy";
 /**
  * Canonical control-plane HTTP route catalog.
  *
@@ -23,6 +25,7 @@ import { imageBuildRoutes } from "./image-builds";
 import { integrationSettingsRoutes } from "./integration-settings";
 import { keyboardShortcutRoutes } from "./keyboard-shortcuts";
 import { mcpServerRoutes } from "./mcp-servers";
+import { personalAccessTokenRoutes } from "./personal-access-tokens";
 import { memoryRoutes } from "./memories";
 import { modelPreferencesRoutes } from "./model-preferences";
 import { modelProviderAccountRoutes } from "./model-provider-accounts";
@@ -92,6 +95,8 @@ export const catalog: readonly RouteModule[] = [
 
   // MCP servers
   mcpServerRoutes,
+  mcpConnectionRoutes,
+  mcpProxyRoutes,
 
   // Analytics
   analyticsRoutes,
@@ -128,4 +133,7 @@ export const catalog: readonly RouteModule[] = [
 
   // Deployment-additive browser sign-in rules
   admissionPolicyRoutes,
+
+  // Personal access tokens: human-only issuance, listing, and revocation
+  personalAccessTokenRoutes,
 ];

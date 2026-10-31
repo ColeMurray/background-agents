@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type {
   CreateMcpServerRequest,
   McpServerMetadata,
+  McpAuthMode,
 } from "@open-inspect/shared/types/integrations";
 import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
 import {
@@ -12,6 +13,8 @@ import {
   createMcpServer,
   updateMcpServer,
   deleteMcpServer,
+  revokeMcpConnections,
+  McpServerRequestError,
 } from "@/hooks/use-mcp-servers";
 import { useRepos } from "@/hooks/use-repos";
 import { parseMaybeEnvContent } from "@/lib/env-paste";
@@ -22,6 +25,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,6 +80,10 @@ function envRowsToRecord(rows: EnvRow[]): Record<string, string> {
 
 type FormState = {
   name: string;
+  authMode: McpAuthMode;
+  managedRouting: boolean;
+  issuer: string;
+  resource: string;
   type: "local" | "remote";
   command: string;
   url: string;
@@ -81,6 +95,10 @@ type FormState = {
 
 const emptyForm: FormState = {
   name: "",
+  authMode: "service_credentials",
+  managedRouting: false,
+  issuer: "",
+  resource: "",
   type: "local",
   command: "",
   url: "",
@@ -90,17 +108,30 @@ const emptyForm: FormState = {
   enabled: DEFAULT_MCP_SERVER_ENABLED,
 };
 
+/**
+ * Whether a server of this type and auth mode stores static credentials: env
+ * vars for local servers, headers for remote ones under service authentication.
+ */
+function acceptsCredentials(type: FormState["type"], authMode: McpAuthMode): boolean {
+  return type === "local" || authMode === "service_credentials";
+}
+
 /** Whether the form edits a server's saved credentials by name. */
 function editsSavedCredentials(
   saved: SavedCredentials | undefined,
-  type: FormState["type"]
+  type: FormState["type"],
+  authMode: McpAuthMode
 ): saved is SavedCredentials {
-  return saved?.type === type && saved.keys.length > 0;
+  return acceptsCredentials(type, authMode) && saved?.type === type && saved.keys.length > 0;
 }
 
-/** Rows for a credential type: the saved names for the saved type, else one blank row. */
-function envRowsFor(saved: SavedCredentials | undefined, type: FormState["type"]): EnvRow[] {
-  return editsSavedCredentials(saved, type)
+/** Rows for a type and auth mode: the saved names when it edits them, else one blank row. */
+function envRowsFor(
+  saved: SavedCredentials | undefined,
+  type: FormState["type"],
+  authMode: McpAuthMode
+): EnvRow[] {
+  return editsSavedCredentials(saved, type, authMode)
     ? saved.keys.map((key) => createEnvRow({ key, value: "", saved: true }))
     : [createEnvRow()];
 }
@@ -114,8 +145,13 @@ function savedCredentialsOf(metadata: McpServerMetadata): SavedCredentials {
 }
 
 function metadataToForm(metadata: McpServerMetadata): FormState {
+  const authMode = metadata.authMode ?? "service_credentials";
   return {
     name: metadata.name,
+    authMode,
+    managedRouting: metadata.managedRouting ?? false,
+    issuer: metadata.oauth?.issuer ?? "",
+    resource: metadata.oauth?.resource ?? "",
     type: metadata.type,
     command:
       metadata.command
@@ -124,7 +160,7 @@ function metadataToForm(metadata: McpServerMetadata): FormState {
         )
         .join(" ") ?? "",
     url: metadata.url ?? "",
-    envRows: envRowsFor(savedCredentialsOf(metadata), metadata.type),
+    envRows: envRowsFor(savedCredentialsOf(metadata), metadata.type, authMode),
     repoScopes: metadata.repoScopes ?? [],
     scopeMode: metadata.repoScopes?.length ? "selected" : "global",
     enabled: metadata.enabled,
@@ -346,7 +382,9 @@ function McpServerForm({
                 ...form,
                 type: "local",
                 envRows:
-                  form.type === "local" ? form.envRows : envRowsFor(savedCredentials, "local"),
+                  form.type === "local"
+                    ? form.envRows
+                    : envRowsFor(savedCredentials, "local", form.authMode),
               })
             }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
@@ -365,7 +403,9 @@ function McpServerForm({
                 ...form,
                 type: "remote",
                 envRows:
-                  form.type === "remote" ? form.envRows : envRowsFor(savedCredentials, "remote"),
+                  form.type === "remote"
+                    ? form.envRows
+                    : envRowsFor(savedCredentials, "remote", form.authMode),
               })
             }
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
@@ -404,7 +444,69 @@ function McpServerForm({
         </div>
       )}
 
-      <EnvRowsEditor form={form} setForm={setForm} hasUnnamedCredentials={hasUnnamedCredentials} />
+      {form.type === "remote" && (
+        <div className="space-y-3">
+          <Label htmlFor={`${radioPrefix}-auth`}>Authentication</Label>
+          <Select
+            value={form.authMode}
+            onValueChange={(authMode: McpAuthMode) =>
+              setForm({
+                ...form,
+                authMode,
+                managedRouting: authMode === "user_oauth" || form.managedRouting,
+                // Only service credentials send headers; returning to them restores the saved names.
+                envRows: envRowsFor(savedCredentials, form.type, authMode),
+              })
+            }
+          >
+            <SelectTrigger id={`${radioPrefix}-auth`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No upstream authentication</SelectItem>
+              <SelectItem value="service_credentials">Shared service credentials</SelectItem>
+              <SelectItem value="user_oauth">Each user’s OAuth connection</SelectItem>
+            </SelectContent>
+          </Select>
+          <Label className="flex items-center gap-2">
+            <Checkbox
+              checked={form.managedRouting}
+              disabled={form.authMode === "user_oauth"}
+              onCheckedChange={(checked) => setForm({ ...form, managedRouting: checked === true })}
+            />
+            Route through Open Inspect
+          </Label>
+          {form.authMode === "user_oauth" && (
+            <>
+              <Label>OAuth issuer</Label>
+              <Input
+                type="url"
+                value={form.issuer}
+                onChange={(e) => setForm({ ...form, issuer: e.target.value })}
+                placeholder="https://gateway.example.com/mcp"
+              />
+              <Label>OAuth resource</Label>
+              <Input
+                type="url"
+                value={form.resource}
+                onChange={(e) => setForm({ ...form, resource: e.target.value })}
+                placeholder={form.url || "https://gateway.example.com/mcp"}
+              />
+              <p className="text-xs text-muted-foreground">
+                Users connect their accounts in Personal → Connections. Supported servers use
+                public-client OAuth with PKCE and Streamable HTTP.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {acceptsCredentials(form.type, form.authMode) && (
+        <EnvRowsEditor
+          form={form}
+          setForm={setForm}
+          hasUnnamedCredentials={hasUnnamedCredentials}
+        />
+      )}
 
       <div>
         <Label className="mb-1.5">Availability</Label>
@@ -486,7 +588,8 @@ function McpServerForm({
 }
 
 /**
- * Lists workspace MCP servers and exposes create, edit, and delete controls only to authorized users.
+ * Lists workspace MCP servers and exposes create, edit, revoke, and delete controls only to
+ * authorized users.
  */
 export function McpServersSettings() {
   const { hasPermission } = useCurrentUserAuthorization();
@@ -497,6 +600,7 @@ export function McpServersSettings() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   function startNew() {
     setForm(emptyForm);
@@ -552,20 +656,35 @@ export function McpServersSettings() {
           form.scopeMode === "selected" && form.repoScopes.length > 0 ? form.repoScopes : null,
       };
 
-      const envRecord = envRowsToRecord(form.envRows);
+      const credentialsAccepted = acceptsCredentials(form.type, form.authMode);
+      // Rows the editor does not show are never sent: a configuration without
+      // credentials sends an empty set, which clears any stored ones.
+      const envRecord = credentialsAccepted ? envRowsToRecord(form.envRows) : {};
       // Editing saved names always sends the per-name update: blank saved rows
       // keep their hidden values, and removed saved rows are deleted.
       const editsSaved =
         saveOwner.kind === "existing" &&
-        editsSavedCredentials(saveOwner.savedCredentials, form.type);
+        editsSavedCredentials(saveOwner.savedCredentials, form.type, form.authMode);
       const includeCredentials =
-        editsSaved || saveOwner.kind === "new" || Object.keys(envRecord).length > 0;
+        !credentialsAccepted ||
+        editsSaved ||
+        saveOwner.kind === "new" ||
+        Object.keys(envRecord).length > 0;
       const payload: CreateMcpServerRequest =
         form.type === "remote"
           ? {
               ...common,
               type: "remote",
               url: form.url.trim(),
+              authMode: form.authMode,
+              managedRouting: form.managedRouting,
+              oauth:
+                form.authMode === "user_oauth"
+                  ? {
+                      issuer: form.issuer.trim(),
+                      resource: form.resource.trim() || form.url.trim(),
+                    }
+                  : null,
               ...(includeCredentials ? { headers: envRecord } : {}),
             }
           : {
@@ -608,9 +727,27 @@ export function McpServersSettings() {
       }
       toast.success("MCP server deleted");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete");
+      toast.error(
+        // The control plane refuses to delete a server while personal connections to it are live.
+        err instanceof McpServerRequestError && err.status === 409
+          ? "Users are still connected to this server. Disable it and revoke its connections, then delete it."
+          : err instanceof Error
+            ? err.message
+            : "Failed to delete"
+      );
     }
     setDeleteTarget(null);
+  }
+
+  async function handleRevoke(id: string) {
+    try {
+      await revokeMcpConnections(id);
+      mutate();
+      toast.success("MCP connections revoked");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to revoke connections");
+    }
+    setRevokeTarget(null);
   }
 
   async function handleToggle(server: McpServerMetadata) {
@@ -742,6 +879,18 @@ export function McpServersSettings() {
                         onCheckedChange={() => handleToggle(server)}
                         aria-label={server.enabled ? "Disable" : "Enable"}
                       />
+                      {/* The control plane revokes connections only once the server is disabled.
+                          Grants from an earlier personal OAuth mode outlive a mode change and
+                          still block deletion, so every disabled remote server offers this. */}
+                      {server.type === "remote" && !server.enabled && (
+                        <button
+                          type="button"
+                          onClick={() => setRevokeTarget(server.id)}
+                          className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
+                        >
+                          Revoke connections
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setDeleteTarget(server.id)}
@@ -799,6 +948,29 @@ export function McpServersSettings() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Revoke connections confirmation dialog */}
+      <AlertDialog open={canManage && !!revokeTarget} onOpenChange={() => setRevokeTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke MCP connections</AlertDialogTitle>
+            <AlertDialogDescription>
+              This disconnects every user’s personal connection to this server. Each user must
+              connect their account again before using it. Accounts at the external service are not
+              revoked.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => revokeTarget && handleRevoke(revokeTarget)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Revoke connections
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

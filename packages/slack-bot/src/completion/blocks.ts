@@ -51,9 +51,9 @@ const ERROR_FOOTER_LIMIT = 200;
  *   user-mention policy lives in integration settings this path does not read, so it
  *   is out of scope here.
  */
-function buildResponseBlock(text: string): SlackMarkdownBlock | SlackSectionBlock {
+function buildResponseBlock(text: string): SlackMarkdownBlock | null {
   const [body] = splitIntoSlackSections(stripBroadcastMentions(text), MARKDOWN_BLOCK_MAX_CHARS, 1);
-  if (!body) return { type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } };
+  if (!body) return null;
   return { type: "markdown", text: body };
 }
 
@@ -69,7 +69,18 @@ export function buildCompletionBlocks(
   const blocks: CompletionSlackBlock[] = [];
 
   // 1. Response text
-  blocks.push(buildResponseBlock(response.textContent));
+  const responseBlock = buildResponseBlock(response.textContent);
+  if (responseBlock) {
+    blocks.push(responseBlock);
+  } else if (!response.mcpWarnings?.length) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
+  }
+
+  for (const warning of response.mcpWarnings ?? []) {
+    for (const text of splitIntoSlackSections(`:warning: ${escapeMrkdwnText(warning)}`)) {
+      blocks.push({ type: "section", text: { type: "mrkdwn", text } });
+    }
+  }
 
   // 2. Artifacts (PRs, branches)
   if (response.artifacts.length > 0) {
@@ -133,6 +144,14 @@ export function buildCompletionBlocks(
     });
   }
 
+  if (response.mcpWarnings?.length) {
+    actionElements.push({
+      type: "button",
+      text: { type: "plain_text", text: "Your MCP Connections" },
+      url: `${webAppUrl}/settings?tab=mcp-connections`,
+      action_id: "mcp_connections",
+    });
+  }
   // 5. Action buttons
   blocks.push({
     type: "actions",

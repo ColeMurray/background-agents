@@ -81,6 +81,7 @@ async function sandboxParent(
   await seedMessage(parent.stub, {
     id: `processing-${parent.sessionName}`,
     authorId: owner.id,
+    admittedCanonicalUserId: MEMBER,
     content: "Spawn a child",
     source: "web",
     status: "processing",

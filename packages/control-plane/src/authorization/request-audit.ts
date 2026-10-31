@@ -5,6 +5,7 @@ import {
   type AuthorizationDecisionMetadataV1,
 } from "@open-inspect/shared/types/audit-events";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import { canonicalUserIdOf } from "../auth/principal";
 import type { RouteAuthorizationRequirement, RequestContext } from "../routes/shared";
 import { createLogger } from "../logger";
 
@@ -26,7 +27,7 @@ interface AuthorizationDecisionEvidence {
 export type RouteAuthorizationDecision =
   | (AuthorizationDecisionEvidence & {
       kind: "allowed";
-      admission: "user" | "service" | "sandbox";
+      admission: "user" | "service" | "sandbox" | "personal-access-token";
       auditAllowed: boolean;
       shadowReason?: string;
       shadowDenials?: readonly { sessionId: string; reason: string }[];
@@ -77,11 +78,9 @@ export async function auditRouteAuthorizationDecision(input: {
   const requiredPermission =
     decision.kind === "allowed" ? decision.effectivePermissions[0] : decision.failedPermission;
   const actorUserId =
-    principal.kind === "user"
-      ? principal.userId
-      : principal.kind === "service"
-        ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId)
-        : null;
+    principal.kind === "service"
+      ? (principal.actor?.canonicalUserId ?? input.ctx.authorization?.userId ?? null)
+      : canonicalUserIdOf(principal);
   const action = allowed
     ? AUTHORIZATION_DECISION_ACTIONS.allowed
     : AUTHORIZATION_DECISION_ACTIONS.denied;
@@ -143,6 +142,9 @@ export async function auditRouteAuthorizationDecision(input: {
         }
       : {}),
     ...(principal.kind === "sandbox" ? { sessionId: principal.sessionId } : {}),
+    ...(principal.kind === "personal-access-token"
+      ? { personalAccessTokenId: principal.tokenId }
+      : {}),
   } satisfies AuthorizationDecisionMetadataV1;
 
   try {
@@ -206,7 +208,14 @@ export async function auditPrivateSessionBreakGlass(
       sessionId,
       teamId,
       "session.private_break_glass",
-      JSON.stringify({ before: {}, requested: {}, after: {} })
+      JSON.stringify({
+        before: {},
+        requested: {},
+        after: {},
+        ...(principal.kind === "personal-access-token"
+          ? { personalAccessTokenId: principal.tokenId }
+          : {}),
+      })
     )
     .run();
 }

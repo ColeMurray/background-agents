@@ -12,6 +12,7 @@ from .base import (
     PromptLimits,
     TurnOutcome,
 )
+from .opencode_client import McpInitializationUnavailable
 from .opencode_stream import OpenCodePromptStream
 
 if TYPE_CHECKING:
@@ -38,7 +39,9 @@ class OpencodeHarness:
         attachment_processor: AttachmentProcessor,
         log: StructuredLogger,
         limits: PromptLimits,
+        managed_mcp_names: tuple[str, ...] = (),
     ) -> None:
+        self.managed_mcp_names = managed_mcp_names
         self.client = client
         self.attachment_processor = attachment_processor
         self.log = log
@@ -61,6 +64,23 @@ class OpencodeHarness:
                 prompt_cleanup_timeout_seconds=self.limits.prompt_cleanup_timeout_seconds,
             )
         return self._prompt_stream
+
+    async def prepare_managed_mcp(self, allowed: set[str]) -> list[str]:
+        failed = []
+        await self.close_managed_mcp()
+        for name in self.managed_mcp_names:
+            if name in allowed:
+                try:
+                    await self.client.set_mcp_connected(name, True)
+                except McpInitializationUnavailable:
+                    await self.client.set_mcp_connected(name, False)
+                    self.log.warn("mcp.connector_unavailable", server_name=name)
+                    failed.append(name)
+        return failed
+
+    async def close_managed_mcp(self) -> None:
+        for name in self.managed_mcp_names:
+            await self.client.set_mcp_connected(name, False)
 
     async def open(self) -> None:
         return None

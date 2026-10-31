@@ -43,4 +43,39 @@ describe("TaskActivityItem", () => {
     expect([...icons].every((icon) => icon.classList.contains("mt-[3px]"))).toBe(true);
     expect(indicator).toHaveClass("mt-1.5");
   });
+
+  it("scrolls long instructions and results inside their boxes", () => {
+    const event: ToolCallEvent = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-1",
+      callId: "call-1",
+      tool: "Task",
+      args: {
+        description: "Explore timeline rendering",
+        prompt: "Read every file.\n".repeat(200),
+      },
+      output: "Found it.\n".repeat(200),
+      status: "completed",
+      timestamp: 1,
+    };
+
+    const { container } = render(
+      <TaskActivityItem
+        event={event}
+        hasActivity={false}
+        expansionKey="task-1"
+        expandedSections={new Set(["task-1:task", "task-1:instructions", "task-1:result"])}
+        onToggleSection={vi.fn()}
+      >
+        {null}
+      </TaskActivityItem>
+    );
+
+    const boxes = container.querySelectorAll("pre");
+    expect(boxes).toHaveLength(2);
+    for (const box of boxes) {
+      expect(box).toHaveClass("max-h-64", "overflow-y-auto");
+    }
+  });
 });

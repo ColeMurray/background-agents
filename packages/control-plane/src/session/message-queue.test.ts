@@ -8,6 +8,7 @@ import {
   type ServerMessage,
 } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import type { ManagedMcpExecution } from "@open-inspect/shared/types/integrations";
 import type { ClientInfo } from "../types";
 import type { MessageStatus } from "@open-inspect/shared/types/sessions";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
@@ -24,6 +25,7 @@ import { MessageFailureService } from "./message-failure-service";
 import { SandboxExecutionEventHandler } from "./sandbox-events/execution.handler";
 import type { SessionStatusService } from "./session-status-service";
 import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
+import { McpError } from "../mcp/errors";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -120,6 +122,12 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 const EXECUTION_TIMEOUT_MS = 60_000;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => (resolve = done));
+  return { promise, resolve };
+}
+
 it("creates a canonical SHA-256 web prompt fingerprint", async () => {
   const fingerprint = await fingerprintWebPrompt("part-1", {
     content: "hello",
@@ -139,7 +147,9 @@ it("creates a canonical SHA-256 web prompt fingerprint", async () => {
 
 function buildQueue(
   mayDispatch: () => boolean = () => true,
-  getSandboxPromptBlockReason: () => string | null = () => null
+  getSandboxPromptBlockReason: () => string | null = () => null,
+  prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>,
+  reportManagedMcpWarnings?: (messageId: string) => void
 ) {
   // Mutable so tests can pin that the deadline honors the value current at
   // dispatch time — the thunk exists because settings can be persisted after
@@ -309,7 +319,9 @@ function buildQueue(
     executionStop,
     () => executionTimeoutMs,
     mayDispatch,
-    getSandboxPromptBlockReason
+    getSandboxPromptBlockReason,
+    prepareManagedMcp,
+    reportManagedMcpWarnings
   );
 
   return {
@@ -338,6 +350,87 @@ function buildQueue(
 }
 
 describe("SessionMessageQueue", () => {
+  it.each([1, 3])(
+    "reprepares for the replacement bridge without sending to the old socket (state %i)",
+    async (readyState) => {
+      const entered = deferred<void>();
+      const prepared = deferred<ManagedMcpExecution>();
+      const prepare = vi.fn().mockImplementationOnce(() => {
+        entered.resolve();
+        return prepared.promise;
+      });
+      prepare.mockResolvedValue({ messageId: "msg-1", revision: 2, servers: [], unavailable: [] });
+      const h = buildQueue(undefined, undefined, prepare);
+      const oldSocket = { readyState } as WebSocket;
+      const replacementSocket = { readyState: 1 } as WebSocket;
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.repository.getMessageStatus.mockReturnValue("processing");
+      h.wsManager.getSandboxSocket.mockReturnValue(oldSocket);
+
+      const dispatch = h.queue.processMessageQueue();
+      await entered.promise;
+      h.wsManager.getSandboxSocket.mockReturnValue(replacementSocket);
+      prepared.resolve({ messageId: "msg-1", revision: 1, servers: ["old"], unavailable: [] });
+      await dispatch;
+
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(h.wsManager.send).toHaveBeenCalledExactlyOnceWith(
+        replacementSocket,
+        expect.objectContaining({ type: "prompt", messageId: "msg-1" })
+      );
+      expect(h.wsManager.send.mock.calls[0][1]).not.toHaveProperty("managedMcp");
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+    }
+  );
+
+  it("retries the unsent claim when MCP context changes during preparation", async () => {
+    const prepare = vi.fn().mockRejectedValueOnce(new McpError("mcp_context_changed", 409));
+    prepare.mockResolvedValue({ messageId: "msg-1", revision: 2, servers: [], unavailable: [] });
+    const h = buildQueue(undefined, undefined, prepare);
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.repository.getMessageStatus.mockReturnValue("processing");
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
+    expect(h.wsManager.send).toHaveBeenCalledOnce();
+  });
+
+  it.each(["booting", "unavailable"] as const)(
+    "releases the unsent processing claim when the target becomes %s during MCP preparation",
+    async (kind) => {
+      const entered = deferred<void>();
+      const prepared = deferred<ManagedMcpExecution>();
+      const h = buildQueue(undefined, undefined, () => {
+        entered.resolve();
+        return prepared.promise;
+      });
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+      h.repository.getMessageStatus.mockReturnValue("processing");
+      h.repository.updateMessageToPending.mockImplementation(() => {
+        h.repository.getMessageStatus.mockReturnValue("pending");
+      });
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+      const dispatch = h.queue.processMessageQueue();
+      await entered.promise;
+      h.wsManager.getSandboxCommandTarget.mockReturnValue(
+        kind === "booting" ? { kind, phase: null } : { kind }
+      );
+      prepared.resolve({ messageId: "msg-1", revision: 1, servers: [], unavailable: [] });
+      await dispatch;
+
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(kind === "unavailable" ? 1 : 0);
+    }
+  );
+
   it("rechecks native deployment admission before both insertion and dispatch", async () => {
     const h = buildQueue();
     h.repository.getSession.mockReturnValue(
@@ -1759,6 +1852,40 @@ describe("SessionMessageQueue", () => {
       });
     });
 
+    it("reports MCP warnings once the prompt runs, and a failed report keeps the deadline", async () => {
+      const report = vi.fn((_messageId: string) => {
+        throw new Error("Event storage unavailable");
+      });
+      const h = buildQueue(undefined, undefined, undefined, report);
+
+      await dispatchPrompt(h);
+
+      expect(report).toHaveBeenCalledExactlyOnceWith("msg-1");
+      expect(report.mock.invocationCallOrder[0]).toBeGreaterThan(
+        h.wsManager.send.mock.invocationCallOrder[0]
+      );
+      const startedAt = h.repository.startMessageProcessing.mock.calls[0][1];
+      expect(h.setAlarm).toHaveBeenCalledExactlyOnceWith(startedAt + EXECUTION_TIMEOUT_MS);
+      expect(h.log.warn).toHaveBeenCalledWith("prompt.mcp_warning_failed", {
+        event: "prompt.mcp_warning_failed",
+        message_id: "msg-1",
+        error: "Event storage unavailable",
+      });
+    });
+
+    it("reports no MCP warnings for a prompt the sandbox never received", async () => {
+      const report = vi.fn();
+      const h = buildQueue(undefined, undefined, undefined, report);
+      h.repository.getNextPendingMessage.mockReturnValueOnce(createMessage());
+      h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+      h.wsManager.send.mockReturnValue(false);
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-1");
+      expect(report).not.toHaveBeenCalled();
+    });
+
     it("schedules the execution deadline when no alarm is set", async () => {
       const h = buildQueue();
       const before = Date.now();
@@ -2700,6 +2827,147 @@ describe("SessionMessageQueue", () => {
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
       expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+    });
+
+    const staleRetry = {
+      content: "Fix bug",
+      authorId: "github:1001",
+      source: "github" as const,
+      clientRequestId: "webhook:abc",
+      canonicalUserId: "old-user",
+      scmEnrichment: { userId: "1001", login: "old-login", name: "Old Name", email: null },
+    };
+
+    it.each(["opencode", "codex"] as const)(
+      "does not store the identity of a duplicate or conflicting retry on %s",
+      async (harness) => {
+        const h = buildQueue();
+        h.repository.getSession.mockReturnValue(
+          createSession({ harness, model: "openai/gpt-6.1-sol" })
+        );
+        h.repository.getMessageByClientRequestId.mockReturnValue(
+          createMessage({
+            id: "msg-existing",
+            client_request_id: staleRetry.clientRequestId,
+            request_fingerprint: await fingerprintWebPrompt("part-1", staleRetry),
+          })
+        );
+
+        await expect(h.queue.enqueuePromptFromApi(staleRetry)).resolves.toMatchObject({
+          messageId: "msg-existing",
+          deduplicated: true,
+        });
+        await expect(
+          h.queue.enqueuePromptFromApi({ ...staleRetry, content: "Fix a different bug" })
+        ).rejects.toMatchObject({ name: "PromptRequestConflictError" });
+
+        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+        expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+        expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+      }
+    );
+
+    it("refuses a used request id from a new author before creating its participant", async () => {
+      const h = buildQueue();
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+      h.repository.getMessageByClientRequestId.mockReturnValue(
+        createMessage({ id: "msg-existing", client_request_id: staleRetry.clientRequestId })
+      );
+
+      await expect(h.queue.enqueuePromptFromApi(staleRetry)).rejects.toMatchObject({
+        name: "PromptRequestConflictError",
+      });
+
+      expect(h.participantService.create).not.toHaveBeenCalled();
+      expect(h.log.warn).toHaveBeenCalledWith(
+        "prompt.enqueue",
+        expect.objectContaining({ outcome: "conflict", source: "github" })
+      );
+    });
+
+    it("does not store the identity of a request deduplicated during the strict-auth await", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(
+        createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
+      );
+      const fingerprint = await fingerprintWebPrompt("part-1", staleRetry);
+      h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+        // An identical request is admitted while this one awaits the auth check.
+        h.repository.getMessageByClientRequestId.mockReturnValue(
+          createMessage({
+            id: "msg-concurrent",
+            client_request_id: staleRetry.clientRequestId,
+            request_fingerprint: fingerprint,
+          })
+        );
+        return null;
+      });
+
+      await expect(h.queue.enqueuePromptFromApi(staleRetry)).resolves.toMatchObject({
+        messageId: "msg-concurrent",
+        deduplicated: true,
+      });
+
+      expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      expect(h.repository.updateParticipantIdentity).not.toHaveBeenCalled();
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
+    it("keeps an account linked while an admitted request awaited the strict-auth check", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(
+        createSession({ harness: "codex", model: "openai/gpt-6.1-sol" })
+      );
+      h.getProviderAuthenticationError.mockImplementationOnce(async () => {
+        // A concurrent request links the participant to an account during this await.
+        h.repository.getParticipantById.mockReturnValue(
+          createParticipant({ canonical_user_id: "current-user" })
+        );
+        return null;
+      });
+
+      await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "github:1001",
+        source: "github",
+        scmEnrichment: { userId: "1001", login: "octocat", name: "Octo Cat", email: null },
+      });
+
+      expect(h.repository.updateParticipantIdentity).toHaveBeenCalledExactlyOnceWith("part-1", {
+        canonicalUserId: "current-user",
+        scmName: "Octo Cat",
+        scmEmail: null,
+        scmLogin: "octocat",
+        scmUserId: "1001",
+      });
+      expect(h.repository.createMessageWithAttachments).toHaveBeenCalledWith(
+        expect.objectContaining({ authorCanonicalUserId: "current-user" }),
+        []
+      );
+    });
+
+    it("stores an admitted identity in the same transaction as the insert", async () => {
+      const h = buildQueue();
+      let inTransaction = false;
+      h.repository.transaction.mockImplementation((operation: () => unknown) => {
+        inTransaction = true;
+        try {
+          return operation();
+        } finally {
+          inTransaction = false;
+        }
+      });
+      const writesInTransaction: Record<string, boolean> = {};
+      const record = (write: string) => () => {
+        writesInTransaction[write] = inTransaction;
+      };
+      h.repository.updateParticipantCoalesce.mockImplementation(record("canonical"));
+      h.repository.updateParticipantIdentity.mockImplementation(record("scm"));
+      h.repository.createMessageWithAttachments.mockImplementation(record("message"));
+
+      await h.queue.enqueuePromptFromApi({ ...staleRetry, clientRequestId: undefined });
+
+      expect(writesInTransaction).toEqual({ canonical: true, scm: true, message: true });
     });
   });
 });

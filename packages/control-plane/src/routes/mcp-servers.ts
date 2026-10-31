@@ -13,11 +13,15 @@ import {
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { requireRepoSecretsEncryptionKey } from "../env-validation";
+import { requireRepoSecretsEncryptionKey, requireTokenEncryptionKey } from "../env-validation";
+import { McpConnectionStore } from "../db/mcp-connections";
+import { mcpErrorResponse } from "../mcp/errors";
 import { admit, dispatch } from "../routing/admit";
 import type { ControlPlaneHonoEnv } from "../routing/hono-env";
 import {
   GITHUB_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  type UserRouteContext,
   type RequestContext,
   json,
   error,
@@ -175,7 +179,13 @@ async function handleDeleteMcpServer(
   if (!ctx.db) return error("Database not configured", 503);
 
   const store = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
-  const deleted = await store.delete(id);
+  let deleted: boolean;
+  try {
+    deleted = await store.delete(id);
+  } catch (cause) {
+    if (cause instanceof McpServerConflictError) return error(cause.message, 409);
+    throw cause;
+  }
   if (!deleted) return error("MCP server not found", 404);
 
   logger.info("MCP server deleted", {
@@ -195,6 +205,38 @@ const MCP_MANAGE = admit({
   ...GITHUB_USER_OR_SERVICE_ROUTE,
   authorization: requirePermission("mcp_servers.manage"),
 });
+const MCP_REVOKE = admit({
+  ...SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  authorization: requirePermission("mcp_servers.manage", { service: "deny" }),
+  cacheControl: "private, no-store",
+});
+
+async function handleRevokeMcpConnections(
+  _request: Request,
+  env: Env,
+  params: { id: string },
+  ctx: UserRouteContext
+): Promise<Response> {
+  const registry = new McpServerStore(ctx.db, requireRepoSecretsEncryptionKey(env));
+  const server = await registry.get(params.id);
+  if (!server) return error("MCP server not found", 404);
+  if (server.enabled) return error("Disable this MCP server before revoking its connections", 409);
+  try {
+    await new McpConnectionStore(ctx.db, requireTokenEncryptionKey(env)).disconnectServer(
+      params.id
+    );
+  } catch (cause) {
+    return mcpErrorResponse(cause);
+  }
+  logger.info("Personal MCP connections revoked", {
+    event: "mcp_server.connections_revoked",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    actor_user_id: ctx.principal.userId,
+    server_id: params.id,
+  });
+  return json({ ok: true });
+}
 
 export const mcpServerRoutes = new Hono<ControlPlaneHonoEnv>();
 
@@ -203,3 +245,6 @@ mcpServerRoutes.post("/mcp-servers", MCP_MANAGE, (c) => dispatch(c, handleCreate
 mcpServerRoutes.get("/mcp-servers/:id", MCP_READ, (c) => dispatch(c, handleGetMcpServer));
 mcpServerRoutes.put("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleUpdateMcpServer));
 mcpServerRoutes.delete("/mcp-servers/:id", MCP_MANAGE, (c) => dispatch(c, handleDeleteMcpServer));
+mcpServerRoutes.post("/mcp-servers/:id/revoke-connections", MCP_REVOKE, (c) =>
+  dispatch(c, handleRevokeMcpConnections)
+);

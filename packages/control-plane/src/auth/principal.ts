@@ -7,6 +7,7 @@
  * resolved identity.
  */
 
+import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 
@@ -39,6 +40,17 @@ export interface AuthenticationContext {
 
 export type Principal =
   | { kind: "user"; userId: string }
+  /**
+   * A personal access token acts as its owner, `userId`, but only within `grant`: admission
+   * intersects the owner's permissions with it. It is a distinct kind so a route admits it only
+   * by declaring so, never because it accepts users.
+   */
+  | {
+      kind: "personal-access-token";
+      userId: string;
+      tokenId: string;
+      grant: readonly PermissionId[];
+    }
   | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   /** `sandboxId` is the authenticated sandbox's id when the session runtime reported it. */
   | { kind: "sandbox"; sessionId: string; sandboxId?: string | null };
@@ -105,3 +117,20 @@ export type BotServiceName = {
 export type OptInServiceName = {
   [S in ServiceName]: Profiles[S]["routeAccess"] extends "opt-in" ? S : never;
 }[ServiceName];
+
+/**
+ * The canonical `users.id` a principal acts as, or null when it acts as no one. A personal access
+ * token acts as its owner; a service as the actor it asserted, once that actor is enrolled.
+ */
+export function canonicalUserIdOf(principal: Principal | undefined): string | null {
+  if (!principal) return null;
+  switch (principal.kind) {
+    case "user":
+    case "personal-access-token":
+      return principal.userId;
+    case "service":
+      return principal.actor?.canonicalUserId ?? null;
+    case "sandbox":
+      return null;
+  }
+}

@@ -225,7 +225,8 @@ export function useLaunchPreferences(
     providerSelections: availableProviderSelections,
     modelOptions: modelSelection.options,
     modelAvailability: modelSelection.availability,
-    // The send button intentionally uses provider readiness without model loading.
+    // Send uses this rather than `ready`, so it stays enabled when the harness can run none of
+    // the enabled models and a click can say why. Home waits for model loading separately.
     providerReady,
     ready: providerReady && !loadingEnabledModels && harnessHasModels,
     handleModelChange,

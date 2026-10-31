@@ -147,6 +147,9 @@ describe("SettingsNav", () => {
 
     expect(resolveSettingsCategory(null, true, hasNoWorkspacePermissions)).toBe("appearance");
     expect(resolveSettingsCategory("secrets", true, hasNoWorkspacePermissions)).toBe("appearance");
+    expect(resolveSettingsCategory("mcp-connections", true, hasNoWorkspacePermissions)).toBe(
+      "mcp-connections"
+    );
     expect(
       resolveSettingsCategory(
         "environments",
@@ -209,6 +212,8 @@ describe("SettingsNav", () => {
     renderSettingsNav({ activeCategory: "appearance" });
 
     expect(screen.getByRole("button", { name: "Appearance" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keyboard" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connections" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Secrets" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Workspace access" })).not.toBeInTheDocument();
   });

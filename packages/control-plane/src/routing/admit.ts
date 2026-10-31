@@ -3,15 +3,11 @@
 import type { Context as HonoContext, MiddlewareHandler } from "hono";
 import type { ParamKeys, ParamKeyToRecord } from "hono/types";
 import type { Simplify, UnionToIntersection } from "hono/utils/types";
+import { personalAccessTokenRouteViolation } from "../authorization/personal-access-token-policy";
 import { auditRouteAuthorizationDecision } from "../authorization/request-audit";
 import type { RequestContext } from "../http/request-context";
 import { error } from "../http/responses";
-import type {
-  RouteAdmissionPolicy,
-  RouteAuthentication,
-  RouteContext,
-  RouteParams,
-} from "../routes/shared";
+import type { RouteAdmissionPolicy, RouteContext, RouteParams } from "../routes/shared";
 import type { Env } from "../types";
 import type { ControlPlaneHonoEnv } from "./hono-env";
 import { admitRoute, type RouteAdmissionResult } from "./route-admission";
@@ -29,21 +25,31 @@ export interface RouteAdmission {
   result: RouteAdmissionResult;
 }
 
+/**
+ * The handler context a policy produces: its authentication's principal, plus tokens if it may
+ * accept them. The opt-in passes through as declared, so a policy type that leaves it optional or
+ * a union (an annotated policy rather than an inline literal) conservatively includes tokens.
+ */
+export type PolicyContext<Policy extends AdmissionPolicy> = RouteContext<
+  Policy["authentication"],
+  Policy["personalAccessTokens"]
+>;
+
 /** What an admitted handler receives: the request as authenticated, and the context narrowed by the policy. */
-export interface Admitted<Authentication extends RouteAuthentication> {
+export interface Admitted<Policy extends AdmissionPolicy> {
   request: Request;
-  ctx: RouteContext<Authentication>;
+  ctx: PolicyContext<Policy>;
 }
 
 /** The Hono environment a handler behind `admit(policy)` sees. */
-export type AdmittedEnv<Authentication extends RouteAuthentication> = {
+export type AdmittedEnv<Policy extends AdmissionPolicy> = {
   Bindings: Env;
-  Variables: ControlPlaneHonoEnv["Variables"] & { admitted: Admitted<Authentication> };
+  Variables: ControlPlaneHonoEnv["Variables"] & { admitted: Admitted<Policy> };
 };
 
 /** The middleware `admit()` returns, carrying the policy it enforces for route enumeration. */
 export type AdmitMiddleware<Policy extends AdmissionPolicy> = MiddlewareHandler<
-  AdmittedEnv<Policy["authentication"]>
+  AdmittedEnv<Policy>
 > & { readonly policy: Policy };
 
 /** The path parameters Hono decodes for a route path, typed from its `:param` segments. */
@@ -107,8 +113,12 @@ export function admit<const Policy extends AdmissionPolicy>(
   if (principalless && policy.authorization.kind !== "none") {
     throw new Error("Route without a verified principal cannot require authorization");
   }
+  if (policy.personalAccessTokens === "accept") {
+    const violation = personalAccessTokenRouteViolation(policy);
+    if (violation) throw new Error(`Route cannot accept personal access tokens: ${violation}`);
+  }
 
-  const middleware: MiddlewareHandler<AdmittedEnv<Policy["authentication"]>> = async (c, next) => {
+  const middleware: MiddlewareHandler<AdmittedEnv<Policy>> = async (c, next) => {
     const context = c.get("requestContext");
     const pathname = c.req.path;
     // Recorded before anything can fail so the lifecycle finalizes an
@@ -149,7 +159,7 @@ export function admit<const Policy extends AdmissionPolicy>(
     }
     c.set("admitted", {
       request: result.handlerRequest,
-      ctx: context as RouteContext<Policy["authentication"]>,
+      ctx: context as PolicyContext<Policy>,
     });
     await next();
   };

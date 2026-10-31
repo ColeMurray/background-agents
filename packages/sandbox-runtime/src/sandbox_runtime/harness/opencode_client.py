@@ -6,6 +6,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import quote
 
 import httpx
 
@@ -29,6 +30,10 @@ class SSEStreamDisconnectedError(SSEConnectionError):
 
 class SSEInactivityTimeoutError(Exception):
     """Raised when no SSE data arrives within the inactivity deadline."""
+
+
+class McpInitializationUnavailable(RuntimeError):
+    """The native connect operation settled without an available connector."""
 
 
 class OpenCodeClient:
@@ -74,6 +79,23 @@ class OpenCodeClient:
                 )
             )
         return self._http_client
+
+    async def set_mcp_connected(self, name: str, connected: bool) -> None:
+        action = "connect" if connected else "disconnect"
+        response = await self._client().post(
+            f"{self._base_url}/mcp/{quote(name, safe='')}/{action}"
+        )
+        response.raise_for_status()
+        status = await self._client().get(f"{self._base_url}/mcp")
+        status.raise_for_status()
+        actual = status.json().get(name, {}).get("status")
+        if connected:
+            if actual in {"failed", "needs_auth", "needs_client_registration"}:
+                raise McpInitializationUnavailable("Managed MCP initialization unavailable")
+            if actual != "connected":
+                raise RuntimeError("Managed MCP connect outcome is uncertain")
+        elif actual != "disabled":
+            raise RuntimeError("Managed MCP client did not confirm disconnection")
 
     async def create_session(self) -> str | None:
         """Create a new OpenCode session, returning its id."""

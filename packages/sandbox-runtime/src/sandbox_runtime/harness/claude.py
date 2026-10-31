@@ -28,6 +28,7 @@ from ..credentials.provider_credential_client import (
     RuntimeCredentialDenied,
     RuntimeCredentialUnavailable,
 )
+from ..managed_mcp import personal_names
 from .base import (
     EventSink,
     HarnessId,
@@ -37,7 +38,6 @@ from .base import (
     TurnOutcome,
 )
 from .claude_env import (
-    CLAUDE_POLICY_SETTINGS,
     ClaudeCredential,
     bundled_claude_binary,
     harness_env,
@@ -45,6 +45,7 @@ from .claude_env import (
     write_clean_env_wrapper,
 )
 from .claude_logging import ClaudeTrajectoryLogger
+from .claude_mcp import McpStatusClient, check_managed_mcp, mcp_policy_settings, mcp_server_options
 from .claude_translate import ClaudeTranslator, ClaudeTurnState
 from .tools import OI_TOOL_SERVER_NAME, ControlPlaneToolClient, ToolServerConfig
 
@@ -106,7 +107,7 @@ _STDOUT_MESSAGE_HEADROOM_BYTES: Final = 16 * 1024 * 1024
 MAX_STDOUT_MESSAGE_BYTES: Final = _ATTACHMENT_BASE64_BYTES + _STDOUT_MESSAGE_HEADROOM_BYTES
 
 
-class SdkClient(Protocol):
+class SdkClient(McpStatusClient, Protocol):
     """The slice of ``ClaudeSDKClient`` the harness uses (a fake stands in for tests)."""
 
     async def connect(self) -> None: ...
@@ -156,29 +157,6 @@ def reasoning_options(model: str, reasoning_effort: str | None) -> dict[str, Any
     return {"effort": reasoning_effort} if reasoning_effort in EFFORT_LEVELS else {}
 
 
-def mcp_server_options(servers: tuple[Mapping[str, Any], ...]) -> dict[str, Any]:
-    """Session MCP servers in the SDK's config shape."""
-    config: dict[str, Any] = {}
-    for server in servers:
-        name = server.get("name")
-        if not name or server.get("enabled") is False:
-            continue
-        if server.get("type") == "remote":
-            entry: dict[str, Any] = {"type": "http", "url": server.get("url", "")}
-            headers = server.get("headers") or server.get("env") or {}
-            if headers:
-                entry["headers"] = dict(headers)
-        else:
-            command = list(server.get("command") or [])
-            if not command:
-                continue
-            entry = {"type": "stdio", "command": command[0], "args": command[1:]}
-            if server.get("env"):
-                entry["env"] = dict(server["env"])
-        config[str(name)] = entry
-    return config
-
-
 class ClaudeHarness:
     id = HarnessId.CLAUDE
 
@@ -215,6 +193,7 @@ class ClaudeHarness:
         self._client_lifecycle_lock = asyncio.Lock()
         self._connected_model: str | None = None
         self._connected_effort: str | None = None
+        self._managed_mcp_allowed: set[str] = set()
         self._resume_on_connect = False
         self._needs_reconnect = False
         self._reconnects = 0
@@ -313,7 +292,9 @@ class ClaudeHarness:
         """``ClaudeAgentOptions`` from the session's inputs (§5.1 of the design)."""
         if self.credential is None or self.wrapper_path is None or self.session_id is None:
             raise RuntimeError("Claude harness is not open")
-        mcp_servers: dict[str, Any] = mcp_server_options(self.config.mcp_servers)
+        mcp_servers: dict[str, Any] = mcp_server_options(
+            self.config.mcp_servers, self._managed_mcp_allowed
+        )
         allowed_tools = [*ALLOWED_TOOLS]
         allowed_tools.extend(f"mcp__{name}__*" for name in mcp_servers)
         if self._tool_client is not None:
@@ -335,7 +316,7 @@ class ClaudeHarness:
             "disallowed_tools": [*DISALLOWED_TOOLS],
             "permission_mode": "dontAsk",
             "system_prompt": system_prompt,
-            "settings": CLAUDE_POLICY_SETTINGS,
+            "settings": mcp_policy_settings(self.config.mcp_servers, self._managed_mcp_allowed),
             "setting_sources": ["user", "project"],
             "include_partial_messages": True,
             "forward_subagent_text": False,
@@ -349,6 +330,25 @@ class ClaudeHarness:
             kwargs["session_id"] = self.session_id
         build_options = self._options_factory or _default_options_factory
         return build_options(**kwargs)
+
+    async def prepare_managed_mcp(self, allowed: set[str]) -> list[str]:
+        if not allowed.issubset(personal_names(self.config.mcp_servers)):
+            raise RuntimeError("Unknown managed MCP connector")
+        # A process launched without personal servers can serve a turn that
+        # allows none; only a change in personal servers needs a fresh process.
+        if allowed or self._managed_mcp_allowed:
+            await self._replace_managed_mcp(allowed)
+        return []
+
+    async def close_managed_mcp(self) -> None:
+        if self._managed_mcp_allowed:
+            await self._replace_managed_mcp(set())
+
+    async def _replace_managed_mcp(self, allowed: set[str]) -> None:
+        async with self._client_lifecycle_lock:
+            if not await self._disconnect_locked():
+                raise RuntimeError("Managed Claude process cleanup failed")
+            self._managed_mcp_allowed = allowed
 
     async def _ensure_client(self, model: str, reasoning_effort: str | None) -> SdkClient:
         async with self._client_lifecycle_lock:
@@ -470,6 +470,7 @@ class ClaudeHarness:
         )
         try:
             async with asyncio.timeout_at(deadline):
+                await check_managed_mcp(client, self._managed_mcp_allowed, prompt, emit)
                 await client.query(self._user_messages(prompt))
                 stream = aiter(client.receive_messages())
                 while True:

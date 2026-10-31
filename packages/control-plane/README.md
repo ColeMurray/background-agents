@@ -63,6 +63,59 @@ not pass through Hono.
 | --------- | ------ | ------------ |
 | `/health` | GET    | Health check |
 
+### Personal MCP Connections
+
+| Endpoint                              | Method | Description                                           |
+| ------------------------------------- | ------ | ----------------------------------------------------- |
+| `/mcp-connections`                    | GET    | List the authenticated user's connection status       |
+| `/mcp-connections/:serverId/connect`  | POST   | Begin personal OAuth consent                          |
+| `/mcp-connections/oauth/callback`     | POST   | Redeem consent bound to the same browser session      |
+| `/mcp-connections/:serverId`          | DELETE | Disconnect the authenticated user's grant             |
+| `/mcp-servers/:id/revoke-connections` | POST   | Revoke every personal grant for a disabled definition |
+
+For offboarding or definition deletion, a human with `mcp_servers.manage` first disables the
+definition, then calls `POST /mcp-servers/:id/revoke-connections`, then deletes the definition.
+Revocation returns 409 while the definition is enabled and 404 if it does not exist. It atomically
+removes consent attempts, increments grant revisions, clears credentials and refresh claims, and
+fences callbacks/refreshes already in flight. It works for suspended owners without reactivating
+them. It does not revoke tokens at the external OAuth provider. The ordinary authorization audit
+records the acting user, route, request ID, and HTTP outcome; the correlated
+`mcp_server.connections_revoked` log records completion. Ownership/deletion safety triggers remain
+in force. The endpoint uses the same signed web-service plus browser-session authentication as other
+human settings operations; a bare service credential cannot invoke it.
+
+Consent is ephemeral: each connection retains at most its current pending/claimed attempt after
+publication. Settlement, failure, supersession, and disconnect delete verifier material.
+Reconnecting keeps a working grant usable until the new consent settles, which replaces it with a
+new grant revision; an abandoned or failed attempt leaves it in place. Expired, logged-out,
+obsolete, and pre-existing terminal history is lazily pruned when that owner lists, starts, or
+redeems connections; idle expired rows need no periodic job to bound repeated attempts. Changing
+authentication configuration invalidates grants, but metadata-only saves and reordered credential
+maps or equivalent repository scopes do not. The proxy and OAuth flows accept only HTTPS URLs whose
+hostname passes lexical checks (no IP literals, local or internal names, credentials in URLs, or
+non-default ports), and a token or authorization endpoint must share its issuer's origin. The check
+applies to the hostname as written: DNS results and connection addresses are not validated, so an
+administrator-registered hostname that resolves to a private address is still reached. Disabling a
+definition blocks pending callbacks before token exchange as well as new consent.
+
+Personal delegation is supported by the OpenCode and Claude harnesses on sandbox runtime generation
+80 and later. A launch on Codex, or on an older image or snapshot, keeps personal servers out of the
+sandbox; each prompt then gets one `mcp` warning that names the servers and the reason. Public and
+service connectors remain available. Healthy bridge-process reconnects preserve personal delegation,
+but process replacement during a prepared turn remains fenced until a new sandbox allocation.
+
+In a session where several people prompt, each turn delegates as its own author. The proxy
+authenticates the shared sandbox, not the process inside it, so a process left running from an
+earlier turn can make personal MCP calls during the active author's turn. That covers another
+person's turn and automated ones (Autofix and other GitHub turns, Linear, automations), which can
+carry text from outside the team. This is a known limitation.
+
+A launch from the provider's base image assumes the current runtime, which holds when Terraform
+builds the base from the deployed commit. An operator-pinned base (for example
+`VERCEL_BASE_SNAPSHOT_ID`) can be older: such a sandbox receives its personal servers, but once it
+reports its runtime at readiness the control plane stops preparing and proxying them and the warning
+explains why.
+
 ### Actors
 
 | Endpoint     | Method | Description                                                       |
@@ -275,6 +328,25 @@ paused, or execution was denied before admission). A retry with the same `idempo
 the original firing's ID, even while it is still running. The status endpoint serves only
 invocations this webhook caused, and never exposes session content.
 
+### Personal Access Tokens
+
+| Endpoint                      | Method | Description                                              |
+| ----------------------------- | ------ | -------------------------------------------------------- |
+| `/personal-access-tokens`     | GET    | The caller's tokens, newest first, without their secrets |
+| `/personal-access-tokens`     | POST   | Issue a token → `201` with the plaintext `token`, once   |
+| `/personal-access-tokens/:id` | DELETE | Revoke one of the caller's tokens                        |
+
+These routes accept only a human browser session, so a token can never issue or revoke tokens. An
+issue request names the token, its grant (`permissions`, a list of RBAC permission IDs), and its
+lifetime (`expiresInDays`, 1–365; every token expires). Each granted permission must be one the
+caller currently holds (`403 permission_not_held`) and one tokens may hold at all
+(`400 permission_not_grantable`; see `PERSONAL_ACCESS_TOKEN_GRANTABILITY` in
+`@open-inspect/shared/types/personal-access-tokens`, which withholds workspace administration). A
+user holds at most 50 tokens (`409 personal_access_token_limit_reached`). Issue and revoke write
+`personal_access_token.created` and `personal_access_token.revoked` audit events in the same
+transaction. See [Personal access tokens](#personal-access-tokens-1) under the security model for
+how a token is admitted.
+
 ### Audit Events
 
 | Endpoint        | Method | Description                                                    |
@@ -431,6 +503,13 @@ Automations:
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
+
+Personal access tokens:
+
+- `personal_access_tokens`: one row per unrevoked token: owner, name, SHA-256 `token_hash` (unique),
+  cleartext `display_prefix`, `expires_at` (required), and minute-resolution `last_used_at`.
+  Deleting the owner deletes their tokens.
+- `personal_access_token_permissions`: a token's grant, one row per RBAC permission.
 
 ## Browser Authentication
 
@@ -592,6 +671,38 @@ The web proxy bounds raw request bytes before parsing and preserves upstream ret
 headers.
 
 The former `/operator/sessions/archive` and `/internal/operator-archive` proposal is not exposed.
+
+### Personal access tokens
+
+A personal access token (`oi_pat_` followed by 64 hex characters) is presented as
+`Authorization: Bearer <token>` on a request without a service signature. It resolves to a distinct
+`personal-access-token` principal for its owner. Only the token's SHA-256 hash is stored, and
+revoking a token deletes its row.
+
+Two independent checks bound what a token can do, and both must pass:
+
+- **The route accepts tokens.** A route admits tokens only when its policy declares
+  `personalAccessTokens: "accept"`, and no route does yet, so an issued token cannot authorize an
+  API call until one opts in. Any other route that authenticates the bearer refuses a valid token
+  with `403 personal_access_token_not_accepted`, whatever other principals it accepts. Public and
+  handler-authenticated routes never resolve a token, and sandbox routes verify the bearer as a
+  sandbox token, so none of them returns that code. `admit()` refuses to build an opted-in route
+  unless it authorizes an active user and every one of its requirements is decided by permissions a
+  token may be granted. Each requirement is checked on its own, so a requirement decided by
+  ownership (collaborator or visibility management) or by team membership is refused even beside a
+  grantable permission. A grant can therefore always narrow what an opted-in route allows.
+- **The token holds the permission.** Admission loads the owner's effective authorization as usual,
+  then narrows its permissions to the intersection with the token's grant. Every downstream
+  permission, scoped-permission, and resource check reads the narrowed set, so a token never exceeds
+  its grant or its owner, and loses a permission as soon as its owner does. A suspended owner's
+  tokens are refused.
+
+The owner's workspace role still decides visibility within a granted permission. For example, an
+administrator's token that holds `sessions.read` sees the sessions the administrator sees.
+Authorization audit rows written for a token request record
+`principal_kind = personal-access-token`, the owner as the actor, and
+`metadata.personalAccessTokenId`. Request logs carry `token_id`. `last_used_at` is updated in the
+background at most once a minute.
 
 ### GitHub App Token Flow
 

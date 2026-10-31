@@ -105,6 +105,8 @@ export const SessionInternalPaths = {
   archive: "/internal/archive",
   unarchive: "/internal/unarchive",
   expireDraft: "/internal/expire-draft",
+  mcpContext: "/internal/mcp-context",
+  mcpClose: "/internal/mcp-close",
   verifySandboxToken: "/internal/verify-sandbox-token",
   openaiTokenRefresh: "/internal/openai-token-refresh",
   xaiTokenRefresh: "/internal/xai-token-refresh",

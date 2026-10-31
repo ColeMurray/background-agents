@@ -9,6 +9,17 @@ import type {
 
 const MCP_SERVERS_KEY = "/api/mcp-servers";
 
+/** A refused MCP server request; the status lets callers explain a specific refusal. */
+export class McpServerRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "McpServerRequestError";
+  }
+}
+
 export function useMcpServers() {
   const { data: session } = useAuthSession();
 
@@ -56,6 +67,17 @@ export async function deleteMcpServer(id: string): Promise<void> {
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || "Failed to delete MCP server");
+    throw new McpServerRequestError(error.error || "Failed to delete MCP server", response.status);
+  }
+}
+
+/** Disconnects every user's personal connection to a disabled server. */
+export async function revokeMcpConnections(id: string): Promise<void> {
+  const response = await browserApiFetch(`${MCP_SERVERS_KEY}/${id}/revoke-connections`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || "Failed to revoke MCP connections");
   }
 }

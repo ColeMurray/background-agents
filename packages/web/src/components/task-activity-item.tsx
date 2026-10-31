@@ -49,7 +49,7 @@ function TaskDisclosure({
         {label}
       </button>
       {isExpanded && (
-        <pre className="max-h-64 whitespace-pre-wrap border-t border-border-muted px-3 py-2 text-xs text-foreground [overflow-wrap:anywhere]">
+        <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap border-t border-border-muted px-3 py-2 text-xs text-foreground [overflow-wrap:anywhere]">
           {content}
         </pre>
       )}

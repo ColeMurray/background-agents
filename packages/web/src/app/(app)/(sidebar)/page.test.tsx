@@ -429,6 +429,24 @@ describe("Home", () => {
     expect(localStorage.getItem("open-inspect-last-provider-selections:v1")).toBe("{}");
   });
 
+  it("keeps Send disabled until model preferences load", async () => {
+    mocks.enabledModelsLoadingValue = true;
+    const user = userEvent.setup();
+    const view = render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
+    const send = screen.getByRole("button", { name: /send/i });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith("/api/sessions", expect.anything());
+
+    mocks.enabledModelsLoadingValue = false;
+    view.rerender(<Home />);
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(sessionCreateBody()).toMatchObject({ model: DEFAULT_MODEL }));
+  });
+
   it("waits for environments to load before restoring a stored environment", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
     mocks.environmentsLoadingValue = true;

@@ -101,7 +101,10 @@ type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
 export function deriveIdentity(principal: Principal | undefined): DerivedIdentity | null {
   if (!principal) return null;
   switch (principal.kind) {
+    // A personal access token acts as its owner, so it implies the same identity a browser
+    // session would; whether a token may reach an identity route at all is the route's opt-in.
     case "user":
+    case "personal-access-token":
       return {
         participantUserId: principal.userId,
         canonicalUserId: principal.userId,

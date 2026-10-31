@@ -1,7 +1,7 @@
 """Type definitions for sandbox operations."""
 
 from enum import StrEnum
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel
 
@@ -27,9 +27,16 @@ class GitUser(BaseModel):
     email: str
 
 
+class ManagedMcpMarker(TypedDict):
+    version: Literal[1]
+    auth_mode: Literal["none", "service_credentials", "user_oauth"]
+    auth_revision: int
+
+
 class McpServerConfig(TypedDict, total=False):
     """MCP server config entry. Mirrors the TypeScript McpServerConfig type."""
 
+    managed_proxy: ManagedMcpMarker
     id: str
     name: str
     type: str  # "local" | "remote"

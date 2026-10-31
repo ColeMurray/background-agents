@@ -75,6 +75,8 @@ function parseMessageStatus(value: unknown): MessageStatus | null {
 
 /** Data for creating a message. */
 export interface CreateMessageData {
+  admittedCanonicalUserId?: string | null;
+  mcpEligible?: boolean;
   id: string;
   authorId: string;
   /**
@@ -378,8 +380,9 @@ export class MessageRepository {
       `INSERT INTO messages (
          id, author_id, author_canonical_user_id, content, source, model, reasoning_effort,
          attachments, callback_context, client_request_id, request_fingerprint,
-         autofix_feedback_key, autofix_pr_key, origin_context, status, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         autofix_feedback_key, autofix_pr_key, origin_context, status, created_at,
+         admitted_canonical_user_id, mcp_eligible
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.authorCanonicalUserId ?? null,
@@ -395,7 +398,9 @@ export class MessageRepository {
       data.autofixPrKey ?? null,
       data.originContext ?? null,
       data.status,
-      data.createdAt
+      data.createdAt,
+      data.admittedCanonicalUserId ?? null,
+      data.mcpEligible ? 1 : 0
     );
   }
 
@@ -419,7 +424,7 @@ export class MessageRepository {
   ): boolean {
     return this.transactionSync(() => {
       const claimed = this.sql.exec(
-        `UPDATE messages SET status = 'processing', started_at = ?
+        `UPDATE messages SET status = 'processing', started_at = ?, mcp_revision = mcp_revision + 1, mcp_context = NULL, mcp_closed = 0
          WHERE id = ? AND status = 'pending'
            AND NOT EXISTS (SELECT 1 FROM messages WHERE status = 'processing')
          RETURNING id`,
@@ -529,6 +534,18 @@ export class MessageRepository {
     );
     const rows = parseMessageRows(result.toArray());
     return rows[0] ?? null;
+  }
+
+  getProcessingMessageAuthority(): { canonicalUserId: string | null; mcpEligible: boolean } | null {
+    const row = this.sql
+      .exec(
+        "SELECT admitted_canonical_user_id, mcp_eligible FROM messages WHERE status = 'processing' LIMIT 1"
+      )
+      .toArray()[0] as
+      { admitted_canonical_user_id: string | null; mcp_eligible: number } | undefined;
+    return row
+      ? { canonicalUserId: row.admitted_canonical_user_id, mcpEligible: row.mcp_eligible === 1 }
+      : null;
   }
 
   getProcessingMessageAuthor(): { author_id: string; source: MessageSource } | null {

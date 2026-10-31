@@ -42,7 +42,8 @@ export class SandboxExecutionEventHandler {
       "observeExecutionCost" | "deliverTransition"
     >,
     private readonly transaction: <T>(closure: () => T) => T,
-    private readonly offerFallbackTitle: (title: string) => void
+    private readonly offerFallbackTitle: (title: string) => void,
+    private readonly disableManagedMcp: () => void = () => {}
   ) {}
 
   /**
@@ -65,6 +66,7 @@ export class SandboxExecutionEventHandler {
     // Release the processing/stop fence and settle final cost in one commit.
     // No queue invocation may see a finished turn with its budget still stale.
     const { completion, budgetTransition } = this.transaction(() => {
+      if (event.managedMcpReady === false) this.disableManagedMcp();
       const completion =
         context.processingMessage?.id === event.messageId
           ? this.messageRepository.recordMessageCompletion(event, context.now, "processing")

@@ -1,6 +1,7 @@
 """Shared staging behavior must stay identical across the vendor entry points."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -110,3 +111,25 @@ async def test_missing_skills_and_failed_mcp_preinstall_do_not_block_staging(sta
     assert json.loads(stager.handoff_path.read_text())["hasRepository"] is False
     assert stager.exit_code() is None
     await stager.stop()
+
+
+async def test_local_mcp_package_inputs_survive_managed_remote_staging(stager, tmp_path):
+    local = {
+        "name": "local",
+        "type": "local",
+        "command": ["npx", "--yes", "@fixture/mcp@1.2.3", "--stdio"],
+        "env": {"TOKEN": "local-fixture"},
+    }
+    remote = {
+        "name": "personal",
+        "type": "remote",
+        "url": "https://proxy.example/mcp",
+        "headers": {"Authorization": "Bearer remote-fixture"},
+        "managed_proxy": {"version": 1, "auth_mode": "user_oauth", "auth_revision": 1},
+    }
+    stager.config = replace(stager.config, mcp_servers=(local, remote))
+    await stager.start((), tmp_path)
+    stager._mcp_packages.install.assert_awaited_once_with([local, remote])
+    handoff = stager.handoff_path.read_text()
+    assert "local-fixture" not in handoff
+    assert "remote-fixture" not in handoff

@@ -86,6 +86,7 @@ describe("final graceful shutdown lifecycle integration", () => {
         getSession: () => f.storage.getSession(),
         transaction: <T>(operation: () => T): T => operation(),
       },
+      messages: { getProcessingMessage: () => null },
       messenger: f.broadcaster,
       sockets: { getSandboxSocket: () => null },
       alarm: createMockAlarmScheduler(),

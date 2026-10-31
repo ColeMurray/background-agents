@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { enforceRoutePrincipal, parseVerifiedSandboxId } from "./routing/route-admission";
+import { enforceRoutePrincipal } from "./routing/route-admission";
+import { parseVerifiedSandboxId } from "./routing/sandbox-authentication";
 import {
   fakeSessionRuntimeDispatch,
   handleRequest,
@@ -39,13 +40,27 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(241);
+    expect(routes).toHaveLength(253);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(184);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(241);
+    expect(new Set(paths).size).toBe(193);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(253);
     expect(routeFor("POST", "/sessions/session-1/sandbox-memory/search")).toMatchObject({
       authentication: { kind: "sandbox" },
+      supportedScmProviders: "all",
+      cacheControl: "private, no-store",
+    });
+  });
+
+  it("requires an audited human settings writer to revoke personal MCP connections", () => {
+    expect(routeFor("POST", "/mcp-servers/server-1/revoke-connections")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: {
+        kind: "active-user",
+        allOf: [{ kind: "permission", permission: "mcp_servers.manage" }],
+        service: { kind: "deny" },
+        auditAllowed: true,
+      },
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
     });
@@ -826,7 +841,7 @@ describe("route principal policy", () => {
       { kind: "service", service: "linear-bot", actor: null } as const,
     ],
   ])("accepts matching principals for %o", (authentication, principal) => {
-    expect(enforceRoutePrincipal(authentication, principal)).toBeNull();
+    expect(enforceRoutePrincipal({ authentication }, principal)).toBeNull();
   });
 
   it.each([
@@ -843,6 +858,77 @@ describe("route principal policy", () => {
     ],
     [{ kind: "service" } as const, { kind: "user", userId: "user-1" } as const, 403],
   ])("rejects mismatched principals for %o", (authentication, principal, status) => {
-    expect(enforceRoutePrincipal(authentication, principal)?.response.status).toBe(status);
+    expect(enforceRoutePrincipal({ authentication }, principal)?.response.status).toBe(status);
+  });
+
+  const token = {
+    kind: "personal-access-token",
+    userId: "user-1",
+    tokenId: "token-1",
+    grant: ["sessions.read"],
+  } as const;
+
+  it.each([
+    { kind: "user" },
+    { kind: "user-or-service" },
+    { kind: "web-service" },
+    { kind: "service" },
+  ] as const)(
+    "refuses a personal access token on a %o route that does not accept one",
+    async (authentication) => {
+      const failure = enforceRoutePrincipal({ authentication }, token);
+      expect(failure?.response.status).toBe(403);
+      await expect(failure?.response.json()).resolves.toMatchObject({
+        code: "personal_access_token_not_accepted",
+      });
+      expect(failure?.decision).toMatchObject({ reasonCode: "personal_access_token_not_accepted" });
+    }
+  );
+
+  it.each([{ kind: "user" }, { kind: "user-or-service" }] as const)(
+    "admits a personal access token on a %o route that accepts one",
+    (authentication) => {
+      expect(
+        enforceRoutePrincipal({ authentication, personalAccessTokens: "accept" }, token)
+      ).toBeNull();
+    }
+  );
+
+  it("never admits a browser user or service through the token opt-in alone", () => {
+    expect(
+      enforceRoutePrincipal(
+        { authentication: { kind: "service" }, personalAccessTokens: "accept" },
+        { kind: "user", userId: "user-1" }
+      )?.response.status
+    ).toBe(403);
+  });
+});
+
+describe("personal access token reach", () => {
+  it("admits tokens on no production route until one opts in", () => {
+    expect(
+      routes
+        .filter((route) => route.personalAccessTokens === "accept")
+        .map((route) => `${route.method} ${route.path}`)
+    ).toEqual([]);
+  });
+
+  it("keeps token management human-only", () => {
+    for (const method of ["GET", "POST"]) {
+      expect(routeFor(method, "/personal-access-tokens")).toMatchObject({
+        authentication: { kind: "user" },
+        authorization: { kind: "active-self" },
+        cacheControl: "private, no-store",
+      });
+      expect(routeFor(method, "/personal-access-tokens")?.personalAccessTokens).toBeUndefined();
+    }
+    expect(routeFor("DELETE", "/personal-access-tokens/token-1")).toMatchObject({
+      authentication: { kind: "user" },
+      authorization: { kind: "active-self" },
+      cacheControl: "private, no-store",
+    });
+    expect(
+      routeFor("DELETE", "/personal-access-tokens/token-1")?.personalAccessTokens
+    ).toBeUndefined();
   });
 });

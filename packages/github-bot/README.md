@@ -19,6 +19,11 @@ CLI.
 Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`, so GitHub retries
 and manual redeliveries do not create duplicate sessions.
 
+If the Autofix queue handoff fails, the bot still runs the rest of the delivery, responds `503`, and
+clears the delivery marker once that work settles, so the delivery can be redelivered from GitHub. A
+redelivery that arrives while the same delivery is still processing also gets `503`. The
+per-delivery dispatch checkpoint keeps the redelivery from starting a second session.
+
 Because Cloudflare KV is eventually consistent, this is a best-effort dedupe guard rather than a
 strict cross-region lock.
 
@@ -122,8 +127,10 @@ access model and can authenticate auxiliary private repos on the configured SCM 
 | `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
 | `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
 
-All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
-200 immediately after signature verification and delivery dedupe.
+All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint
+responds after signature verification, delivery dedupe, and the Autofix queue handoff for eligible
+feedback: `200` on success, or `503` when that handoff fails or the same delivery is still
+processing.
 
 ### Handler Flows
 
@@ -142,16 +149,18 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
 people to request the GitHub App bot through the PR reviewer picker.
 
-1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
+1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` (case-insensitive) — return early
+   if not
 2. Post eyes reaction on the PR (fire-and-forget)
 3. Create session via control plane
-4. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+4. Send code review prompt (includes PR metadata + `gh` CLI instructions). As with auto-review,
+   reviews of the bot's own PRs use `COMMENT`.
 
 **Issue Comment:**
 
 1. Check `issue.pull_request` exists — ignore non-PR comments
 2. Check comment body contains `@{GITHUB_BOT_USERNAME}` — ignore if no mention
-3. Check `sender.login !== GITHUB_BOT_USERNAME` — prevent loops
+3. Check `sender.login` is not `GITHUB_BOT_USERNAME` (case-insensitive) — prevent loops
 4. Strip @mention, post eyes reaction, create session, send comment action prompt
 
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,

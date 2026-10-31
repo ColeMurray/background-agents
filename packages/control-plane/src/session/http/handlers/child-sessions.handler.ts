@@ -34,7 +34,7 @@ const childSessionUpdateBodySchema = z.object({
 function resolvePromptAuthorParticipant(
   messageRepository: MessageRepository,
   participantRepository: ParticipantRepository
-): ParticipantRow | Response {
+): (ParticipantRow & { mcpEligible?: boolean }) | Response {
   const processingMessage = messageRepository.getProcessingMessageAuthor();
   if (!processingMessage) {
     return Response.json(
@@ -44,12 +44,20 @@ function resolvePromptAuthorParticipant(
   }
   const participant = participantRepository.getParticipantById(processingMessage.author_id);
   if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
-  return participant;
+  const authority = messageRepository.getProcessingMessageAuthority();
+  return {
+    ...participant,
+    canonical_user_id: authority?.canonicalUserId ?? null,
+    mcpEligible: authority?.mcpEligible === true,
+  };
 }
 
-function toActivePromptAuthor(participant: ParticipantRow): ActivePromptAuthor {
+function toActivePromptAuthor(
+  participant: ParticipantRow & { mcpEligible?: boolean }
+): ActivePromptAuthor {
   return {
     userId: participant.user_id,
+    ...(participant.mcpEligible ? { mcpEligible: true } : {}),
     ...(participant.canonical_user_id ? { canonicalUserId: participant.canonical_user_id } : {}),
     scmUserId: participant.scm_user_id,
     scmLogin: participant.scm_login,
@@ -105,6 +113,7 @@ export class ChildSessionsHandler {
       finalSnapshotBufferMs,
       promptAuthor: {
         userId: promptAuthor.user_id,
+        ...(promptAuthor.mcpEligible ? { mcpEligible: true } : {}),
         ...(promptAuthor.canonical_user_id
           ? { canonicalUserId: promptAuthor.canonical_user_id }
           : {}),
@@ -164,6 +173,7 @@ export class ChildSessionsHandler {
           content: parsed.data.content,
           authorId: parsed.data.author.userId,
           canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
+          ...(parsed.data.author.mcpEligible ? { mcpEligible: true } : {}),
           // The follow-up counts as the parent's prompt did, whatever account its author has now.
           promptAccountUserId: parsed.data.promptAccountUserId ?? null,
           source: "agent",

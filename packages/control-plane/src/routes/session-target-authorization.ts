@@ -30,7 +30,9 @@ export async function authorizeSessionTarget(
       ? "repositories.use"
       : null;
 
-  if (permission && (ctx.principal?.kind === "user" || ctx.principal?.kind === "service")) {
+  // Sandboxes act within their session's own target; every other principal, including a personal
+  // access token, must hold the permission itself.
+  if (permission && ctx.principal && ctx.principal.kind !== "sandbox") {
     if (
       ctx.principal.kind === "service" &&
       !serviceAllowsPermission(ctx.principal.service, permission)

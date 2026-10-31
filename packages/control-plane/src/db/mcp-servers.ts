@@ -1,5 +1,10 @@
 import {
   mcpServerCommandSchema,
+  DEFAULT_MCP_AUTH_MODE,
+  mcpAuthModeSchema,
+  mcpOAuthProfileSchema,
+  type McpAuthMode,
+  type McpOAuthProfile,
   mcpServerCredentialMapSchema,
   mcpServerTypeSchema,
   type McpServerConfig,
@@ -10,6 +15,7 @@ import {
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { isUniqueConstraintError } from "./errors";
+import { mcpDestination } from "../mcp/destination";
 import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
@@ -33,6 +39,10 @@ function generateId(): string {
 interface McpServerRow {
   id: string;
   revision: number;
+  auth_mode?: string;
+  auth_revision?: number;
+  managed_routing?: number;
+  oauth_profile?: string | null;
   name: string;
   type: string;
   command: string | null;
@@ -52,6 +62,21 @@ function parseRepoScopes(raw: string | null): string[] | null {
   } catch {
     return [raw];
   }
+}
+
+function normalizeRepoScopes(scopes: string[] | null | undefined): string[] | null {
+  if (!scopes?.length) return null;
+  return [...new Set(scopes.map((scope) => scope.toLowerCase()))].sort();
+}
+
+function credentialEntries(value: Record<string, string>, remote: boolean): [string, string][] {
+  // HTTP header names are case-insensitive; the relay's last set wins.
+  const effective = remote
+    ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key.toLowerCase(), entry]))
+    : value;
+  return Object.keys(effective)
+    .sort()
+    .map((key) => [key, effective[key]]);
 }
 
 function safeJsonParseCommand(raw: string | null): string[] | undefined {
@@ -105,7 +130,13 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
     ...envOrHeaders,
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
+    ...rowAuth(row),
   };
+}
+
+/** Stored credential-free sentinels: "{}" from encryptEnv, plus legacy "" and "null". */
+function hasStoredCredentials(raw: string): boolean {
+  return raw !== "" && raw !== "{}" && raw !== "null";
 }
 
 /**
@@ -131,7 +162,7 @@ function mergeKeptCredentials(
 
 function rowToMetadata(row: McpServerRow, credentialKeys?: string[]): McpServerMetadata {
   const type = mcpServerTypeSchema.parse(row.type);
-  const hasCredentials = row.env !== "" && row.env !== "{}" && row.env !== "null";
+  const hasCredentials = hasStoredCredentials(row.env);
   return {
     id: row.id,
     revision: row.revision,
@@ -144,7 +175,51 @@ function rowToMetadata(row: McpServerRow, credentialKeys?: string[]): McpServerM
     ...(credentialKeys ? { credentialKeys } : {}),
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
+    ...rowAuth(row),
   };
+}
+
+function rowAuth(row: McpServerRow) {
+  return {
+    authMode: mcpAuthModeSchema.parse(row.auth_mode ?? DEFAULT_MCP_AUTH_MODE),
+    authRevision: row.auth_revision ?? 1,
+    managedRouting: row.managed_routing === 1,
+    oauth: row.oauth_profile ? mcpOAuthProfileSchema.parse(JSON.parse(row.oauth_profile)) : null,
+  };
+}
+
+function validateAuth(
+  type: string,
+  mode: McpAuthMode,
+  managed: boolean,
+  url: string | undefined,
+  oauth: McpOAuthProfile | null,
+  hasHeaders: boolean
+): void {
+  if (type === "local") {
+    if (mode === "user_oauth" || managed || oauth)
+      throw new McpServerValidationError("Managed OAuth requires a remote server");
+    return;
+  }
+  if (mode !== "service_credentials" && hasHeaders)
+    throw new McpServerValidationError("Only service authentication accepts static headers");
+  if (mode === "user_oauth" && (!managed || !oauth))
+    throw new McpServerValidationError(
+      "User OAuth requires managed routing and an issuer/resource profile"
+    );
+  if (mode !== "user_oauth" && oauth)
+    throw new McpServerValidationError("OAuth profile requires user_oauth mode");
+  if (managed) {
+    try {
+      mcpDestination(url!);
+      if (oauth) {
+        mcpDestination(oauth.issuer);
+        mcpDestination(oauth.resource);
+      }
+    } catch {
+      throw new McpServerValidationError("Managed MCP requires public HTTPS endpoints");
+    }
+  }
 }
 
 /** How much a metadata read reveals about each server's stored credentials. */
@@ -168,6 +243,14 @@ export class McpServerStore {
     const plain = JSON.stringify(env);
     if (Object.keys(env).length === 0) return plain;
     return encryptToken(plain, this.encryptionKey);
+  }
+
+  private async decryptStoredCredentials(raw: string): Promise<Record<string, string>> {
+    if (!hasStoredCredentials(raw)) return {};
+    const plain = raw.trimStart().startsWith("{")
+      ? raw
+      : await decryptToken(raw, this.encryptionKey);
+    return mcpServerCredentialMapSchema.parse(JSON.parse(plain));
   }
 
   /** Stored credentials, or null when the value is neither decryptable nor pre-encryption plaintext. */
@@ -251,6 +334,7 @@ export class McpServerStore {
   ): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
+    const repoScopes = normalizeRepoScopes(config.repoScopes);
 
     if (config.type === "local" && (!config.command || config.command.length === 0)) {
       throw new McpServerValidationError("Local MCP servers require a command");
@@ -259,6 +343,18 @@ export class McpServerStore {
       throw new McpServerValidationError("remote MCP servers require a URL");
     }
 
+    const authMode =
+      config.type === "remote" ? (config.authMode ?? DEFAULT_MCP_AUTH_MODE) : DEFAULT_MCP_AUTH_MODE;
+    const managedRouting = config.type === "remote" && (config.managedRouting ?? false);
+    const oauth = config.type === "remote" ? (config.oauth ?? null) : null;
+    validateAuth(
+      config.type,
+      authMode,
+      managedRouting,
+      config.type === "remote" ? config.url : undefined,
+      oauth,
+      config.type === "remote" && Object.keys(config.headers ?? {}).length > 0
+    );
     const encryptedEnv = await this.encryptEnv(
       config.type === "remote" ? (config.headers ?? {}) : (config.env ?? {})
     );
@@ -266,8 +362,8 @@ export class McpServerStore {
     try {
       await this.db
         .prepare(
-          `INSERT INTO mcp_servers (id, name, type, command, url, env, repo_scope, enabled, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO mcp_servers (id, name, type, command, url, env, repo_scope, enabled, created_at, updated_at, auth_mode, managed_routing, oauth_profile)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           id,
@@ -276,12 +372,13 @@ export class McpServerStore {
           config.type === "local" ? JSON.stringify(config.command) : null,
           config.type === "remote" ? config.url : null,
           encryptedEnv,
-          config.repoScopes?.length
-            ? JSON.stringify(config.repoScopes.map((r) => r.toLowerCase()))
-            : null,
+          repoScopes ? JSON.stringify(repoScopes) : null,
           config.enabled ? 1 : 0,
           now,
-          now
+          now,
+          authMode,
+          managedRouting ? 1 : 0,
+          oauth ? JSON.stringify(oauth) : null
         )
         .run();
     } catch (err) {
@@ -323,28 +420,38 @@ export class McpServerStore {
     }
 
     const incoming = mergedType === "remote" ? patch.headers : patch.env;
-    let revisionGuard = expectedRevision;
-    let encryptedEnv: string;
-    if (mergedType !== rowType) {
-      // Env vars and headers are not interchangeable, so a type change drops the stored set.
-      encryptedEnv = await this.encryptEnv(incoming ?? {});
-    } else if (patch.keepCredentialKeys === undefined) {
-      // Sent credentials replace the stored set; without any, it stays as stored.
-      encryptedEnv = incoming === undefined ? row.env : await this.encryptEnv(incoming);
-    } else {
-      // Retaining values needs them decrypted. Fail closed rather than read an
-      // unreadable set as empty and delete it.
-      const stored = await this.readEnv(row.env, row.id);
-      if (!stored) {
-        throw new McpServerCredentialsUnreadableError(
-          "Saved credentials for this MCP server cannot be decrypted; enter every credential again to replace them"
+    let credentialsChanged = false;
+    let encryptedEnv = row.env;
+    if (
+      incoming !== undefined ||
+      mergedType !== rowType ||
+      patch.keepCredentialKeys !== undefined
+    ) {
+      // Invalid old data cannot establish equality, but an explicit replacement can repair it.
+      const existing = await this.decryptStoredCredentials(row.env).catch(() => null);
+      // Sent credentials replace the stored set. Env vars and headers are not
+      // interchangeable, so a type change drops it.
+      let credentials = incoming ?? {};
+      if (mergedType === rowType && patch.keepCredentialKeys !== undefined) {
+        // Retaining values needs them decrypted. Fail closed rather than read an
+        // unreadable set as empty and delete it.
+        if (!existing) {
+          throw new McpServerCredentialsUnreadableError(
+            "Saved credentials for this MCP server cannot be decrypted; enter every credential again to replace them"
+          );
+        }
+        credentials = mergeKeptCredentials(
+          mergedType,
+          existing,
+          credentials,
+          patch.keepCredentialKeys
         );
       }
-      encryptedEnv = await this.encryptEnv(
-        mergeKeptCredentials(mergedType, stored, incoming ?? {}, patch.keepCredentialKeys)
-      );
-      // Kept values come from this read, so a concurrent write must not land in between.
-      revisionGuard ??= row.revision;
+      credentialsChanged =
+        existing === null ||
+        JSON.stringify(credentialEntries(existing, rowType === "remote")) !==
+          JSON.stringify(credentialEntries(credentials, mergedType === "remote"));
+      if (credentialsChanged) encryptedEnv = await this.encryptEnv(credentials);
     }
 
     const mergedCommand =
@@ -358,11 +465,38 @@ export class McpServerStore {
       throw new McpServerValidationError("remote MCP servers require a URL");
     }
 
+    const oldAuth = rowAuth(row);
+    const authMode =
+      mergedType === "local" ? DEFAULT_MCP_AUTH_MODE : (patch.authMode ?? oldAuth.authMode);
+    const managedRouting =
+      mergedType === "remote" && (patch.managedRouting ?? oldAuth.managedRouting);
+    const oauth =
+      mergedType === "local" ? null : patch.oauth !== undefined ? patch.oauth : oldAuth.oauth;
+    const oldRepoScopes = normalizeRepoScopes(parseRepoScopes(row.repo_scope));
+    const repoScopes =
+      patch.repoScopes === undefined ? oldRepoScopes : normalizeRepoScopes(patch.repoScopes);
+    validateAuth(
+      mergedType,
+      authMode,
+      managedRouting,
+      mergedUrl,
+      oauth,
+      hasStoredCredentials(encryptedEnv)
+    );
+    const authChanged =
+      authMode !== oldAuth.authMode ||
+      (mergedType === "remote" ? mergedUrl : null) !== row.url ||
+      mergedType !== row.type ||
+      oauth?.issuer !== oldAuth.oauth?.issuer ||
+      oauth?.resource !== oldAuth.oauth?.resource ||
+      credentialsChanged ||
+      JSON.stringify(repoScopes) !== JSON.stringify(oldRepoScopes) ||
+      managedRouting !== oldAuth.managedRouting;
     const now = Date.now();
 
     try {
       const statement = this.db.prepare(
-        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?, revision = revision + 1
+        `UPDATE mcp_servers SET name = ?, type = ?, command = ?, url = ?, env = ?, repo_scope = ?, enabled = ?, updated_at = ?, auth_mode = ?, managed_routing = ?, oauth_profile = ?, auth_revision = auth_revision + ?, revision = revision + 1
          WHERE id = ? AND revision = COALESCE(?, revision)
          RETURNING *`
       );
@@ -373,15 +507,15 @@ export class McpServerStore {
           mergedType === "local" && mergedCommand ? JSON.stringify(mergedCommand) : null,
           mergedType === "remote" ? (mergedUrl ?? null) : null,
           encryptedEnv,
-          patch.repoScopes !== undefined
-            ? patch.repoScopes?.length
-              ? JSON.stringify(patch.repoScopes.map((r) => r.toLowerCase()))
-              : null
-            : row.repo_scope,
+          repoScopes ? JSON.stringify(repoScopes) : null,
           patch.enabled !== undefined ? (patch.enabled ? 1 : 0) : row.enabled,
           now,
+          authMode,
+          managedRouting ? 1 : 0,
+          oauth ? JSON.stringify(oauth) : null,
+          authChanged ? 1 : 0,
           id,
-          revisionGuard ?? null
+          expectedRevision ?? row.revision
         )
         .first<McpServerRow>();
       if (!updated) {
@@ -398,32 +532,58 @@ export class McpServerStore {
     }
   }
 
-  async delete(id: string): Promise<boolean> {
-    const result = await this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").bind(id).run();
-    return (result.meta?.changes ?? 0) > 0;
-  }
-
   /**
    * Servers applicable to a session's member repositories: unscoped servers
    * always apply; scoped servers apply when ANY member matches a scope.
    * Pass an empty list for repo-less sessions (unscoped servers only).
+   * Servers the control plane proxies (managed routing, which every personal
+   * OAuth server uses) come without their stored credentials.
    */
-  async getDecryptedForSession(
+  async getForLaunch(
     repositories: Array<{ repoOwner: string; repoName: string }>
   ): Promise<McpServerConfig[]> {
-    const repoFullNames = new Set(
-      repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
-    );
+    const names = new Set(repositories.map((r) => `${r.repoOwner}/${r.repoName}`.toLowerCase()));
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY name")
       .all<McpServerRow>();
-
-    const filtered = results.filter((row) => {
+    const rows = results.filter((row) => {
       const scopes = parseRepoScopes(row.repo_scope);
-      if (!scopes) return true;
-      return scopes.some((s) => repoFullNames.has(s.toLowerCase()));
+      return !scopes || scopes.some((scope) => names.has(scope.toLowerCase()));
     });
+    return Promise.all(
+      rows.map((row) =>
+        row.type === "remote" && (row.managed_routing === 1 || row.auth_mode === "user_oauth")
+          ? rowToConfig(row, {})
+          : this.decryptRow(row)
+      )
+    );
+  }
 
-    return Promise.all(filtered.map((r) => this.decryptRow(r)));
+  /** Only called by the authenticated relay after admission; fail closed on corrupt secrets. */
+  async getServiceHeaders(id: string, authRevision: number): Promise<Record<string, string>> {
+    const row = await this.db
+      .prepare(
+        "SELECT * FROM mcp_servers WHERE id = ? AND auth_revision = ? AND enabled = 1 AND auth_mode = 'service_credentials'"
+      )
+      .bind(id, authRevision)
+      .first<McpServerRow>();
+    if (!row) throw new Error("MCP service binding unavailable");
+    // Pre-encryption rows retain their JSON map when managed routing is enabled.
+    // Unlike the legacy launch fallback, reject malformed maps and ciphertext
+    // instead of silently forwarding with missing or partial credentials.
+    return await this.decryptStoredCredentials(row.env);
+  }
+
+  async delete(id: string): Promise<boolean> {
+    try {
+      const result = await this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").bind(id).run();
+      return (result.meta?.changes ?? 0) > 0;
+    } catch (error) {
+      if (String(error).includes("MCP connections must be disconnected"))
+        throw new McpServerConflictError(
+          "Disable this server, then disconnect its personal connections before deleting it"
+        );
+      throw error;
+    }
   }
 }

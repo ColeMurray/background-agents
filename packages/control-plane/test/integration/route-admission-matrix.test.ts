@@ -21,6 +21,8 @@ import { EnvironmentStore } from "../../src/db/environments";
 import { TeamStore } from "../../src/db/teams";
 import { TeamMembershipStore } from "../../src/db/team-memberships";
 import { SessionCollaboratorStore } from "../../src/db/session-collaborators";
+import { PersonalAccessTokenStore } from "../../src/db/personal-access-tokens";
+import { PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS } from "@open-inspect/shared/types/personal-access-tokens";
 import { catalog } from "../../src/routes/catalog";
 import { Hono } from "hono";
 import { admit } from "../../src/routing/admit";
@@ -45,7 +47,7 @@ const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per
 // mutating session route, so the default per-test budget is too small under
 // full-suite load.
-const MATRIX_TIMEOUT_MS = 60_000;
+const MATRIX_TIMEOUT_MS = 120_000;
 /** Every production route with its policy, in precedence order, as Hono registered it. */
 const routes: readonly RouteContract[] = listRouteContracts(
   createControlPlaneApp(catalog, cloudflareHost)
@@ -245,7 +247,14 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
 
       // Raw web-service routes (browser auth, autofix activity) admit the web
       // principal and then let their handler own every status, including 403.
-      if (kind !== "web-service") {
+      if (route.path === "/mcp-connections/:serverId/connect") {
+        // The principal is admitted, but this fixture has no matching server
+        // or browser credential binding. The handler must fail closed.
+        expect(response.status, identity).toBe(403);
+        await expect(response.clone().json(), identity).resolves.toMatchObject({
+          code: "mcp_denied",
+        });
+      } else if (kind !== "web-service") {
         expect(PROTECTED_STATUSES.has(response.status), `${identity} -> ${response.status}`).toBe(
           false
         );
@@ -334,9 +343,18 @@ describe("route admission matrix", { timeout: MATRIX_TIMEOUT_MS }, () => {
       };
 
       const admitted = await SELF.fetch(url, init);
-      expect(PROTECTED_STATUSES.has(admitted.status), `${identity} -> ${admitted.status}`).toBe(
-        false
-      );
+      if (route.path === "/sessions/:id/mcp/:serverId") {
+        // Sandbox authentication succeeds, but a server absent from the
+        // allocation's managed launch configuration cannot be proxied.
+        expect(admitted.status, identity).toBe(403);
+        await expect(admitted.clone().json(), identity).resolves.toMatchObject({
+          code: "mcp_denied",
+        });
+      } else {
+        expect(PROTECTED_STATUSES.has(admitted.status), `${identity} -> ${admitted.status}`).toBe(
+          false
+        );
+      }
       if (admitted.status === 404) {
         expect(await bodyText(admitted), identity).not.toBe(ROUTE_MISS_BODY);
       }
@@ -447,6 +465,8 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   const handle = createControlPlaneHttpHandler([shadow]);
   let teamSessionId = "";
   let privateSessionId = "";
+  /** The workspace owner's token, granted every permission a token may hold. */
+  let ownerToken = "";
   const OTHER_MEMBER = "33333333333333333333333333333333";
   const TEAM_VIEWER = "44444444444444444444444444444444";
   const COLLABORATOR = "55555555555555555555555555555555";
@@ -499,6 +519,16 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       ).bind(fixtures.teamId, OTHER_MEMBER, privateSessionId),
     ]);
     await new SessionCollaboratorStore(env.DB).add(privateSessionId, COLLABORATOR, OTHER_MEMBER);
+    const issued = await new PersonalAccessTokenStore(env.DB).issue({
+      userId: BROWSER_USER_ID,
+      name: "matrix",
+      permissions: PERSONAL_ACCESS_TOKEN_GRANTABLE_PERMISSIONS,
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      now: Date.now(),
+      requestId: "matrix",
+    });
+    if (issued.kind !== "issued") throw new Error("Matrix token was not issued");
+    ownerToken = issued.token.token;
   }, MATRIX_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -534,28 +564,34 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
     );
   }
 
+  /** The concrete URL a sentinel request uses for a route, bound to the matching fixture. */
+  function sentinelUrl(route: RouteContract): string {
+    const kind = route.authentication.kind;
+    const sessionId =
+      kind === "sandbox" || kind === "user-or-service-with-sandbox-fallback"
+        ? fixtures.sandboxSessionId
+        : fixtures.readonlySessionId;
+    return `${BASE}${materialize(route, {
+      ...(environmentRequirementFor(route)?.kind === "environment"
+        ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
+        : {}),
+      id: isTeamRoute(route)
+        ? fixtures.teamId
+        : isAutomationRoute(route)
+          ? fixtures.automationId
+          : environmentRequirementFor(route)?.idParam === "id"
+            ? fixtures.environmentId
+            : sessionId,
+      childId: fixtures.sandboxSessionId,
+    })}`;
+  }
+
   it("admits exactly the credential classes each route's policy accepts", async () => {
     const exportAdmitted: string[] = [];
     for (const route of routes) {
       const identity = `${route.method} ${route.path}`;
       const kind = route.authentication.kind;
-      const sessionId =
-        kind === "sandbox" || kind === "user-or-service-with-sandbox-fallback"
-          ? fixtures.sandboxSessionId
-          : fixtures.readonlySessionId;
-      const url = `${BASE}${materialize(route, {
-        ...(environmentRequirementFor(route)?.kind === "environment"
-          ? { [environmentRequirementFor(route)!.idParam]: fixtures.environmentId }
-          : {}),
-        id: isTeamRoute(route)
-          ? fixtures.teamId
-          : isAutomationRoute(route)
-            ? fixtures.automationId
-            : environmentRequirementFor(route)?.idParam === "id"
-              ? fixtures.environmentId
-              : sessionId,
-        childId: fixtures.sandboxSessionId,
-      })}`;
+      const url = sentinelUrl(route);
       const method = route.method;
       const expectReach = async (
         headers: Record<string, string>,
@@ -632,6 +668,20 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       }
     }
     expect(new Set(exportAdmitted)).toEqual(EXPORT_SERVICE_ROUTES);
+  });
+
+  it("admits the owner's personal access token exactly where the route declares it", async () => {
+    const token = { Authorization: `Bearer ${ownerToken}` };
+    for (const route of routes) {
+      const kind = route.authentication.kind;
+      // Uncredentialed routes admit any request, so a token tells them nothing.
+      if (kind === "public" || kind === "handler-authenticated") continue;
+      const identity = `${route.method} ${route.path}`;
+      const response = await send(sentinelUrl(route), route.method, token);
+      expect(await reachedSentinel(response, identity), `${identity} [personal access token]`).toBe(
+        route.personalAccessTokens === "accept"
+      );
+    }
   });
 
   it("delivers path segments to handlers decoded exactly once", async () => {
