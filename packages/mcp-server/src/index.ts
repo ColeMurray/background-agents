@@ -47,7 +47,14 @@ export function createServer(client: ControlPlaneClient): McpServer {
       async (args: Record<string, unknown>) => {
         try {
           const result = await tool.run(client, args);
-          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+              },
+            ],
+          };
         } catch (error) {
           // A refusal is information the model can act on, so it is tool output, not a throw.
           const detail =

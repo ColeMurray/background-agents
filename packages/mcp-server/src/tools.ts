@@ -298,7 +298,7 @@ export const TOOLS: ToolDefinition[] = [
         .describe("The file, current.repositories[].files[].id from get_session_diff"),
     },
     run: (client, args) =>
-      client.get(
+      client.getText(
         `/sessions/${encodeURIComponent(args.session_id)}/diff` +
           `/${encodeURIComponent(args.revision_id)}/files/${encodeURIComponent(args.file_id)}`
       ),

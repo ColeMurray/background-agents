@@ -33,6 +33,12 @@ export interface ControlPlaneClientConfig {
   timeoutMs?: number;
 }
 
+interface RequestOptions {
+  query?: Record<string, string | number | undefined>;
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
 /**
  * Hosts for which plain `http:` is accepted. The token travels in an `Authorization` header on
  * every request, so cleartext is only safe when the request cannot leave the machine. `URL`
@@ -125,7 +131,13 @@ export class ControlPlaneClient {
 
   /** GET a control-plane path and parse the JSON body. */
   get(path: string, query?: Record<string, string | number | undefined>): Promise<unknown> {
-    return this.send("GET", path, { query });
+    return this.sendJson("GET", path, { query });
+  }
+
+  /** GET a control-plane path and return its text body unchanged. */
+  async getText(path: string): Promise<string> {
+    const { body } = await this.send("GET", path, { headers: { Accept: "text/*" } });
+    return body;
   }
 
   /** POST a JSON body to a control-plane path and parse the JSON response. */
@@ -134,18 +146,30 @@ export class ControlPlaneClient {
     body: unknown,
     options?: { headers?: Record<string, string> }
   ): Promise<unknown> {
-    return this.send("POST", path, { body, headers: options?.headers });
+    return this.sendJson("POST", path, { body, headers: options?.headers });
+  }
+
+  private async sendJson(
+    method: "GET" | "POST",
+    path: string,
+    options: RequestOptions
+  ): Promise<unknown> {
+    const { body, status } = await this.send(method, path, options);
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new ControlPlaneError(
+        `${method} ${path} returned non-JSON: ${body.slice(0, 200)}`,
+        status
+      );
+    }
   }
 
   private async send(
     method: "GET" | "POST",
     path: string,
-    options: {
-      query?: Record<string, string | number | undefined>;
-      body?: unknown;
-      headers?: Record<string, string>;
-    }
-  ): Promise<unknown> {
+    options: RequestOptions
+  ): Promise<{ body: string; status: number }> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -197,14 +221,7 @@ export class ControlPlaneClient {
       );
     }
 
-    try {
-      return JSON.parse(body);
-    } catch {
-      throw new ControlPlaneError(
-        `${method} ${path} returned non-JSON: ${body.slice(0, 200)}`,
-        response.status
-      );
-    }
+    return { body, status: response.status };
   }
 }
 
