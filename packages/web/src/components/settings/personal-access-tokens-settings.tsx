@@ -21,6 +21,7 @@ import {
   PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER,
   personalAccessTokenPermissionLabel,
 } from "@/lib/personal-access-token-permissions";
+import { copyToClipboard } from "@/lib/format";
 import { formatFutureRelativeTime, formatRelativeTime } from "@/lib/time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -440,11 +441,9 @@ function IssuedTokenDialog({
               size="icon"
               variant="outline"
               aria-label="Copy token"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(token.token)
-                  .then(() => setCopied(true))
-                  .catch(() => toast.error("Copy failed; select the token and copy it manually"));
+              onClick={async () => {
+                if (await copyToClipboard(token.token)) setCopied(true);
+                else toast.error("Copy failed; select the token and copy it manually");
               }}
             >
               {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}

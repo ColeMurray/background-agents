@@ -4,6 +4,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type {
@@ -190,6 +191,25 @@ describe("PersonalAccessTokensSettings", () => {
     await user.click(dialog.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(screen.queryByText(created.token)).not.toBeInTheDocument();
+  });
+
+  it("says to copy the secret manually when the clipboard is unavailable", async () => {
+    hooks.issue.mockResolvedValue({ ...TOKEN, token: `oi_pat_${"d4".repeat(32)}` });
+    const user = userEvent.setup();
+    // As over plain HTTP: no Clipboard API, and jsdom has no `execCommand` fallback either.
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    render(<PersonalAccessTokensSettings />);
+
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    await user.type(screen.getByLabelText("Name"), "Work laptop");
+    await user.click(screen.getByRole("button", { name: "Read-only" }));
+    await user.click(screen.getByRole("button", { name: "Create token" }));
+    const dialog = within(await screen.findByRole("alertdialog"));
+    await user.click(dialog.getByRole("button", { name: "Copy token" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("Copy failed; select the token and copy it manually")
+    );
   });
 
   it("keeps a pending issuance from being cancelled or replaced", async () => {
