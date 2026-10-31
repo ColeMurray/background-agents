@@ -18,6 +18,9 @@ MAX_REASONING_SUMMARY_CHARS: Final = 280
 # Responses API's reasoning summaries, while OpenAI-compatible adapters copy
 # raw `reasoning_content` into the same part under their own provider id.
 # OpenCode does not mark summaries, so every other provider reports timing only.
+# The gate checks the adapter as well as the provider: a provider id names
+# configuration, and a repository's `opencode.json` can point `openai` at
+# another SDK package that writes raw reasoning under the same id.
 REASONING_SUMMARY_PROVIDERS: Final = frozenset({"openai"})
 # Parts showing that a step has moved on from reasoning.
 _OUTPUT_PART_TYPES: Final = frozenset({"text", "tool", "step-finish"})
@@ -38,6 +41,13 @@ def _trimmed_summary(text: Any) -> str:
     if len(summary) > MAX_REASONING_SUMMARY_CHARS:
         summary = summary[: MAX_REASONING_SUMMARY_CHARS - 1].rstrip() + "…"
     return summary
+
+
+def _filled_by_openai_adapter(part: dict[str, Any]) -> bool:
+    """Whether OpenCode's OpenAI adapter wrote the part: it tags every reasoning
+    part's metadata with its own `openai` entry."""
+    metadata = part.get("metadata")
+    return isinstance(metadata, dict) and isinstance(metadata.get("openai"), dict)
 
 
 @dataclass
@@ -160,7 +170,8 @@ class ReasoningTracker:
         # A part recovered after a later one was seen can predate the run.
         run.started_at_ms = min(run.started_at_ms, started)
         run.updated_at_ms = max(run.updated_at_ms, ended)
-        is_summary = part.get("messageID") in self._summary_message_ids
+        from_summary_provider = part.get("messageID") in self._summary_message_ids
+        is_summary = from_summary_provider and _filled_by_openai_adapter(part)
         summary = _trimmed_summary(part.get("text")) if is_summary else ""
         if summary:
             run.summary_count += 1

@@ -264,8 +264,15 @@ class TestReasoningProgress:
         ]
 
     def reasoning(self, part_id: str, start: int, end: int | None = None, text: str = "") -> dict:
+        """A reasoning part as OpenCode's OpenAI adapter writes it."""
         time = {"start": start} if end is None else {"start": start, "end": end}
-        return {"type": "reasoning", "id": part_id, "time": time, "text": text}
+        return {
+            "type": "reasoning",
+            "id": part_id,
+            "time": time,
+            "text": text,
+            "metadata": {"openai": {"itemId": f"rs_{part_id}"}},
+        }
 
     def test_each_step_gets_its_own_run(self):
         stream, state = self.authorized()

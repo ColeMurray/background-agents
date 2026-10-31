@@ -4,6 +4,10 @@ Part payloads mirror OpenCode 1.18.29: a reasoning part opens with only
 `time.start` and is re-sent with `time.end` and its text once it finishes.
 """
 
+import json
+
+import pytest
+
 from sandbox_runtime.harness.opencode_reasoning import (
     MAX_REASONING_SUMMARIES,
     MAX_REASONING_SUMMARY_CHARS,
@@ -15,9 +19,19 @@ MESSAGE_ID = "msg_assistant"
 T0 = 1_754_000_002_000
 
 
-def reasoning(part_id: str, start: int, end: int | None = None, text: str = "") -> dict:
+def reasoning(
+    part_id: str,
+    start: int,
+    end: int | None = None,
+    text: str = "",
+    adapter: str | None = "openai",
+) -> dict:
+    """A reasoning part, tagged in its metadata by the SDK adapter that wrote it."""
     time = {"start": start} if end is None else {"start": start, "end": end}
-    return {"type": "reasoning", "id": part_id, "messageID": MESSAGE_ID, "time": time, "text": text}
+    part = {"type": "reasoning", "id": part_id, "messageID": MESSAGE_ID, "time": time, "text": text}
+    if adapter is not None:
+        part["metadata"] = {adapter: {"itemId": f"rs_{part_id}"}}
+    return part
 
 
 def part(part_type: str, part_id: str) -> dict:
@@ -130,13 +144,27 @@ class TestSummaryProvenance:
         under their own provider id, so the run keeps its timing only."""
         tracker, _ = make_tracker("deepseek")
 
-        opened = tracker.apply(reasoning("prt_r1", T0))
-        finished = tracker.apply(reasoning("prt_r1", T0, T0 + 46, "RAW-COMPAT-COT"))
+        opened = tracker.apply(reasoning("prt_r1", T0, adapter=None))
+        finished = tracker.apply(reasoning("prt_r1", T0, T0 + 46, "RAW-COMPAT-COT", adapter=None))
 
         assert opened[0]["active"] is True
         assert finished[0]["updatedAt"] == T0 + 46
         assert finished[0]["summaries"] == []
         assert finished[0]["summaryCount"] == 0
+
+    @pytest.mark.parametrize("adapter", ["xai", None])
+    def test_openai_id_without_the_openai_adapter_tag_is_withheld(self, adapter: str | None):
+        """A repository's `opencode.json` can point the `openai` provider at
+        another SDK package, such as `@ai-sdk/xai`, which merges raw reasoning
+        into the part under the same provider id."""
+        tracker, _ = make_tracker("openai")
+
+        events = tracker.apply(reasoning("prt_r1", T0, T0 + 46, "RAW-XAI-COT", adapter=adapter))
+
+        assert events[0]["updatedAt"] == T0 + 46
+        assert events[0]["summaries"] == []
+        assert events[0]["summaryCount"] == 0
+        assert "RAW-XAI-COT" not in json.dumps(events)
 
 
 class TestPartOwnership:
