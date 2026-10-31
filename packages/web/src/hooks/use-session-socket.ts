@@ -65,7 +65,7 @@ interface UseSessionSocketReturn {
   boot: SessionSocketState["boot"];
   messages: Message[];
   events: SandboxEvent[];
-  /** The reasoning step the model is in the middle of, if any. */
+  /** The newest reasoning step the runtime reports active, if any. */
   liveReasoning: SessionSocketState["liveReasoning"];
   participants: ParticipantPresence[];
   artifacts: Artifact[];

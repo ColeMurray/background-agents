@@ -39,18 +39,18 @@ export function reasoningDetail(text: string): string {
 }
 
 /**
- * The reasoning the model is in the middle of once `event` has arrived: the
- * newest reasoning event, while the runtime still reports it active, until
- * its turn completes. The runtime clears `active` when the step writes output
- * or finishes, which clients otherwise cannot see while the output is being
- * written. Fold this over events in the order they arrived, before the event
- * log is reordered for display.
+ * The newest reasoning event once `event` has arrived, while the runtime
+ * still reports it active. The runtime clears `active` when the step writes
+ * output or finishes, which clients otherwise cannot see while the output is
+ * being written. Fold this over events in the order they arrived, before the
+ * event log is reordered for display. A stopped turn can report a step after
+ * its `execution_complete`, so the step is live only while its own prompt is
+ * the one processing.
  */
 export function nextLiveReasoning(
   live: ReasoningEvent | null,
   event: SandboxEvent
 ): ReasoningEvent | null {
   if (event.type === "reasoning") return event.active ? event : null;
-  if (event.type === "execution_complete") return null;
   return live;
 }

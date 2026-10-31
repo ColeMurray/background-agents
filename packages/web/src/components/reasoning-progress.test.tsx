@@ -6,7 +6,14 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReasoningEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { PromptQueueItem, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import { nextLiveReasoning } from "@/lib/reasoning";
+import {
+  createSessionSocketState,
+  sessionSocketReducer,
+  type SessionSocketAction,
+  type SessionSocketState,
+} from "@/lib/session-socket/reducer";
 import type { SandboxEvent } from "@/types/session";
 import { SessionTimeline } from "./session-timeline";
 
@@ -61,18 +68,40 @@ function reasoningEvent(
   };
 }
 
+function processing(messageId: string): PromptQueueItem {
+  return { messageId, content: "Fix the failing test", status: "processing" };
+}
+
+const timelineProps = {
+  sessionId: "session-1",
+  currentParticipantId: null,
+  participantProfiles: {},
+  showSkeleton: false,
+  onLoadOlder: () => {},
+  onOpenMedia: () => {},
+};
+
 function renderTimeline(events: SandboxEvent[], isProcessing = true) {
   return render(
     <SessionTimeline
+      {...timelineProps}
       events={events}
       liveReasoning={events.reduce(nextLiveReasoning, null)}
-      sessionId="session-1"
-      currentParticipantId={null}
-      participantProfiles={{}}
       isProcessing={isProcessing}
-      showSkeleton={false}
-      onLoadOlder={() => {}}
-      onOpenMedia={() => {}}
+      promptQueue={isProcessing ? [processing("message-1")] : []}
+    />
+  );
+}
+
+/** The timeline for socket state, wired as the session page wires it. */
+function timelineOf(state: SessionSocketState) {
+  return (
+    <SessionTimeline
+      {...timelineProps}
+      events={state.events}
+      liveReasoning={state.liveReasoning}
+      isProcessing={state.sessionState?.isProcessing ?? false}
+      promptQueue={state.promptQueue}
     />
   );
 }
@@ -167,5 +196,131 @@ describe("reasoning progress", () => {
     expect(row).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Reading the failing test")).toBeInTheDocument();
     expect(screen.getByText("+0:20")).toBeInTheDocument();
+  });
+});
+
+describe("reasoning from a turn that has ended", () => {
+  // The control plane records a stopped turn's `execution_complete` before the
+  // sandbox hears `stop`, so the bridge can still open the next step's
+  // reasoning, which arrives after the completion.
+  const STEP_START_S = STEP_START_MS / 1000;
+  const stopped: SandboxEvent = {
+    type: "execution_complete",
+    sandboxId: "sandbox-1",
+    messageId: "message-1",
+    success: false,
+    error: "Execution was stopped",
+    timestamp: STEP_START_S + 60,
+  };
+  const lateStep: ReasoningEvent = {
+    ...reasoningEvent([], STEP_START_MS + 61_000),
+    stepId: "step-2",
+    startedAt: STEP_START_MS + 61_000,
+    timestamp: STEP_START_S + 61,
+  };
+  const nextPrompt: SandboxEvent[] = [
+    {
+      type: "user_message",
+      messageId: "message-2",
+      content: "Try again",
+      timestamp: STEP_START_S + 120,
+    },
+    {
+      type: "tool_call",
+      tool: "bash",
+      args: {},
+      callId: "call-2",
+      messageId: "message-2",
+      sandboxId: "sandbox-1",
+      timestamp: STEP_START_S + 125,
+    },
+  ];
+
+  function snapshot(events: SandboxEvent[], promptQueue: PromptQueueItem[]): SessionSnapshot {
+    return {
+      session: {
+        id: "session-1",
+        title: null,
+        repoOwner: "acme",
+        repoName: "web-app",
+        baseBranch: "main",
+        branchName: null,
+        status: "active",
+        sandboxStatus: "ready",
+        harness: "opencode",
+        messageCount: 2,
+        createdAt: 1,
+        isProcessing: true,
+      },
+      artifacts: [],
+      timeline: {
+        events: events.map((event, index) => ({
+          eventId: `event-${index}`,
+          timelineSequence: index,
+          event,
+        })),
+        hasMore: false,
+        cursor: null,
+      },
+      promptQueue,
+    };
+  }
+
+  function expectPlainThinkingRow() {
+    expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    expect(screen.queryByText(/Thinking ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No new thoughts/)).not.toBeInTheDocument();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(STEP_START_MS + 10 * 60_000);
+  });
+
+  it("does not narrate the next prompt with a step that arrived after its turn ended", () => {
+    const actions: SessionSocketAction[] = [
+      { type: "events_appended", events: [stopped, lateStep] },
+      {
+        type: "server_message",
+        message: { type: "prompt_queue_updated", promptQueue: [processing("message-2")] },
+      },
+      { type: "events_appended", events: nextPrompt },
+    ];
+    const state = actions.reduce(
+      sessionSocketReducer,
+      createSessionSocketState(snapshot([reasoningEvent(thoughts)], [processing("message-1")]))
+    );
+
+    const view = render(timelineOf(state));
+
+    expect(state.liveReasoning).toMatchObject({ messageId: "message-1", stepId: "step-2" });
+    expectPlainThinkingRow();
+
+    const ownStep: ReasoningEvent = {
+      ...reasoningEvent(["**Retrying the build**"], STEP_START_MS + 9.5 * 60_000),
+      messageId: "message-2",
+      stepId: "step-3",
+      startedAt: STEP_START_MS + 9 * 60_000,
+    };
+    view.rerender(
+      timelineOf(sessionSocketReducer(state, { type: "events_appended", events: [ownStep] }))
+    );
+
+    expect(screen.getByText("Thinking · 1m 0s")).toBeInTheDocument();
+    expect(screen.getByText("Retrying the build")).toBeInTheDocument();
+  });
+
+  it("does not narrate the next prompt with that step after a reload", () => {
+    const state = createSessionSocketState(
+      snapshot(
+        [reasoningEvent(thoughts), stopped, lateStep, ...nextPrompt],
+        [processing("message-2")]
+      )
+    );
+
+    render(timelineOf(state));
+
+    expect(state.liveReasoning).toMatchObject({ messageId: "message-1", stepId: "step-2" });
+    expectPlainThinkingRow();
   });
 });

@@ -41,14 +41,6 @@ const toolCall: SandboxEvent = {
   timestamp: 20,
 };
 
-const completed: SandboxEvent = {
-  type: "execution_complete",
-  sandboxId: "sandbox-1",
-  messageId: "message-1",
-  success: true,
-  timestamp: 50,
-};
-
 describe("reasoningDetail", () => {
   it("keeps everything after the title line", () => {
     expect(reasoningDetail("**Planning the fix**\n\nThe test compares local and UTC dates.")).toBe(
@@ -88,7 +80,7 @@ describe("nextLiveReasoning", () => {
     expect(liveReasoningOf([writing, resumed])).toBe(resumed);
   });
 
-  it("ignores an earlier turn's reasoning but not a queued follow-up", () => {
+  it("is not ended by a queued follow-up", () => {
     const queued: SandboxEvent = {
       type: "user_message",
       messageId: "message-2",
@@ -97,7 +89,6 @@ describe("nextLiveReasoning", () => {
     };
     const live = reasoning("step-1", ["**Planning**"]);
 
-    expect(liveReasoningOf([reasoning("step-0", ["**Earlier**"]), completed])).toBeNull();
     expect(liveReasoningOf([live, queued])).toBe(live);
   });
 });
@@ -170,17 +161,15 @@ describe("live reasoning at the socket boundary", () => {
     expect(closed.liveReasoning).toBeNull();
   });
 
-  it("follows live events until the turn completes", () => {
+  it("follows live events in arrival order", () => {
     const writing = { ...live, active: false };
     const reduceEvents = (state: SessionSocketState, events: SandboxEvent[]) =>
       sessionSocketReducer(state, { type: "events_appended", events });
 
     const resumed = reduceEvents(createSessionSocketState(snapshot), [writing, { ...live }]);
-    const finished = reduceEvents(resumed, [commentary, completed]);
 
     expect(reduceEvents(createSessionSocketState(snapshot), [writing]).liveReasoning).toBeNull();
     expect(resumed.liveReasoning).toEqual(live);
-    expect(finished.liveReasoning).toBeNull();
   });
 });
 

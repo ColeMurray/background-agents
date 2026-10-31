@@ -70,7 +70,10 @@ export function SessionTimeline({
   onOpenMedia,
 }: {
   events: SandboxEvent[];
-  /** The step reasoning right now, derived before `events` was reordered for display. */
+  /**
+   * The newest step the runtime reports as reasoning, derived before `events`
+   * was reordered for display. It is shown only while its prompt is processing.
+   */
   liveReasoning?: ReasoningEvent | null;
   sessionId: string;
   currentParticipantId: string | null;
@@ -102,14 +105,18 @@ export function SessionTimeline({
   >(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  // A stopped turn can report a step after its `execution_complete`; that step
+  // must not narrate the next prompt.
+  const processingMessageId = promptQueue.find((item) => item.status === "processing")?.messageId;
   const virtualRows = useMemo(
     () =>
       buildTimelineVirtualRows({
         items: timelineItems,
         isProcessing,
-        liveReasoning: isProcessing ? liveReasoning : null,
+        liveReasoning:
+          isProcessing && liveReasoning?.messageId === processingMessageId ? liveReasoning : null,
       }),
-    [isProcessing, liveReasoning, timelineItems]
+    [isProcessing, liveReasoning, processingMessageId, timelineItems]
   );
   const getVirtualRowKey = useCallback(
     (index: number) => virtualRows[index]?.id ?? index,

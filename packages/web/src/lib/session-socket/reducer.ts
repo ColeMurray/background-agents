@@ -30,9 +30,10 @@ export interface SessionSocketState {
   sessionState: SessionState | null;
   events: SandboxEvent[];
   /**
-   * The reasoning step the model is in the middle of, derived from events in
-   * arrival order: `events` is a display log that holds back and reorders
-   * assistant tokens.
+   * The newest reasoning step the runtime reports active, derived from events
+   * in arrival order: `events` is a display log that holds back and reorders
+   * assistant tokens. It can belong to a turn that has ended; the timeline
+   * shows it only while its prompt is processing.
    */
   liveReasoning: ReasoningEvent | null;
   participants: ParticipantPresence[];
