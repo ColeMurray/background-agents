@@ -48,7 +48,7 @@ Enter a name (for example `playwright` or `context7`) and choose Local or Remote
 
 For a local server, enter the command as a space-separated command and arguments, such as `npx -y @playwright/mcp`. Use quotes for arguments that contain spaces. Optionally add Environment Variables as key and value rows.
 
-For a remote server, enter the URL, such as `https://mcp.example.com/sse`, choose its **Authentication**, and decide whether to **Route through Open Inspect** (see [Authentication and routing](#authentication-and-routing)). With **Shared service credentials**, optionally add HTTP Headers as name and value rows.
+For a remote server, enter the URL, such as `https://mcp.example.com/mcp`, choose its **Authentication**, and decide whether to **Route through Open Inspect** (see [Authentication and routing](#authentication-and-routing)). With **Shared service credentials**, optionally add HTTP Headers as name and value rows.
 
 </Step>
 <Step>
@@ -76,7 +76,7 @@ A remote server uses one of three authentication modes, chosen under **Authentic
 | Shared service credentials   | `service_credentials` | The server's saved headers, the same for every session. The default, and the mode of remote servers created before these modes existed. |
 | Each user's OAuth connection | `user_oauth`          | The OAuth connection of the person whose prompt is running; see [Personal connections](#personal-connections). Always routed.           |
 
-**Route through Open Inspect** sends the agent's requests to the server through the OpenInspect control plane instead of straight from the sandbox. The sandbox authenticates to OpenInspect with its own session token and never holds the upstream credential: a routed server's headers stay in the control plane, which adds them to each request it forwards. Existing remote servers keep connecting directly until you turn routing on. Disabling a routed server stops it at once, including in running sessions.
+**Route through Open Inspect** sends the agent's requests to the server through the OpenInspect control plane instead of straight from the sandbox. The sandbox authenticates to OpenInspect with its own session token and never holds the upstream credential: a routed server's headers stay in the control plane, which adds them to each request it forwards. Existing remote servers keep connecting directly until you turn routing on. Disabling a routed server refuses new calls at once, including from running sessions. A response that is already streaming can keep delivering data for up to 10 seconds, until its next authority check ends it.
 
 A routed server must speak Streamable HTTP at a public HTTPS URL: no IP address, single-label or `localhost`, `.local`, or `.internal` hostname, credentials in the URL, fragment, or port other than 443. The hostname is checked as written; OpenInspect does not check the addresses it resolves to. Routed requests have per-sandbox rate and size limits; see [Limits](/reference/limits#mcp-servers).
 

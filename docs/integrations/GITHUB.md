@@ -70,9 +70,12 @@ The agent can submit a general review comment, approve the PR, request changes, 
 comments when useful.
 
 An explicitly allowed App bot can trigger review of its own PR, but that self-review can only
-comment, not approve or request changes. Pull requests that an automation run's own prompt opens are
-authored by the App (see [Commit Signing](#commit-signing)), so auto-review skips them by default,
-and any review the bot submits on them can only comment.
+comment, not approve or request changes. Allowing the login only passes the bot's trigger gate: the
+request still acts as the App's bot account, which cannot sign in on the web, so Open-Inspect admits
+it only if that account is already known to the workspace or unsafe allow-all is in effect (see
+[Bot enrollment](../AUTH.md#bot-enrollment)). Pull requests that an automation run's own prompt
+opens are authored by the App (see [Commit Signing](#commit-signing)), so auto-review skips them by
+default, and any review the bot submits on them can only comment.
 
 ---
 
@@ -364,7 +367,8 @@ list.
 
 The deprecated workspace auto-review only runs for newly opened, non-draft PRs. It is skipped for
 draft PRs, disabled repositories, and users who are not allowed to trigger the bot. An App-authored
-PR needs the App bot login explicitly allowed; its self-review can only comment.
+PR needs the App bot login explicitly allowed, and its bot account must already be known to
+Open-Inspect unless unsafe allow-all is in effect; its self-review can only comment.
 
 If a PR was converted from draft to ready for review, mention the bot in a PR comment instead.
 
@@ -376,9 +380,10 @@ GitHub issues are ignored. Use the bot's full GitHub username, including `[bot]`
 
 ### I see an eyes reaction but no follow-up
 
-The eyes reaction means the bot accepted the request. GitHub completion output is posted by the
-agent, not by a managed bot callback. The session may still be running, or the agent may have failed
-after the request was accepted. Open the Open-Inspect web app to inspect the session.
+The eyes reaction acknowledges the request; it is posted before Open-Inspect admits the request and
+creates a session. GitHub completion output is posted by the agent, not by a managed bot callback.
+The session may still be running, or the agent may have failed after it started. Open the
+Open-Inspect web app to inspect the session.
 
 If no session exists, check that the person who triggered the bot (the commenter, review requester,
 or PR opener) is already known to Open-Inspect. The bot cannot create an account from a GitHub

@@ -39,7 +39,7 @@ A token's permissions are always the overlap of the permissions you granted it a
 - The picker lists only permissions your role includes and your workspace allows. Workspace administration permissions, such as managing members, roles, secrets, and integrations, can never be granted to a token.
 - **Manage skills** works only alongside **Read skills**, so selecting it selects **Read skills** too.
 
-A token also reaches only the parts of the API that accept tokens: today, the session, automation, and skill routes the [MCP server](/integrations/mcp-server) uses. Everything else refuses it, whatever it was granted. A token can never create, list, or revoke tokens, so a leaked token cannot issue itself a replacement.
+A token also reaches only the parts of the API that accept tokens: today, specific session, automation, and skill routes explicitly marked to accept them, including every route the [MCP server](/integrations/mcp-server) uses. Everything else refuses it, whatever it was granted. A token can never create, list, or revoke tokens, so a leaked token cannot issue itself a replacement.
 
 Within a granted permission, your role still decides what you see. For example, an administrator's token with **Read sessions** can read the sessions that administrator can read.
 

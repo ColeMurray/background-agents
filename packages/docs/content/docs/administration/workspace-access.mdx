@@ -73,7 +73,7 @@ Owners and Administrators add sign-in rules under Settings › Workspace access 
 1. Type an email address, an email domain, or a GitHub name into **Add an email, domain, or GitHub name**. For a bare name, choose whether it is a GitHub user or a GitHub organization.
 2. Click **Review and save**, check the changes, and click **Save changes**.
 
-Rules marked with a lock come from the deployment configuration and stay in effect whatever you change here. Rules added in Settings extend the deployment's rules; they cannot narrow them. You can add at most 50 rules, and GitHub organizations are limited to 10 in total, counting the deployment's. Adding a rule sends no invitation. While the operator has unsafe allow-all set, the list is read-only. Each save is recorded in the [audit log](/administration/audit-log) as **Sign-in allowlist updated**.
+Rules marked with a lock come from the deployment configuration and stay in effect whatever you change here. Rules added in Settings extend the deployment's rules; they cannot narrow them. You can add at most 50 rules, and GitHub organizations are limited to 10 in total, counting the deployment's (or to the deployment's own count, if it already has more). Adding a rule sends no invitation. While the operator has unsafe allow-all set, the list is read-only. Each save is recorded in the [audit log](/administration/audit-log) as **Sign-in allowlist updated**.
 
 ### Joining through a bot
 

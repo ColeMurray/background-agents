@@ -192,6 +192,11 @@ routed through Open-Inspect keeps its headers in the control plane, which adds t
 it forwards. Personal MCP OAuth connections (**Settings > Connections**) are encrypted with a key
 derived from `TOKEN_ENCRYPTION_KEY` and never reach the sandbox.
 
+MCP server credentials saved before this encryption existed can still be stored as plaintext. The
+control plane reads them (logging `mcp_server.env_decrypt_fallback`) but does not rewrite them, and
+saving the same values again leaves them as they are. To store them encrypted, change the credential
+values or recreate the server.
+
 ### Legacy managed OAuth coexistence
 
 Legacy scoped OpenAI/xAI OAuth remains supported for sessions pinned to it. Provider-account
