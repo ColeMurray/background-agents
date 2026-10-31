@@ -93,6 +93,10 @@ describe("ControlPlaneClient", () => {
   it.each(["headers", "body"])("propagates cancellation while waiting for %s", async (stage) => {
     const controller = new AbortController();
     const reason = new Error("MCP request cancelled");
+    let bodyReadStarted!: () => void;
+    const bodyRead = new Promise<void>((resolve) => {
+      bodyReadStarted = resolve;
+    });
     fetchMock.mockImplementation(async (_url: string, init: { signal: AbortSignal }) => {
       if (stage === "headers") {
         return new Promise<Response>((_resolve, reject) => {
@@ -100,13 +104,20 @@ describe("ControlPlaneClient", () => {
         });
       }
       return new Response(
-        new ReadableStream({
-          start(stream) {
-            init.signal.addEventListener("abort", () => stream.error(init.signal.reason), {
-              once: true,
-            });
+        new ReadableStream(
+          {
+            start(stream) {
+              init.signal.addEventListener("abort", () => stream.error(init.signal.reason), {
+                once: true,
+              });
+            },
+            pull() {
+              bodyReadStarted();
+            },
           },
-        })
+          // Disable prefetch so pull signals an actual pending reader.read().
+          { highWaterMark: 0 }
+        )
       );
     });
     const client = new ControlPlaneClient({ baseUrl: BASE_URL, token: TOKEN }).withSignal(
@@ -114,6 +125,7 @@ describe("ControlPlaneClient", () => {
     );
 
     const rejected = expect(client.get("/skills")).rejects.toBe(reason);
+    if (stage === "body") await bodyRead;
     controller.abort(reason);
     await rejected;
     expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
