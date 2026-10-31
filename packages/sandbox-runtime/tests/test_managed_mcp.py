@@ -188,6 +188,25 @@ async def test_unavailable_connector_emits_recovery_and_unrelated_tools_continue
 
 
 @pytest.mark.asyncio
+async def test_empty_context_runs_turn_without_personal_servers_or_warnings(monkeypatch):
+    # Turns with no author to delegate as (Autofix, automations) allow no server.
+    events, wrapped, prompt = make(monkeypatch)
+    prompt.managed_mcp["servers"] = []
+    emit = AsyncMock()
+    assert (await wrapped.run_prompt(prompt, emit)).success
+    assert events == [("prepare", set()), "run", "authority-close", "native-close"]
+    emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_context_fails_before_native_turn(monkeypatch):
+    events, wrapped, prompt = make(monkeypatch)
+    outcome = await wrapped.run_prompt(replace(prompt, managed_mcp=None), AsyncMock())
+    assert outcome.error == "Managed MCP execution context is unavailable."
+    assert events == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("explicit_budget", [None, 1.0])
 async def test_preparation_and_warnings_spend_one_turn_budget(monkeypatch, explicit_budget):
     events, wrapped, prompt = make(monkeypatch)

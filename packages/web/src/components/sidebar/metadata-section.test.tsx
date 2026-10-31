@@ -318,6 +318,31 @@ describe("MetadataSection", () => {
     expect(screen.getByText("acme/api: Secret key collision on API_KEY")).toBeInTheDocument();
   });
 
+  it("lists a warning repeated on every prompt once", () => {
+    const message = "Personal MCP tracker is unavailable (mcp_connection_required).";
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        warnings={[
+          { type: "warning", scope: "mcp", messageId: "message-1", message, timestamp: 1 },
+          { type: "warning", scope: "mcp", messageId: "message-2", message, timestamp: 2 },
+          {
+            type: "warning",
+            scope: "setup",
+            message: "setup.sh exited with code 1",
+            repoOwner: "acme",
+            repoName: "api",
+            timestamp: 3,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    expect(screen.getByText("acme/api: setup.sh exited with code 1")).toBeInTheDocument();
+  });
+
   it("renders the environment name for environment-launched sessions", () => {
     render(
       <MetadataSection

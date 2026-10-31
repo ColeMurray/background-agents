@@ -180,7 +180,7 @@ export class SessionMessageQueue {
     private readonly getExecutionTimeoutMs: () => number,
     private readonly mayDispatch: () => boolean,
     private readonly getSandboxPromptBlockReason: () => string | null,
-    private readonly prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution>,
+    private readonly prepareManagedMcp?: (messageId: string) => Promise<ManagedMcpExecution | null>,
     /** Records warnings the sandbox cannot give itself, once the prompt is running. */
     private readonly reportManagedMcpWarnings?: (messageId: string) => void
   ) {}
@@ -592,7 +592,8 @@ export class SessionMessageQueue {
     if (this.prepareManagedMcp) {
       try {
         const managed = await this.prepareManagedMcp(message.id);
-        if (managed.servers.length || managed.unavailable.length) command.managedMcp = managed;
+        // Sent even when it allows no server: the sandbox refuses a prompt without it.
+        if (managed) command.managedMcp = managed;
       } catch (error) {
         if (
           error instanceof McpError &&

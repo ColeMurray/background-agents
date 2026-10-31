@@ -163,6 +163,16 @@ export function MetadataSection({
   const isMultiRepo = (repositories?.length ?? 0) > 1;
   const hasPrArtifact = artifacts.some((a) => a.type === "pr");
   const showSyncButton = canManageLifecycle && Boolean(sessionId) && hasPrArtifact;
+  // The timeline shows every occurrence. List each distinct warning once, so a warning
+  // repeated on every prompt does not stack.
+  const distinctWarnings = [
+    ...new Map(
+      warnings.map((warning) => [
+        JSON.stringify([warning.scope, warning.repoOwner, warning.repoName, warning.message]),
+        warning,
+      ])
+    ).values(),
+  ];
 
   // Sessions can hold several PRs (one open PR per head branch); list them
   // all, oldest first — creation order matches PR-number order.
@@ -419,9 +429,9 @@ export function MetadataSection({
       )}
 
       {/* Non-fatal boot/runtime warnings */}
-      {warnings.length > 0 && (
+      {distinctWarnings.length > 0 && (
         <div className="space-y-1">
-          {warnings.map((warning) => (
+          {distinctWarnings.map((warning) => (
             <div
               key={
                 warning.ackId ??

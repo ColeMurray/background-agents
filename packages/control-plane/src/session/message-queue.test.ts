@@ -379,7 +379,13 @@ describe("SessionMessageQueue", () => {
         replacementSocket,
         expect.objectContaining({ type: "prompt", messageId: "msg-1" })
       );
-      expect(h.wsManager.send.mock.calls[0][1]).not.toHaveProperty("managedMcp");
+      // The fresh context travels even though it allows no server; the stale one never does.
+      expect(h.wsManager.send.mock.calls[0][1]).toHaveProperty("managedMcp", {
+        messageId: "msg-1",
+        revision: 2,
+        servers: [],
+        unavailable: [],
+      });
       expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).not.toHaveBeenCalled();
     }
   );

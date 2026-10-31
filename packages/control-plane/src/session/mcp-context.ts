@@ -166,7 +166,12 @@ export class SessionMcpContext {
         .toArray()[0] as MessageContext | undefined) ?? null
     );
   }
-  async prepare(messageId: string): Promise<ManagedMcpExecution> {
+  /**
+   * The prompt's execution context for the personal servers this sandbox runs, or null
+   * when it runs none. Such a sandbox refuses a prompt without one, so a turn that may
+   * use none of them still gets a context.
+   */
+  async prepare(messageId: string): Promise<ManagedMcpExecution | null> {
     const message = this.active();
     if (!message || message.id !== messageId) throw new McpError("mcp_context_changed", 409);
     const runtime = this.sql
@@ -175,13 +180,13 @@ export class SessionMcpContext {
     const personal = this.launch().filter(
       (entry) => entry.authMode === "user_oauth" && !entry.withheld
     );
+    if (!personal.length) return null;
     const result: ManagedMcpExecution = {
       messageId,
       revision: message.mcp_revision,
       servers: [],
       unavailable: [],
     };
-    if (!personal.length) return result;
     try {
       result.connectionUrl = new URL(
         "/settings?tab=mcp-connections",
@@ -262,9 +267,13 @@ export class SessionMcpContext {
   /**
    * The warning for personal servers this allocation withheld, or null. The sandbox
    * never ran them, so only the control plane can say why. One warning names them
-   * all, so a prompt never carries several warnings with the same timestamp.
+   * all, so a prompt never carries several warnings with the same timestamp. A turn
+   * with no author to delegate as could not have used them either, so it gets none.
    */
-  withheldWarning(): string | null {
+  withheldWarning(messageId: string): string | null {
+    const message = this.active();
+    if (message?.id !== messageId || !message.mcp_eligible || !message.admitted_canonical_user_id)
+      return null;
     const byReason = new Map<PersonalMcpWithheldCode, string[]>();
     for (const entry of this.launch())
       if (entry.withheld)

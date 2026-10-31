@@ -223,18 +223,19 @@ describe("managed MCP actual sandbox route + session authority", () => {
         componentsOf(instance).sandboxRepository
       );
       const first = await context.prepare("alice-message");
-      expect(first.servers).toEqual(["example"]);
+      expect(first?.servers).toEqual(["example"]);
       const pending = context.prepare("alice-message");
       state.storage.sql.exec(
         "UPDATE messages SET mcp_revision = mcp_revision + 1, mcp_context = NULL"
       );
       await expect(pending).rejects.toMatchObject({ code: "mcp_context_changed" });
       state.storage.sql.exec("UPDATE messages SET mcp_eligible = 0");
-      const automation = await context.prepare("alice-message");
-      expect(automation.servers).toEqual([]);
-      // Nobody can reconnect for an unattended turn, so it warns about nothing. It
-      // still records an empty context, so a bridge replaced during it is fenced.
-      expect(automation.unavailable).toEqual([]);
+      // Nobody can reconnect for an unattended turn, so it warns about nothing. It still
+      // gets the empty context its sandbox requires, recorded so a replaced bridge is fenced.
+      expect(await context.prepare("alice-message")).toMatchObject({
+        servers: [],
+        unavailable: [],
+      });
       const [row] = state.storage.sql
         .exec("SELECT mcp_context FROM messages WHERE id = 'alice-message'")
         .toArray();
@@ -268,11 +269,8 @@ describe("managed MCP actual sandbox route + session authority", () => {
       context().recordLaunch([routed], "mcp_runtime_outdated");
       // Even a runtime that reports support never prepares a withheld server.
       context().recordRuntimeVersion(1);
-      expect(await context().prepare("alice-message")).toMatchObject({
-        servers: [],
-        unavailable: [],
-      });
-      expect(context().withheldWarning()).toBe(
+      expect(await context().prepare("alice-message")).toBeNull();
+      expect(context().withheldWarning("alice-message")).toBe(
         "Personal MCP example needs a newer sandbox image than this session runs. Sessions that start after the image is rebuilt can use it. Other tools remain available."
       );
       state.storage.sql.exec("UPDATE session SET harness = 'codex'");
@@ -280,38 +278,28 @@ describe("managed MCP actual sandbox route + session authority", () => {
         [routed, { ...routed, id: "second-server", name: "wiki" }],
         "mcp_harness_unsupported"
       );
-      expect(context().withheldWarning()).toBe(
+      expect(context().withheldWarning("alice-message")).toBe(
         "Personal MCP servers example and wiki work only in OpenCode and Claude Agent sessions, so this Codex session can't use them. Other tools remain available."
       );
+      // A turn with no author to delegate as could not have used them either.
+      state.storage.sql.exec("UPDATE messages SET mcp_eligible = 0");
+      expect(context().withheldWarning("alice-message")).toBeNull();
     });
     const denied = await f.context({});
     expect(denied.status).toBe(403);
     expect(await denied.json()).toMatchObject({ code: "mcp_denied" });
   });
-  it("files one withheld-server warning under the prompt the sandbox received", async () => {
-    const sessionName = `mcp-withheld-${crypto.randomUUID()}`;
+  const personal = { id: "server-1", name: "tracker", authMode: "user_oauth", authRevision: 1 };
+  const withheld = [
+    { ...personal, withheld: "mcp_runtime_outdated" },
+    { ...personal, id: "server-2", name: "wiki", withheld: "mcp_runtime_outdated" },
+  ];
+  /** Sends one prompt to a connected sandbox whose launch recorded these servers. */
+  async function dispatch(servers: object[], author: object = {}) {
+    const sessionName = `mcp-dispatch-${crypto.randomUUID()}`;
     const { stub } = await initNamedSession(sessionName);
     await seedSandboxAuth(stub, { authToken: token, sandboxId: "allocation-1" });
-    await queryDO(
-      stub,
-      "UPDATE sandbox SET mcp_servers = ?",
-      JSON.stringify([
-        {
-          id: "server-1",
-          name: "tracker",
-          authMode: "user_oauth",
-          authRevision: 1,
-          withheld: "mcp_runtime_outdated",
-        },
-        {
-          id: "server-2",
-          name: "wiki",
-          authMode: "user_oauth",
-          authRevision: 1,
-          withheld: "mcp_runtime_outdated",
-        },
-      ])
-    );
+    await queryDO(stub, "UPDATE sandbox SET mcp_servers = ?", JSON.stringify(servers));
     const { ws } = await openSandboxWs(sessionName, {
       authToken: token,
       sandboxId: "allocation-1",
@@ -323,32 +311,56 @@ describe("managed MCP actual sandbox route + session authority", () => {
       const response = await stub.fetch("http://internal/internal/prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "Read the tracker", authorId: "user-1", source: "web" }),
+        body: JSON.stringify({
+          content: "Read the tracker",
+          authorId: "user-1",
+          source: "web",
+          ...author,
+        }),
       });
       const { messageId } = await response.json<{ messageId: string }>();
       const sent = (await prompt).find((message) => message.type === "prompt");
-      expect(sent).toMatchObject({ messageId });
-      expect(sent).not.toHaveProperty("managedMcp");
-
       const warnings = await queryDO<{ id: string; data: string; message_id: string }>(
         stub,
         "SELECT id, data, message_id FROM events WHERE type = 'warning'"
       );
-      // Two servers share one event: same-millisecond warnings would share a timeline key.
-      expect(warnings).toEqual([
-        { id: `mcp-withheld:${messageId}`, message_id: messageId, data: expect.any(String) },
-      ]);
-      expect(JSON.parse(warnings[0].data)).toMatchObject({
-        type: "warning",
-        scope: "mcp",
-        messageId,
-        message: expect.stringContaining(
-          "Personal MCP servers tracker and wiki need a newer sandbox image"
-        ),
-      });
+      return { messageId, sent, warnings };
     } finally {
       await closeWebSocket(ws!, { bestEffort: true });
     }
+  }
+  it("files one withheld-server warning under the prompt the sandbox received", async () => {
+    const { messageId, sent, warnings } = await dispatch(withheld, {
+      canonicalUserId: alice,
+      mcpEligible: true,
+    });
+    expect(sent).toMatchObject({ messageId });
+    expect(sent).not.toHaveProperty("managedMcp");
+    // Two servers share one event: same-millisecond warnings would share a timeline key.
+    expect(warnings).toEqual([
+      { id: `mcp-withheld:${messageId}`, message_id: messageId, data: expect.any(String) },
+    ]);
+    expect(JSON.parse(warnings[0].data)).toMatchObject({
+      type: "warning",
+      scope: "mcp",
+      messageId,
+      message: expect.stringContaining(
+        "Personal MCP servers tracker and wiki need a newer sandbox image"
+      ),
+    });
+  });
+  it("runs an unattended prompt with an empty context and no MCP warning", async () => {
+    // Autofix, other bot and automation prompts have no author to delegate as.
+    const running = await dispatch([personal]);
+    expect(running.sent).toMatchObject({
+      messageId: running.messageId,
+      managedMcp: { messageId: running.messageId, servers: [], unavailable: [] },
+    });
+    expect(running.warnings).toEqual([]);
+    const withheldRun = await dispatch(withheld);
+    expect(withheldRun.sent).toMatchObject({ messageId: withheldRun.messageId });
+    expect(withheldRun.sent).not.toHaveProperty("managedMcp");
+    expect(withheldRun.warnings).toEqual([]);
   });
   it("withholds personal servers once the sandbox reports a runtime older than its launch assumed", async () => {
     const f = await fixture();
@@ -395,8 +407,8 @@ describe("managed MCP actual sandbox route + session authority", () => {
       state.storage.sql.exec("UPDATE messages SET mcp_context = NULL");
       context.recordRuntimeVersion(1, undefined, "v80-managed-mcp");
       context.recordRuntimeVersion(1);
-      expect(context.withheldWarning()).toBeNull();
-      expect((await context.prepare("alice-message")).servers).toEqual(["example"]);
+      expect(context.withheldWarning("alice-message")).toBeNull();
+      expect((await context.prepare("alice-message"))?.servers).toEqual(["example"]);
     });
   });
   it("preserves a healthy bridge across transport reconnect and turn cleanup", async () => {

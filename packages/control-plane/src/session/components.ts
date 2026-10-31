@@ -572,7 +572,7 @@ export function createSessionRuntime(platform: SessionPlatform, env: Env): Sessi
     () => sandboxPromptBlockReason(lifecycleManager.shutdownSnapshot()),
     (messageId) => mcpContext.prepare(messageId),
     (messageId) => {
-      const warning = mcpContext.withheldWarning();
+      const warning = mcpContext.withheldWarning(messageId);
       if (warning)
         recordSessionWarning(eventRepository, messenger, warning, `mcp-withheld:${messageId}`, {
           scope: "mcp",

@@ -8,7 +8,6 @@ import {
   render as renderView,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -886,30 +885,6 @@ describe("SessionRightSidebar", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "Login page" })).not.toBeInTheDocument();
-  });
-
-  it("lists a warning repeated on every prompt once in Info", () => {
-    const message = "Personal MCP tracker is unavailable (mcp_connection_required).";
-    render(
-      inspector({
-        events: [
-          { type: "warning", scope: "mcp", messageId: "message-1", message, timestamp: 1 },
-          { type: "warning", scope: "mcp", messageId: "message-2", message, timestamp: 2 },
-          {
-            type: "warning",
-            scope: "setup",
-            message: "setup.sh exited with code 1",
-            repoOwner: "acme",
-            repoName: "api",
-            timestamp: 3,
-          },
-        ],
-      })
-    );
-
-    const info = screen.getByRole("tabpanel", { name: "Info" });
-    expect(within(info).getAllByText(message)).toHaveLength(1);
-    expect(within(info).getByText("acme/api: setup.sh exited with code 1")).toBeVisible();
   });
 
   it("shows honest task and tool empty states", () => {
