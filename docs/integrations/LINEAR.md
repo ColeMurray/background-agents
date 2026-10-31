@@ -232,10 +232,10 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
 - Linear-started sessions never include personal memories, whatever the request asks; the control
   plane decides this from the calling service. Repository and environment memories still apply.
 - Open-Inspect links each Linear user to an account by their Linear email. A new user whose email
-  the bot cannot read, or whose email matches no account and is not allowed by an email or domain
-  sign-in rule, gets an error activity and no session (see
-  [Bot enrollment](../AUTH.md#bot-enrollment)). People admitted only by GitHub username or
-  organization should sign in on the web first with their Linear email.
+  the bot cannot read, or whose email matches no account and is admitted neither by an email or
+  domain sign-in rule nor by unsafe allow-all (which applies only when every list is empty), gets an
+  error activity and no session (see [Bot enrollment](../AUTH.md#bot-enrollment)). People admitted
+  only by GitHub username or organization should sign in on the web first with their Linear email.
 
 ---
 

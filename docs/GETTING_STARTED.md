@@ -602,9 +602,10 @@ The core path uses GitHub sign-in. To add or switch to Google, see
 > Administrators can add rules under **Settings > Workspace access > Who can sign in**; those rules
 > add to these lists and cannot remove anything from them. See
 > [Sign-In Allowlist](AUTH.md#sign-in-allowlist). The same rules decide whether the Slack and Linear
-> bots may create an account for someone new, and they can match only exact-email and domain rules;
-> the GitHub bot acts only for people already known, unless unsafe allow-all is in effect. Where
-> people are admitted by GitHub username or organization alone, they sign in on the web first; see
+> bots may create an account for someone new, and they can match only exact-email and domain rules,
+> or unsafe allow-all when every list is empty (the bot still needs an attested email); the GitHub
+> bot acts only for people already known, unless unsafe allow-all is in effect. Where people are
+> admitted by GitHub username or organization alone, they sign in on the web first; see
 > [Bot enrollment](AUTH.md#bot-enrollment).
 
 ---

@@ -87,10 +87,11 @@ Automations can run with zero, one, or several repositories:
   repository, and fanning it out to unrelated repositories has no defined semantics yet.
 
 A pull request a run opens from its own prompt is created by the GitHub App, not with the executor's
-or requester's OAuth token; commits are still attributed to that person. Pull requests opened by
-child sessions the run's agent spawns, or by someone prompting into the run's session, use the
-prompting person's OAuth; an open pull request on the same branch is updated and keeps its author.
-See [Creating Pull Requests](HOW_IT_WORKS.md#creating-pull-requests).
+or requester's OAuth token; commits use that person's source-control identity when available,
+otherwise Open-Inspect. Pull requests opened by child sessions the run's agent spawns, or by someone
+prompting into the run's session, use the prompting person's OAuth; an open pull request on the same
+branch is updated and keeps its author. See
+[Creating Pull Requests](HOW_IT_WORKS.md#creating-pull-requests).
 
 You can change the repository selection at any time, including while runs are in flight: history
 always shows the repositories a run actually used, in-flight runs are unaffected, and the next

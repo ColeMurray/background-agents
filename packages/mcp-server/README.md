@@ -99,8 +99,8 @@ When a tool fails, its output says why:
 - A `401` means the token was mistyped, revoked, or expired, or that your workspace has turned
   tokens off or capped their lifetime below the token's age. Issue a new one, if tokens are on, and
   update the client configuration.
-- A `403` with `permission_required` names the permission the token was not granted, or that your
-  role no longer has.
+- A `403` with `permission_required` names the permission the token was not granted, that your role
+  no longer has, or that your workspace's token policy no longer allows.
 
 `claude mcp add` does not check that `--env` values are non-empty. If you fill them from a command,
 check that the command printed something.
