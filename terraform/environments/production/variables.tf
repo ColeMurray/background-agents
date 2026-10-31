@@ -959,3 +959,25 @@ variable "docs_custom_domain" {
   type        = string
   default     = null
 }
+
+variable "export_service_actor" {
+  description = "Enable the export service for unattended session-trace export (docs/TRACE_EXPORT.md): the only actor it may act as, as github:<numeric GitHub user id>. Empty = off. Requires export_service_user_id. Read the signing secret from the export_service_secret output."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.export_service_actor == "" || can(regex("^github:[0-9]+$", var.export_service_actor))
+    error_message = "export_service_actor must be empty or github:<numeric GitHub user id>."
+  }
+}
+
+variable "export_service_user_id" {
+  description = "The Open-Inspect user id (users.id) that export_service_actor belongs to. Export is refused if a user merge moves the actor to another user. Set together with export_service_actor."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.export_service_user_id == "") == (var.export_service_actor == "")
+    error_message = "Set export_service_actor and export_service_user_id together, or leave both empty."
+  }
+}

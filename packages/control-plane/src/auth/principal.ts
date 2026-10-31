@@ -9,6 +9,7 @@
 
 import type { PermissionId } from "@open-inspect/shared/rbac";
 import type { ServiceName } from "@open-inspect/shared/service-auth";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 
 /** Actor namespaces bots may assert (`slack:U123` etc.). */
 const ACTOR_NAMESPACES = ["slack", "github", "linear"] as const;
@@ -55,15 +56,67 @@ export type Principal =
   | { kind: "sandbox"; sessionId: string; sandboxId?: string | null };
 
 /**
- * The actor namespace each service may assert. Web asserts none because its
- * identity arrives by token exchange, never assertion.
+ * Who a service may act as.
+ *
+ * - `none`: no actor. Web's identity arrives by token exchange, never assertion.
+ * - `asserted`: any actor in the namespace; unknown actors enroll on first use.
+ * - `pinned`: only the actor its operator configured, which must already exist
+ *   and still belong to the configured user (see `ServiceCredential`).
  */
-export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
-  web: null,
-  "slack-bot": "slack",
-  "github-bot": "github",
-  "linear-bot": "linear",
-};
+export type ServiceActorPolicy =
+  | { kind: "none" }
+  | { kind: "asserted"; namespace: ActorNamespace }
+  | { kind: "pinned"; namespace: ActorNamespace };
+
+export interface ServiceProfile {
+  actor: ServiceActorPolicy;
+  /**
+   * `actor-routes`: any route whose service authorization admits service actors.
+   * `opt-in`: only routes that list the service in `optInServices`.
+   */
+  routeAccess: "actor-routes" | "opt-in";
+  /** Recorded on sessions the service creates; null when it never creates any. */
+  spawnSource: SpawnSource | null;
+}
+
+/** Per-service authentication, route-access and provenance rules. */
+export const SERVICE_PROFILES = {
+  web: { actor: { kind: "none" }, routeAccess: "actor-routes", spawnSource: "user" },
+  "slack-bot": {
+    actor: { kind: "asserted", namespace: "slack" },
+    routeAccess: "actor-routes",
+    spawnSource: "slack-bot",
+  },
+  "github-bot": {
+    actor: { kind: "asserted", namespace: "github" },
+    routeAccess: "actor-routes",
+    spawnSource: "github-bot",
+  },
+  "linear-bot": {
+    actor: { kind: "asserted", namespace: "linear" },
+    routeAccess: "actor-routes",
+    spawnSource: "linear-bot",
+  },
+  // Unattended trace export (docs/TRACE_EXPORT.md): reads sessions as one
+  // configured user and never creates them.
+  export: {
+    actor: { kind: "pinned", namespace: "github" },
+    routeAccess: "opt-in",
+    spawnSource: null,
+  },
+} as const satisfies Record<ServiceName, ServiceProfile>;
+
+type Profiles = typeof SERVICE_PROFILES;
+
+/** Services that assert their own actors: the only ones a route may name or grant. */
+export type BotServiceName = {
+  [S in ServiceName]: Profiles[S]["actor"]["kind"] extends "asserted" ? S : never;
+}[ServiceName];
+
+/** Services admitted only by routes that list them in `optInServices`. */
+export type OptInServiceName = {
+  [S in ServiceName]: Profiles[S]["routeAccess"] extends "opt-in" ? S : never;
+}[ServiceName];
 
 /**
  * The canonical `users.id` a principal acts as, or null when it acts as no one. A personal access

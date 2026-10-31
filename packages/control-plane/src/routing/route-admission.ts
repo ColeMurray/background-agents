@@ -1,7 +1,7 @@
 /** Framework-neutral authentication and authorization for a matched route. */
 
 import { authenticate, isAuthError } from "../auth/authenticate";
-import { canonicalUserIdOf, type Principal } from "../auth/principal";
+import { canonicalUserIdOf, SERVICE_PROFILES, type Principal } from "../auth/principal";
 import { PersonalAccessTokenStore } from "../db/personal-access-tokens";
 import { restrictAuthorizationToGrant } from "../authorization/personal-access-token-policy";
 import {
@@ -22,6 +22,7 @@ import { createLogger } from "../logger";
 import type {
   ActorlessServiceGrant,
   RouteAdmissionPolicy,
+  RouteAuthorization,
   RouteAuthorizationRequirement,
   RouteParams,
 } from "../routes/shared";
@@ -304,6 +305,14 @@ function actorlessGrantMatches(
   );
 }
 
+function routeOptsIn(authorization: RouteAuthorization, service: string): boolean {
+  return (
+    (authorization.kind === "active-user" || authorization.kind === "active-global") &&
+    authorization.service.kind === "actor" &&
+    (authorization.service.optInServices?.some((optIn) => optIn === service) ?? false)
+  );
+}
+
 function enforceServiceRouteAuthorization(
   policy: RouteAdmissionPolicy,
   params: RouteParams,
@@ -330,6 +339,15 @@ function enforceServiceRouteAuthorization(
       "Forbidden"
     );
 
+  // Opt-in services reach only routes that name them. This runs before every
+  // other branch, so a service-only route cannot admit one either.
+  if (
+    principal?.kind === "service" &&
+    SERVICE_PROFILES[principal.service].routeAccess === "opt-in" &&
+    !routeOptsIn(authorization, principal.service)
+  ) {
+    return serviceCapabilityRequired();
+  }
   if (authorization.kind === "service") {
     if (principal?.kind !== "service") return serviceCapabilityRequired();
     if (!authorization.services.some((service) => service === principal.service)) {

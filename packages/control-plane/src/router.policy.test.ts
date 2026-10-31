@@ -170,6 +170,29 @@ describe("route policy table", () => {
     });
   });
 
+  it("opts the export service into exactly the two export routes", () => {
+    const optedIn = routes.filter(
+      (route) =>
+        (route.authorization.kind === "active-user" ||
+          route.authorization.kind === "active-global") &&
+        route.authorization.service.kind === "actor" &&
+        (route.authorization.service.optInServices?.length ?? 0) > 0
+    );
+    expect(new Set(optedIn)).toEqual(
+      new Set([routeFor("GET", "/sessions/export"), routeFor("GET", "/sessions/session-1/export")])
+    );
+    for (const route of optedIn) {
+      expect(route.authorization).toMatchObject({ service: { optInServices: ["export"] } });
+    }
+  });
+
+  it("caps the export service at reading and exporting sessions", () => {
+    expect(serviceAllowsPermission("export", "sessions.read")).toBe(true);
+    expect(serviceAllowsPermission("export", "sessions.export")).toBe(true);
+    expect(serviceAllowsPermission("export", "sessions.create")).toBe(false);
+    expect(serviceAllowsPermission("export", "workspace.members.manage")).toBe(false);
+  });
+
   it("declares every path in the literal-or-parameter grammar", () => {
     // Hono gives `*`, `?`, `{...}` and `.` routing meaning, and raw parameters
     // are read back from the pathname by position, so a path outside this

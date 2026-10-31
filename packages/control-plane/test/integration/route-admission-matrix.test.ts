@@ -40,6 +40,8 @@ const BASE = "https://test.local";
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 const SANDBOX_TOKEN = "matrix-sandbox-token";
 const BOT_SERVICES = ["slack-bot", "github-bot", "linear-bot"] as const;
+/** The only routes that opt the export service in; every other route must refuse it. */
+const EXPORT_SERVICE_ROUTES = new Set(["GET /sessions/export", "GET /sessions/:id/export"]);
 const PROTECTED_STATUSES = new Set([401, 403]);
 const ROUTE_MISS_BODY = JSON.stringify({ error: "Not found" });
 // Each pass issues one request per catalog route, and a fresh session per
@@ -501,6 +503,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       [OTHER_MEMBER, "member"],
       [TEAM_VIEWER, "viewer"],
       [COLLABORATOR, "member"],
+      [env.SERVICE_AUTH_EXPORT_USER_ID!, "owner"],
     ] as const) {
       await serviceRequestHeaders(`${BASE}/me/authorization`, { as: { userId, role } });
     }
@@ -584,6 +587,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
   }
 
   it("admits exactly the credential classes each route's policy accepts", async () => {
+    const exportAdmitted: string[] = [];
     for (const route of routes) {
       const identity = `${route.method} ${route.path}`;
       const kind = route.authentication.kind;
@@ -602,6 +606,18 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
       const sandbox = { Authorization: `Bearer ${SANDBOX_TOKEN}` };
       const wrongSandbox = { Authorization: "Bearer not-the-sandbox-token" };
       const actorBot = await botHeaders(url, method, "slack-bot", "slack:U-SENTINEL");
+
+      // The export service, as its pinned Owner, reaches only the export routes.
+      if (kind !== "public" && kind !== "handler-authenticated") {
+        const exportService = await serviceRequestHeaders(url, {
+          method,
+          service: "export",
+          actor: env.SERVICE_AUTH_EXPORT_ACTOR,
+        });
+        const admitted = EXPORT_SERVICE_ROUTES.has(identity);
+        await expectReach(exportService, "export", admitted);
+        if (admitted) exportAdmitted.push(identity);
+      }
 
       switch (kind) {
         case "public":
@@ -651,6 +667,7 @@ describe("route admission sentinel", { timeout: MATRIX_TIMEOUT_MS }, () => {
           break;
       }
     }
+    expect(new Set(exportAdmitted)).toEqual(EXPORT_SERVICE_ROUTES);
   });
 
   it("admits the owner's personal access token exactly where the route declares it", async () => {
