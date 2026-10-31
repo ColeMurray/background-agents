@@ -126,13 +126,17 @@ export function SessionRightSidebarContent({
 }: SessionRightSidebarContentProps) {
   const [downloading, setDownloading] = useState(false);
   const tasks = useMemo(() => extractLatestTasks(events), [events]);
-  const warnings = useMemo(
-    () =>
-      events.filter(
-        (event): event is Extract<SandboxEvent, { type: "warning" }> => event.type === "warning"
-      ),
-    [events]
-  );
+  // The timeline shows every occurrence. Info lists each distinct warning once, so a
+  // warning repeated on every prompt does not stack.
+  const warnings = useMemo(() => {
+    const distinct = new Map<string, Extract<SandboxEvent, { type: "warning" }>>();
+    for (const event of events) {
+      if (event.type !== "warning") continue;
+      const key = JSON.stringify([event.scope, event.repoOwner, event.repoName, event.message]);
+      if (!distinct.has(key)) distinct.set(key, event);
+    }
+    return [...distinct.values()];
+  }, [events]);
   const mediaArtifacts = useMemo(
     () =>
       artifacts.filter((artifact) => artifact.type === "screenshot" || artifact.type === "video"),

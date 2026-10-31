@@ -196,13 +196,14 @@ export class SessionMcpContext {
     // The user/session check is identical for every personal server: run it once.
     let userAccess: Promise<void> | undefined;
     for (const entry of personal) {
+      // Autofix, other bot and automation turns have no author to delegate as: they run
+      // without personal servers by design, so there is nothing to warn about.
+      if (!message.mcp_eligible || !message.admitted_canonical_user_id) continue;
       try {
         if (runtime?.mcp_runtime_version === POISONED_RUNTIME_VERSION)
           throw new McpError("mcp_runtime_restart_required");
         if (runtime?.mcp_runtime_version !== 1) throw new McpError("mcp_unsupported");
         if (!sandbox?.modal_sandbox_id || sandbox.status !== "ready" || sandbox.fenced || !session)
-          throw new McpError("mcp_execution_inactive");
-        if (!message.mcp_eligible || !message.admitted_canonical_user_id)
           throw new McpError("mcp_execution_inactive");
         userAccess ??= assertMcpUserAccess(
           this.db,

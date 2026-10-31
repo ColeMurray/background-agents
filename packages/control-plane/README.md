@@ -110,7 +110,9 @@ In a session where several people prompt, each turn delegates as its own author.
 authenticates the shared sandbox, not the process inside it, so a process left running from an
 earlier turn can make personal MCP calls during the active author's turn. That covers another
 person's turn and automated ones (Autofix and other GitHub turns, Linear, automations), which can
-carry text from outside the team. This is a known limitation.
+carry text from outside the team. This is a known limitation. An automated turn has no author to
+delegate as, so it runs without personal servers and gets no warning: reconnecting cannot change
+that.
 
 A launch from the provider's base image assumes the current runtime, which holds when Terraform
 builds the base from the deployed commit. An operator-pinned base (for example

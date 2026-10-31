@@ -232,7 +232,13 @@ describe("managed MCP actual sandbox route + session authority", () => {
       state.storage.sql.exec("UPDATE messages SET mcp_eligible = 0");
       const automation = await context.prepare("alice-message");
       expect(automation.servers).toEqual([]);
-      expect(automation.unavailable).toEqual([{ name: "example", code: "mcp_execution_inactive" }]);
+      // Nobody can reconnect for an unattended turn, so it warns about nothing. It
+      // still records an empty context, so a bridge replaced during it is fenced.
+      expect(automation.unavailable).toEqual([]);
+      const [row] = state.storage.sql
+        .exec("SELECT mcp_context FROM messages WHERE id = 'alice-message'")
+        .toArray();
+      expect(JSON.parse(String(row.mcp_context))).toMatchObject({ bindings: [] });
     });
   });
   it("withholds personal servers a launch cannot run and explains them per prompt", async () => {
