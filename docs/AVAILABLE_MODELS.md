@@ -156,9 +156,13 @@ exclusively.
 Kimi Coding Plan models require a [Kimi Code membership API key](https://www.kimi.com/code/docs/en/)
 in `KIMI_API_KEY` as a global or repository secret. They run on OpenCode's built-in
 `kimi-code-plan-global` provider, which calls Kimi's overseas coding endpoint and uses the
-membership plan's allowance, separate from Kimi models billed through OpenCode Go. Prebuilt images
-from before runtime generation 79 may not list these models; rebuild one if a Kimi session reports
-the model as not found.
+membership plan's allowance, separate from Kimi models billed through OpenCode Go. Model and
+context-window access depend on the plan: the Highspeed models need Pro or above (Allegretto or
+above on legacy plans), and a plan without access returns 403. See Kimi's
+[model requirements](https://www.kimi.com/code/docs/en/kimi-code/models.html). Prebuilt images from
+before runtime generation 79 may not list these models; rebuild one if a Kimi session reports the
+model as not found, then start a new session, because an existing session keeps its sandbox's model
+list.
 
 | Model ID                                          | Display name              | Description      | Reasoning efforts | Default effort |
 | ------------------------------------------------- | ------------------------- | ---------------- | ----------------- | -------------- |

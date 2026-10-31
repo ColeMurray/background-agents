@@ -180,7 +180,7 @@ Go also publishes `minimax-m2.5`, but the pinned OpenCode release does not resol
 
 ### Kimi Coding Plan
 
-Runs on OpenCode only. Opt-in group. Credential: a [Kimi Code membership API key](https://www.kimi.com/code/docs/en/) in `KIMI_API_KEY` as a global or repository secret. Requests use Kimi's overseas coding endpoint and the membership plan's allowance, separate from Kimi models billed through OpenCode Go.
+Runs on OpenCode only. Opt-in group. Credential: a [Kimi Code membership API key](https://www.kimi.com/code/docs/en/) in `KIMI_API_KEY` as a global or repository secret. Requests use Kimi's overseas coding endpoint and the membership plan's allowance, separate from Kimi models billed through OpenCode Go. Model and context-window access depend on the plan: the Highspeed models need Pro or above (Allegretto or above on legacy plans), and a plan without access returns 403. See Kimi's [model requirements](https://www.kimi.com/code/docs/en/kimi-code/models.html).
 
 | Model ID                                          | Display name              | Reasoning efforts | Default effort |
 | ------------------------------------------------- | ------------------------- | ----------------- | -------------- |
