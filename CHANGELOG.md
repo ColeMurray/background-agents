@@ -2,14 +2,6 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
-## October 30, 2026
-
-**Boat sessions survive a slow sandbox start.** Boat holds a file write to a starting sandbox for at
-most a minute. When a session had tunnel ports and its sandbox took longer than that to start, the
-session failed as soon as the hold ran out, and the sandbox was deleted. The control plane now waits
-for the sandbox to be ready and writes again, for the tunnel env file and the launch marker alike,
-so a slow start fails only when that wait gives up.
-
 ## October 29, 2026
 
 **Saved MCP credentials are listed by name.** Editing an MCP server used to show only that
