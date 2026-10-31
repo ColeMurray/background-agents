@@ -39,6 +39,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useSettingsUnsavedChanges } from "./settings-navigation-guard";
 
 const LIFETIME_DAYS = [7, 30, 90, 180, 365] as const;
 const DEFAULT_LIFETIME_DAYS = 30;
@@ -54,6 +55,17 @@ const EMPTY_DRAFT: Draft = {
   expiresInDays: DEFAULT_LIFETIME_DAYS,
   permissions: new Set(),
 };
+
+/**
+ * Where issuing a token stands. The phases exclude one another: a pending request cannot be
+ * cancelled or replaced by another draft, so its response always belongs to the draft that sent it,
+ * and the secret it returns stays on screen until the user acknowledges it.
+ */
+type Issuance =
+  | { phase: "idle" }
+  | { phase: "editing"; draft: Draft }
+  | { phase: "issuing"; draft: Draft }
+  | { phase: "issued"; token: CreatedPersonalAccessToken };
 
 function formatLastUsed(lastUsedAt: number | null): string {
   if (lastUsedAt === null) return "Never used";
@@ -72,10 +84,12 @@ function formatDate(timestamp: number): string {
 export function PersonalAccessTokensSettings() {
   const { tokens, loading, error, mutate } = usePersonalAccessTokens();
   const { authorization } = useCurrentUserAuthorization();
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [issuing, setIssuing] = useState(false);
-  const [issued, setIssued] = useState<CreatedPersonalAccessToken | null>(null);
+  const [issuance, setIssuance] = useState<Issuance>({ phase: "idle" });
   const [revokeTarget, setRevokeTarget] = useState<PersonalAccessToken | null>(null);
+
+  // Leaving while a token is being created, or before its secret is acknowledged, loses the only
+  // copy of the secret, so settings navigation, history traversal, and unload all ask first.
+  useSettingsUnsavedChanges(issuance.phase === "issuing" || issuance.phase === "issued");
 
   // Only permissions the user holds now can be granted, so the picker offers no others.
   const holdable = useMemo(
@@ -83,8 +97,7 @@ export function PersonalAccessTokensSettings() {
     [authorization]
   );
 
-  async function issue() {
-    if (!draft) return;
+  async function issue(draft: Draft) {
     const name = draft.name.trim();
     if (!name) {
       toast.error("Name the token after where it will be used");
@@ -94,21 +107,22 @@ export function PersonalAccessTokensSettings() {
       toast.error("Grant the token at least one permission");
       return;
     }
-    setIssuing(true);
+    setIssuance({ phase: "issuing", draft });
+    let created: CreatedPersonalAccessToken;
     try {
-      const created = await issuePersonalAccessToken({
+      created = await issuePersonalAccessToken({
         name,
         expiresInDays: draft.expiresInDays,
         permissions: holdable.filter((permission) => draft.permissions.has(permission)),
       });
-      setDraft(null);
-      setIssued(created);
-      await mutate();
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Failed to create access token");
-    } finally {
-      setIssuing(false);
+      setIssuance({ phase: "editing", draft });
+      return;
     }
+    setIssuance({ phase: "issued", token: created });
+    // The token exists now; a failed list refresh must not take its secret off screen.
+    void mutate();
   }
 
   async function revoke(token: PersonalAccessToken) {
@@ -125,8 +139,12 @@ export function PersonalAccessTokensSettings() {
     <div>
       <div className="mb-1 flex items-center justify-between">
         <h2 className="text-xl font-semibold text-foreground">Access tokens</h2>
-        {!draft && (
-          <Button onClick={() => setDraft(EMPTY_DRAFT)} variant="outline" size="sm">
+        {issuance.phase === "idle" && (
+          <Button
+            onClick={() => setIssuance({ phase: "editing", draft: EMPTY_DRAFT })}
+            variant="outline"
+            size="sm"
+          >
             <span className="inline-flex items-center gap-1">
               <PlusIcon className="h-3.5 w-3.5" />
               New token
@@ -140,14 +158,14 @@ export function PersonalAccessTokensSettings() {
         create or revoke tokens.
       </p>
 
-      {draft && (
+      {(issuance.phase === "editing" || issuance.phase === "issuing") && (
         <TokenForm
-          draft={draft}
+          draft={issuance.draft}
           holdable={holdable}
-          issuing={issuing}
-          onChange={setDraft}
-          onSubmit={() => void issue()}
-          onCancel={() => setDraft(null)}
+          issuing={issuance.phase === "issuing"}
+          onChange={(draft) => setIssuance({ phase: "editing", draft })}
+          onSubmit={() => void issue(issuance.draft)}
+          onCancel={() => setIssuance({ phase: "idle" })}
         />
       )}
 
@@ -167,7 +185,10 @@ export function PersonalAccessTokensSettings() {
         </ul>
       )}
 
-      <IssuedTokenDialog token={issued} onDone={() => setIssued(null)} />
+      <IssuedTokenDialog
+        token={issuance.phase === "issued" ? issuance.token : null}
+        onDone={() => setIssuance({ phase: "idle" })}
+      />
 
       <AlertDialog open={!!revokeTarget} onOpenChange={(open) => !open && setRevokeTarget(null)}>
         <AlertDialogContent>
@@ -221,119 +242,122 @@ function TokenForm({
 
   return (
     <form
-      className="mb-6 space-y-5 rounded-md border border-border p-4"
+      className="mb-6 rounded-md border border-border p-4"
       aria-label="New access token"
       onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
       }}
     >
-      <div>
-        <Label htmlFor="access-token-name">Name</Label>
-        <Input
-          id="access-token-name"
-          className="mt-1"
-          value={draft.name}
-          maxLength={PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH}
-          placeholder="Work laptop MCP server"
-          onChange={(event) => onChange({ ...draft, name: event.target.value })}
-        />
-      </div>
-
-      <fieldset>
-        <legend className="text-sm font-medium text-foreground">Expires in</legend>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {LIFETIME_DAYS.map((days) => (
-            <RadioCard
-              key={days}
-              name="access-token-lifetime"
-              label={days === 365 ? "1 year" : `${days} days`}
-              checked={draft.expiresInDays === days}
-              onChange={() => onChange({ ...draft, expiresInDays: days })}
-            />
-          ))}
+      {/* Inert while the request is pending, so the draft it sent cannot change or be cancelled. */}
+      <fieldset disabled={issuing} className="min-w-0 space-y-5">
+        <div>
+          <Label htmlFor="access-token-name">Name</Label>
+          <Input
+            id="access-token-name"
+            className="mt-1"
+            value={draft.name}
+            maxLength={PERSONAL_ACCESS_TOKEN_NAME_MAX_LENGTH}
+            placeholder="Work laptop MCP server"
+            onChange={(event) => onChange({ ...draft, name: event.target.value })}
+          />
         </div>
-      </fieldset>
 
-      <fieldset>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <legend className="text-sm font-medium text-foreground">Permissions</legend>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="subtle"
-              size="xs"
-              disabled={readOnly.length === 0}
-              onClick={() => onChange({ ...draft, permissions: new Set(readOnly) })}
-            >
-              Read-only
-            </Button>
-            <Button
-              type="button"
-              variant="subtle"
-              size="xs"
-              onClick={() => onChange({ ...draft, permissions: new Set() })}
-            >
-              Clear
-            </Button>
+        <fieldset>
+          <legend className="text-sm font-medium text-foreground">Expires in</legend>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {LIFETIME_DAYS.map((days) => (
+              <RadioCard
+                key={days}
+                name="access-token-lifetime"
+                label={days === 365 ? "1 year" : `${days} days`}
+                checked={draft.expiresInDays === days}
+                onChange={() => onChange({ ...draft, expiresInDays: days })}
+              />
+            ))}
           </div>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Grant only what the tool needs. Permissions your role does not include are not listed, and
-          a token loses any permission your role later loses.
-        </p>
-        <div className="mt-3 space-y-4">
-          {PERSONAL_ACCESS_TOKEN_PERMISSION_GROUPS.map((group) => {
-            const permissions = PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER.filter(
-              (permission) =>
-                held.has(permission) &&
-                PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission].group === group.id
-            );
-            if (permissions.length === 0) return null;
-            return (
-              <div key={group.id}>
-                <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {group.label}
-                </h4>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {permissions.map((permission) => {
-                    const copy = PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission];
-                    const id = `access-token-permission-${permission}`;
-                    return (
-                      <div key={permission} className="flex items-start gap-2">
-                        <Checkbox
-                          id={id}
-                          className="mt-0.5"
-                          aria-describedby={`${id}-description`}
-                          checked={draft.permissions.has(permission)}
-                          onCheckedChange={(checked) => toggle(permission, checked === true)}
-                        />
-                        <div className="min-w-0 text-sm">
-                          <label htmlFor={id} className="block text-foreground">
-                            {copy.label}
-                          </label>
-                          <p id={`${id}-description`} className="text-xs text-muted-foreground">
-                            {copy.description}
-                          </p>
+        </fieldset>
+
+        <fieldset>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <legend className="text-sm font-medium text-foreground">Permissions</legend>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="subtle"
+                size="xs"
+                disabled={readOnly.length === 0}
+                onClick={() => onChange({ ...draft, permissions: new Set(readOnly) })}
+              >
+                Read-only
+              </Button>
+              <Button
+                type="button"
+                variant="subtle"
+                size="xs"
+                onClick={() => onChange({ ...draft, permissions: new Set() })}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Grant only what the tool needs. Permissions your role does not include are not listed,
+            and a token loses any permission your role later loses.
+          </p>
+          <div className="mt-3 space-y-4">
+            {PERSONAL_ACCESS_TOKEN_PERMISSION_GROUPS.map((group) => {
+              const permissions = PERSONAL_ACCESS_TOKEN_PERMISSION_ORDER.filter(
+                (permission) =>
+                  held.has(permission) &&
+                  PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission].group === group.id
+              );
+              if (permissions.length === 0) return null;
+              return (
+                <div key={group.id}>
+                  <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {group.label}
+                  </h4>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {permissions.map((permission) => {
+                      const copy = PERSONAL_ACCESS_TOKEN_PERMISSION_COPY[permission];
+                      const id = `access-token-permission-${permission}`;
+                      return (
+                        <div key={permission} className="flex items-start gap-2">
+                          <Checkbox
+                            id={id}
+                            className="mt-0.5"
+                            aria-describedby={`${id}-description`}
+                            checked={draft.permissions.has(permission)}
+                            onCheckedChange={(checked) => toggle(permission, checked === true)}
+                          />
+                          <div className="min-w-0 text-sm">
+                            <label htmlFor={id} className="block text-foreground">
+                              {copy.label}
+                            </label>
+                            <p id={`${id}-description`} className="text-xs text-muted-foreground">
+                              {copy.description}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <div className="flex gap-2">
+          <Button type="submit" size="sm">
+            {issuing ? "Creating..." : "Create token"}
+          </Button>
+          <Button type="button" onClick={onCancel} variant="outline" size="sm">
+            Cancel
+          </Button>
         </div>
       </fieldset>
-
-      <div className="flex gap-2">
-        <Button type="submit" disabled={issuing} size="sm">
-          {issuing ? "Creating..." : "Create token"}
-        </Button>
-        <Button type="button" onClick={onCancel} variant="outline" size="sm">
-          Cancel
-        </Button>
-      </div>
     </form>
   );
 }
@@ -382,7 +406,8 @@ function TokenRow({ token, onRevoke }: { token: PersonalAccessToken; onRevoke: (
 
 /**
  * Shows a newly issued token once. It closes only through Done, never through Escape or an outside
- * click, so the secret is not lost to a stray keypress.
+ * click, so the secret is not lost to a stray keypress; the panel's navigation guard covers leaving
+ * the page.
  */
 function IssuedTokenDialog({
   token,

@@ -11,6 +11,10 @@ import type {
   PersonalAccessToken,
 } from "@open-inspect/shared/types/personal-access-tokens";
 import { PersonalAccessTokensSettings } from "./personal-access-tokens-settings";
+import {
+  SettingsNavigationGuardProvider,
+  useConfirmSettingsNavigation,
+} from "./settings-navigation-guard";
 
 const hooks = vi.hoisted(() => ({
   tokens: [] as PersonalAccessToken[],
@@ -38,7 +42,10 @@ vi.mock("@/hooks/use-current-user-authorization", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 beforeAll(() => {
   // jsdom has no ResizeObserver, which the Radix checkbox measures with.
   vi.stubGlobal(
@@ -52,6 +59,41 @@ beforeAll(() => {
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Stands in for the settings navigation, which asks the guard before changing category. */
+function NavigationProbe({ onNavigate }: { onNavigate: (allowed: boolean) => void }) {
+  const confirmNavigation = useConfirmSettingsNavigation();
+  return (
+    <button type="button" onClick={() => onNavigate(confirmNavigation())}>
+      Other settings
+    </button>
+  );
+}
+
+function renderInSettings(onNavigate: (allowed: boolean) => void = () => {}) {
+  return render(
+    <SettingsNavigationGuardProvider>
+      <NavigationProbe onNavigate={onNavigate} />
+      <PersonalAccessTokensSettings />
+    </SettingsNavigationGuardProvider>
+  );
+}
+
+function unloadPrevented(): boolean {
+  const event = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+}
 const TOKEN: PersonalAccessToken = {
   id: "token-1",
   name: "Work laptop",
@@ -148,6 +190,93 @@ describe("PersonalAccessTokensSettings", () => {
     await user.click(dialog.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(screen.queryByText(created.token)).not.toBeInTheDocument();
+  });
+
+  it("keeps a pending issuance from being cancelled or replaced", async () => {
+    const pending = deferred<CreatedPersonalAccessToken>();
+    hooks.issue.mockReturnValue(pending.promise);
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    await user.type(screen.getByLabelText("Name"), "First");
+    await user.click(screen.getByLabelText("Read sessions"));
+    await user.click(screen.getByRole("button", { name: "Create token" }));
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled();
+    expect(screen.getByLabelText("Name")).toBeDisabled();
+    expect(screen.getByLabelText("Read sessions")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /New token/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("First");
+
+    const created = { ...TOKEN, name: "First", token: `oi_pat_${"b2".repeat(32)}` };
+    pending.resolve(created);
+    const dialog = within(await screen.findByRole("alertdialog"));
+    expect(dialog.getByTestId("issued-access-token")).toHaveTextContent(created.token);
+    expect(screen.queryByRole("form", { name: "New access token" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New token/ })).not.toBeInTheDocument();
+
+    await user.click(dialog.getByRole("button", { name: "Done" }));
+    expect(await screen.findByRole("button", { name: /New token/ })).toBeInTheDocument();
+  });
+
+  it("returns a refused issuance to its draft", async () => {
+    hooks.issue.mockRejectedValue(new Error("Too many tokens"));
+    const user = userEvent.setup();
+    render(<PersonalAccessTokensSettings />);
+
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    await user.type(screen.getByLabelText("Name"), "Laptop");
+    await user.click(screen.getByLabelText("Read sessions"));
+    await user.click(screen.getByRole("button", { name: "Create token" }));
+
+    expect(await screen.findByRole("button", { name: "Create token" })).toBeEnabled();
+    expect(screen.getByLabelText("Name")).toHaveValue("Laptop");
+    expect(screen.getByLabelText("Read sessions")).toBeChecked();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("guards settings navigation and unload until the new secret is acknowledged", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const navigations: boolean[] = [];
+    const pending = deferred<CreatedPersonalAccessToken>();
+    hooks.issue.mockReturnValue(pending.promise);
+    const user = userEvent.setup();
+    renderInSettings((allowed) => navigations.push(allowed));
+
+    // An unsent draft is not guarded.
+    await user.click(screen.getByRole("button", { name: /New token/ }));
+    await user.type(screen.getByLabelText("Name"), "Laptop");
+    await user.click(screen.getByLabelText("Read sessions"));
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(unloadPrevented()).toBe(false);
+
+    // While the request is pending, leaving would orphan the token's only secret.
+    await user.click(screen.getByRole("button", { name: "Create token" }));
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved changes?");
+    expect(unloadPrevented()).toBe(true);
+
+    // Likewise while the secret is on screen and unacknowledged.
+    pending.resolve({ ...TOKEN, token: `oi_pat_${"c3".repeat(32)}` });
+    const dialog = within(await screen.findByRole("alertdialog"));
+    confirm.mockClear();
+    // The modal secret dialog makes the page behind it inert, so ask the guard directly.
+    screen.getByRole("button", { name: "Other settings", hidden: true }).click();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(unloadPrevented()).toBe(true);
+    expect(navigations).toEqual([true, false, false]);
+
+    await user.click(dialog.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    confirm.mockClear();
+    await user.click(screen.getByRole("button", { name: "Other settings" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(unloadPrevented()).toBe(false);
+    expect(navigations.at(-1)).toBe(true);
   });
 
   it("requires a name and at least one permission before issuing", async () => {
