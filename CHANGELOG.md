@@ -88,6 +88,20 @@ presence while you use a separate editor or terminal. Session-expired connection
 credential, and temporary credential-service failures retry instead of showing an authentication
 error. Actual authentication failures and server-overload closes still require user action.
 
+**New bot users must pass sign-in admission.** The Slack, Linear, and GitHub bots used to create an
+active Member account for anyone they hadn't seen before, skipping the sign-in allowlist. A new bot
+user is now enrolled only if their email passes the same exact-email and domain rules as web
+sign-in; otherwise no account is created and Slack or Linear says why. Slack and Linear must be able
+to read the person's email, so the Slack app's `users:read.email` scope is required, and Slack users
+whose email the bot can't read, such as external Slack Connect users, can no longer start using the
+bot. Slack also enrolls a person with their email before anything else, so an existing user's first
+mention links to their account instead of creating a second one. Bots can't check GitHub username or
+organization rules: people admitted only by those must sign in on the web first and use their
+account's email in Slack or Linear, and new GitHub bot users must already be known unless unsafe
+allow-all is in effect. Known users and anyone whose email matches an existing account keep their
+role and suspension, and existing bot accounts are unaffected. See
+[Bot enrollment](docs/AUTH.md#bot-enrollment).
+
 ## October 27, 2026
 
 **GitHub sign-in diagnostics.** Failed sign-ins, including provider and admission checks and a
