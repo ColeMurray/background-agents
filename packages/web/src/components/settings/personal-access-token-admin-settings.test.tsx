@@ -154,12 +154,54 @@ describe("PersonalAccessTokenAdminSettings", () => {
     expect(toast.success).toHaveBeenCalledWith("Access token policy saved");
   });
 
-  it("refuses an empty permission ceiling", async () => {
+  it("refuses an empty permission ceiling unless tokens are turned off", async () => {
+    const saved = { ...OPEN_POLICY, enabled: false, allowedPermissions: [], revision: 4 };
+    hooks.save.mockResolvedValue({ status: "saved", policy: saved });
     const user = userEvent.setup();
     render(<PersonalAccessTokenAdminSettings />);
     await selectOnlyCeiling(user);
     await user.click(screen.getByRole("button", { name: "Save policy" }));
     expect(hooks.save).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Allow at least one permission, or turn tokens off instead"
+    );
+
+    toast.error.mockClear();
+    await user.click(screen.getByRole("switch", { name: "Allow personal access tokens" }));
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+
+    expect(hooks.save).toHaveBeenCalledWith(
+      { enabled: false, maxLifetimeDays: null, allowedPermissions: [] },
+      3
+    );
+    await waitFor(() =>
+      expect(hooks.mutatePolicy).toHaveBeenCalledWith(saved, { revalidate: false })
+    );
+    expect(toast.success).toHaveBeenCalledWith("Access token policy saved");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("saves edits to a disabled policy with an empty permission ceiling", async () => {
+    hooks.policy = { ...OPEN_POLICY, enabled: false, allowedPermissions: [] };
+    const saved = { ...hooks.policy, maxLifetimeDays: 30, revision: 4 };
+    hooks.save.mockResolvedValue({ status: "saved", policy: saved });
+    const user = userEvent.setup();
+    render(<PersonalAccessTokenAdminSettings />);
+
+    expect(screen.getByRole("switch", { name: "Allow personal access tokens" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /Only those selected/ })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: /30 days/ }));
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+
+    expect(hooks.save).toHaveBeenCalledWith(
+      { enabled: false, maxLifetimeDays: 30, allowedPermissions: [] },
+      3
+    );
+    await waitFor(() =>
+      expect(hooks.mutatePolicy).toHaveBeenCalledWith(saved, { revalidate: false })
+    );
+    expect(toast.success).toHaveBeenCalledWith("Access token policy saved");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("allows a permission's prerequisites with it, and withdraws what needs a withdrawn one", async () => {
