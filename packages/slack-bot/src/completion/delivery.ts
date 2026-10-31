@@ -72,13 +72,14 @@ export async function processSlackCompletion(
   };
   let shouldClearReaction = false;
   let publicationAttempted = false;
-  let publicationMarker: Promise<void> | undefined;
 
   // The marker matches the point after which this job acks and is never replayed.
-  const markPublication = (): Promise<void> => {
+  // Each caller awaits this, and the ledger write cannot reject, so a second
+  // call only needs to skip the write.
+  const markPublication = async (): Promise<void> => {
+    if (publicationAttempted) return;
     publicationAttempted = true;
-    publicationMarker ??= markCompletionPosted(env, job.deliveryId);
-    return publicationMarker;
+    await markCompletionPosted(env, job.deliveryId);
   };
 
   const ackPostedDuplicate = async (): Promise<boolean> => {
@@ -134,8 +135,10 @@ export async function processSlackCompletion(
         agent_error: agentResponse.error || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
-      if (await ackPostedDuplicate()) return { kind: "ack" };
+      // Recheck after the control-plane round trip. Two jobs can both pass an
+      // earlier read while this request is in flight.
       await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
+      if (await ackPostedDuplicate()) return { kind: "ack" };
       await markPublication();
       await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
         thread_ts: job.threadTs,
@@ -185,8 +188,10 @@ export async function processSlackCompletion(
       env.WEB_APP_URL
     );
     // Without top-level text, Slack derives screen-reader text from the blocks.
-    if (await ackPostedDuplicate()) return { kind: "ack" };
+    // Recheck after the control-plane round trip. Two jobs can both pass an
+    // earlier read while this request is in flight.
     await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
+    if (await ackPostedDuplicate()) return { kind: "ack" };
     await markPublication();
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
@@ -233,7 +238,6 @@ export async function processSlackCompletion(
       duration_ms: Date.now() - startTime,
     });
     if (!publicationAttempted) shouldClearReaction = false;
-    if (publicationMarker) await publicationMarker;
     return {
       kind:
         publicationAttempted || (error instanceof ProtectedReadError && error.kind === "denied")
