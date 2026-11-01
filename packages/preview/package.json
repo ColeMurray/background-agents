@@ -15,10 +15,10 @@
     "@open-inspect/control-plane": "file:../control-plane",
     "@open-inspect/shared": "file:../shared",
     "dotenv": "^16.6.1",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.2"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@types/node": "^24.0.0",
     "typescript": "^5.7.2",
     "vitest": "^4.1.11"
