@@ -3,12 +3,13 @@ import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import { ProtectedReadError } from "@open-inspect/shared/completion/extractor";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { extractAgentResponse } from "./extractor";
-import { buildCompletionBlocks, truncateError } from "./blocks";
-import { deliverMediaArtifacts } from "./media-upload";
-import type { SlackCompletionJob } from "./job";
-import { isThreadSessionClosed } from "../sessions/thread-session-store";
 import { requirePublicationAccess } from "../sessions/control-plane-client";
+import { isThreadSessionClosed } from "../sessions/thread-session-store";
+import { buildCompletionBlocks, truncateError } from "./blocks";
+import { isCompletionPosted, markCompletionPosted } from "./delivery-ledger";
+import { extractAgentResponse } from "./extractor";
+import type { SlackCompletionJob } from "./job";
+import { deliverMediaArtifacts } from "./media-upload";
 
 const log = createLogger("completion-delivery");
 
@@ -72,7 +73,26 @@ export async function processSlackCompletion(
   let shouldClearReaction = false;
   let publicationAttempted = false;
 
+  // The marker matches the point after which this job acks and is never replayed.
+  // Each caller awaits this, and the ledger write cannot reject, so a second
+  // call only needs to skip the write.
+  const markPublication = async (): Promise<void> => {
+    if (publicationAttempted) return;
+    publicationAttempted = true;
+    await markCompletionPosted(env, job.deliveryId);
+  };
+
+  const ackPostedDuplicate = async (): Promise<boolean> => {
+    // This attempt already owns the marker; a re-check would skip its own reply.
+    if (publicationAttempted) return false;
+    if (!(await isCompletionPosted(env, job.deliveryId))) return false;
+    log.info("slack.completion.duplicate", { ...base, outcome: "skipped" });
+    shouldClearReaction = true;
+    return true;
+  };
+
   try {
+    if (await ackPostedDuplicate()) return { kind: "ack" };
     if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
       return { kind: "ack" };
     const agentResponse = await extractAgentResponse(
@@ -88,6 +108,7 @@ export async function processSlackCompletion(
     let unavailableMedia = 0;
     // Complete protected media reads before emitting any completion message or fallback metadata.
     if (mediaArtifacts.length > 0) {
+      if (await ackPostedDuplicate()) return { kind: "ack" };
       const mediaResult = await deliverMediaArtifacts({
         env,
         sessionId: job.sessionId,
@@ -96,9 +117,7 @@ export async function processSlackCompletion(
         threadTs: job.threadTs,
         artifacts: mediaArtifacts,
         traceId: job.traceId,
-        onShareAttempt: () => {
-          publicationAttempted = true;
-        },
+        onShareAttempt: () => markPublication(),
       });
       unavailableMedia = mediaResult.failed + mediaResult.omitted;
       if (await isThreadSessionClosed(env, job.channel, job.threadTs, job.sessionId))
@@ -121,8 +140,11 @@ export async function processSlackCompletion(
         agent_error: agentResponse.error || "Unknown error",
         duration_ms: Date.now() - startTime,
       });
+      // Recheck after the control-plane round trip. Two jobs can both pass an
+      // earlier read while this request is in flight.
       await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
-      publicationAttempted = true;
+      if (await ackPostedDuplicate()) return { kind: "ack" };
+      await markPublication();
       await postMessage(env.SLACK_BOT_TOKEN, job.channel, `The agent failed: ${displayError}`, {
         thread_ts: job.threadTs,
         blocks: [
@@ -172,8 +194,11 @@ export async function processSlackCompletion(
       env.WEB_APP_URL
     );
     // Without top-level text, Slack derives screen-reader text from the blocks.
+    // Recheck after the control-plane round trip. Two jobs can both pass an
+    // earlier read while this request is in flight.
     await requirePublicationAccess(env, job.sessionId, job.channel, job.traceId);
-    publicationAttempted = true;
+    if (await ackPostedDuplicate()) return { kind: "ack" };
+    await markPublication();
     const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
       thread_ts: job.threadTs,
     });
@@ -184,7 +209,6 @@ export async function processSlackCompletion(
         slack_error: postResult.error,
         retry_after: postResult.retryAfter,
       });
-      // A network error can be ambiguous; replaying the job may duplicate a Slack completion.
       return { kind: "ack" };
     }
 

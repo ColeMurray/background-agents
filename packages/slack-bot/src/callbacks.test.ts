@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
+import { markCompletionPosted } from "./completion/delivery-ledger";
+import { slackCompletionDeliveryId } from "./completion/job";
 import { makeExecutionContext as makeCtx } from "./test-helpers";
 import type { Env } from "./types";
 import {
@@ -9,6 +11,23 @@ import {
   lookupThreadSession,
   storeThreadSession,
 } from "./sessions/thread-session-store";
+
+function memoryKv(): KVNamespace {
+  const store = new Map<string, string>();
+  return {
+    get: vi.fn(async (key: string, type?: string) => {
+      const value = store.get(key);
+      if (value === undefined) return null;
+      return type === "json" ? JSON.parse(value) : value;
+    }),
+    put: vi.fn(async (key: string, value: string) => {
+      store.set(key, value);
+    }),
+    delete: vi.fn(async (key: string) => {
+      store.delete(key);
+    }),
+  } as unknown as KVNamespace;
+}
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -800,8 +819,39 @@ describe("POST /callbacks/complete", () => {
       string,
       unknown
     >;
+    expect(queued.deliveryId).toBe(slackCompletionDeliveryId("session-1", "message-1"));
     expect(queued).not.toHaveProperty("signature");
     expect(queued).not.toHaveProperty("extraTopLevel");
+  });
+
+  it("acknowledges a repeated completion without enqueueing a second job", async () => {
+    const env = makeEnv({ SLACK_KV: memoryKv() });
+    const payload = await signPayload(completeCallbackData());
+
+    const first = await postCallback("/callbacks/complete", payload, env);
+    const second = await postCallback("/callbacks/complete", payload, env);
+
+    expect(first.response.status).toBe(200);
+    expect(second.response.status).toBe(200);
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledTimes(1);
+    const deliveryId = slackCompletionDeliveryId("session-1", "message-1");
+    expect(await first.response.json()).toEqual({ ok: true, deliveryId });
+    expect(await second.response.json()).toEqual({ ok: true, deliveryId });
+  });
+
+  it("does not enqueue when that completion was already posted", async () => {
+    const env = makeEnv({ SLACK_KV: memoryKv() });
+    await markCompletionPosted(env, slackCompletionDeliveryId("session-1", "message-1"));
+    const payload = await signPayload(completeCallbackData());
+
+    const { response } = await postCallback("/callbacks/complete", payload, env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      deliveryId: slackCompletionDeliveryId("session-1", "message-1"),
+    });
+    expect(env.SLACK_COMPLETION_QUEUE.send).not.toHaveBeenCalled();
   });
 
   it("queues an automation-sourced job when the context carries an automation id", async () => {
@@ -845,6 +895,7 @@ describe("POST /callbacks/complete", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "completion enqueue failed" });
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
   });
 });
 
@@ -902,6 +953,7 @@ describe("POST /callbacks/automation-complete", () => {
         source: "automation",
         sessionId: "session-9",
         messageId: "msg-9",
+        deliveryId: slackCompletionDeliveryId("session-9", "msg-9"),
         channel: "C123",
         threadTs: "111.222",
         reactionMessageTs: "111.222",

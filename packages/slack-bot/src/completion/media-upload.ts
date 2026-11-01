@@ -42,7 +42,7 @@ interface DeliverMediaArtifactsInput {
   artifacts: MediaArtifactInfo[];
   traceId?: string;
   /** Called before sharing files, even if Slack's response is lost or unsuccessful. */
-  onShareAttempt: () => void;
+  onShareAttempt: () => void | Promise<void>;
 }
 
 type StagedFile = { id: string; title: string };
@@ -114,7 +114,7 @@ export async function deliverMediaArtifacts(
 
   // Staging does not grant publication authority; the binding may have changed during upload.
   await requirePublicationAccess(input.env, input.sessionId, input.channel, input.traceId);
-  input.onShareAttempt();
+  await input.onShareAttempt();
   const complete = await completeExternalUpload(input.env.SLACK_BOT_TOKEN, {
     files: staged,
     channelId: input.channel,
