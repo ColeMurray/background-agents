@@ -34,7 +34,7 @@
     "@vitest/coverage-v8": "^4.1.12",
     "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.12",
+    "vitest": "^5.0.5",
     "wrangler": "^4.151.3"
   }
 }
