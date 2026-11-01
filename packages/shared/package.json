@@ -276,7 +276,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.12",
     "typescript": "^5.7.2",
-    "vitest": "^4.1.12"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@octokit/webhooks-types": "^7.6.1",
