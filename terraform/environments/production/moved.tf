@@ -21,3 +21,8 @@ moved {
   from = module.web_app
   to   = module.web_app[0]
 }
+
+moved {
+  from = null_resource.control_plane_build
+  to   = null_resource.control_plane_build[0]
+}
